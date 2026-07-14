@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/impact-report.schema.json",
+  "title": "ImpactReport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_type",
+    "schema_version",
+    "impact_report_id",
+    "analysis_case_id",
+    "project_id",
+    "document_snapshot_id",
+    "context_package_id",
+    "code_graph_snapshot_id",
+    "repository_revision",
+    "status",
+    "summary",
+    "items",
+    "ui_impact_status",
+    "required_ui_scenario_refs",
+    "blocking_unknowns"
+  ],
+  "properties": {
+    "artifact_type": {"const": "ImpactReport"},
+    "schema_version": {"const": "v1"},
+    "impact_report_id": {"type": "string", "minLength": 1},
+    "analysis_case_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "document_snapshot_id": {"type": "string", "minLength": 1},
+    "context_package_id": {"type": "string", "minLength": 1},
+    "code_graph_snapshot_id": {"type": "string", "minLength": 1},
+    "repository_revision": {"type": "string", "minLength": 1},
+    "analysis_policy_version": {"type": "string"},
+    "status": {"enum": ["draft", "awaiting_confirmation", "confirmed", "superseded", "blocked"]},
+    "summary": {"type": "string", "minLength": 1},
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["impact_item_id", "structured_change_refs", "target_path", "target_symbols", "impact_level", "recommended_action", "evidence_refs", "graph_path_refs", "requires_confirmation"],
+        "properties": {
+          "impact_item_id": {"type": "string", "minLength": 1},
+          "structured_change_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "uniqueItems": true},
+          "target_path": {"type": "string"},
+          "target_symbols": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "impact_level": {"enum": ["high", "medium", "low", "unknown"]},
+          "impact_score": {"type": "number", "minimum": 0, "maximum": 1},
+          "recommended_action": {"enum": ["modify", "add", "delete", "review_only", "no_change"]},
+          "rationale": {"type": "string"},
+          "evidence_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "graph_path_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "test_file_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "requires_confirmation": {"type": "boolean"},
+          "unknowns": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+        }
+      }
+    },
+    "ui_impact_status": {"enum": ["impacted", "not_impacted", "unknown"]},
+    "required_ui_scenario_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "blocking_unknowns": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+  }
+}

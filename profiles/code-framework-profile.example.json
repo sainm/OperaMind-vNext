@@ -1,0 +1,19 @@
+{
+  "profile_id": "spring-web-example",
+  "profile_version": "1.0.0",
+  "languages": ["java", "xml", "sql", "properties"],
+  "framework_markers": [
+    "org.springframework.web.bind.annotation",
+    "org.springframework.stereotype.Service",
+    "org.springframework.data"
+  ],
+  "default_scan_roots": ["src/main", "src/test"],
+  "excluded_globs": ["**/build/**", "**/target/**", "**/generated/**"],
+  "anchor_extractors": ["java_symbol", "spring_endpoint", "sql_table", "config_key", "junit_test"],
+  "relation_policies": [
+    {"change_domain": "api", "edge_types": ["exposes", "calls", "implements", "tests"], "max_depth": 2, "include_reverse": true},
+    {"change_domain": "db", "edge_types": ["maps_to", "reads", "writes", "calls", "tests"], "max_depth": 3, "include_reverse": true},
+    {"change_domain": "config", "edge_types": ["reads", "calls", "tests"], "max_depth": 2, "include_reverse": true}
+  ],
+  "unknown_framework_policy": "index_symbols_and_require_review"
+}

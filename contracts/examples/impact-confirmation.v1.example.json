@@ -1,0 +1,11 @@
+{
+  "artifact_type": "ImpactConfirmation",
+  "schema_version": "v1",
+  "confirmation_id": "confirmation-001",
+  "impact_report_id": "impact-report-001",
+  "confirmed_by": "developer@example.invalid",
+  "approved_item_ids": ["impact-item-001"],
+  "rejected_item_ids": [],
+  "user_note": "Approved for the documented status normalization only.",
+  "confirmed_at": "2026-07-14T12:00:00Z"
+}

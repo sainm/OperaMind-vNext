@@ -1,0 +1,187 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="760" viewBox="0 0 1600 760" role="img" aria-labelledby="title desc">
+  <title id="title">OperaMind vNext メインフロー</title>
+  <desc id="desc">設計書の変更から影響分析、承認済みコード変更、UI 検証によるクローズまでの一連の流れ</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071426"/>
+      <stop offset="0.55" stop-color="#0b1c31"/>
+      <stop offset="1" stop-color="#111b3b"/>
+    </linearGradient>
+    <linearGradient id="titleAccent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#48d9c5"/>
+      <stop offset="0.55" stop-color="#56b7ff"/>
+      <stop offset="1" stop-color="#9f8cff"/>
+    </linearGradient>
+    <linearGradient id="inputCard" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#123a43"/>
+      <stop offset="1" stop-color="#102b3b"/>
+    </linearGradient>
+    <linearGradient id="analysisCard" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#123651"/>
+      <stop offset="1" stop-color="#142845"/>
+    </linearGradient>
+    <linearGradient id="editCard" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#25345f"/>
+      <stop offset="1" stop-color="#24294e"/>
+    </linearGradient>
+    <linearGradient id="verifyCard" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2e315e"/>
+      <stop offset="1" stop-color="#252447"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#020711" flood-opacity="0.55"/>
+    </filter>
+    <filter id="softGlow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0 0 L12 6 L0 12 Z" fill="#69caff"/>
+    </marker>
+    <style>
+      .sans { font-family: Inter, "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif; }
+      .phase { font-size: 18px; font-weight: 700; letter-spacing: 0.12em; }
+      .step-no { font-size: 14px; font-weight: 800; }
+      .node-title { font-size: 20px; font-weight: 700; fill: #f4f8ff; }
+      .node-sub { font-size: 13px; font-weight: 500; fill: #a9bdd4; }
+      .flow { fill: none; stroke: #69caff; stroke-width: 3; stroke-linecap: round; marker-end: url(#arrow); }
+      .flow-muted { fill: none; stroke: #426a8c; stroke-width: 2; stroke-dasharray: 6 7; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="760" rx="32" fill="url(#background)"/>
+  <circle cx="1425" cy="65" r="250" fill="#684dff" opacity="0.08"/>
+  <circle cx="170" cy="730" r="290" fill="#28e4c2" opacity="0.06"/>
+  <path d="M0 650 C300 560 520 760 830 660 S1320 560 1600 650" fill="none" stroke="#65c8ff" stroke-opacity="0.07" stroke-width="2"/>
+
+  <g class="sans">
+    <text x="72" y="78" fill="#f5f8ff" font-size="34" font-weight="800">OperaMind vNext</text>
+    <text x="72" y="116" fill="#9db1c9" font-size="18" font-weight="500">設計変更から検証済みのコード変更まで、証拠をつないで制御する</text>
+    <rect x="72" y="138" width="600" height="4" rx="2" fill="url(#titleAccent)"/>
+
+    <g opacity="0.96">
+      <rect x="72" y="184" width="294" height="44" rx="14" fill="#103844" stroke="#36d8c4" stroke-opacity="0.45"/>
+      <text x="96" y="212" class="phase" fill="#54e5d0">01  設計変更の構造化</text>
+      <rect x="390" y="184" width="454" height="44" rx="14" fill="#102e4a" stroke="#51baff" stroke-opacity="0.45"/>
+      <text x="414" y="212" class="phase" fill="#70c9ff">02  コンテキストと影響分析</text>
+      <rect x="868" y="184" width="294" height="44" rx="14" fill="#252d57" stroke="#8e8cff" stroke-opacity="0.48"/>
+      <text x="892" y="212" class="phase" fill="#aaa5ff">03  承認済み変更</text>
+      <rect x="1186" y="184" width="342" height="44" rx="14" fill="#30294e" stroke="#c38cff" stroke-opacity="0.45"/>
+      <text x="1210" y="212" class="phase" fill="#d1a3ff">04  UI 検証とクローズ</text>
+    </g>
+
+    <g filter="url(#shadow)">
+      <g transform="translate(72 270)">
+        <rect width="210" height="112" rx="20" fill="url(#inputCard)" stroke="#3fe0ca" stroke-opacity="0.55"/>
+        <circle cx="30" cy="28" r="16" fill="#3fe0ca"/>
+        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#06231f">1</text>
+        <text x="24" y="68" class="node-title">複数の設計書</text>
+        <text x="24" y="93" class="node-sub">版・章・業務キー</text>
+      </g>
+      <g transform="translate(72 426)">
+        <rect width="210" height="112" rx="20" fill="url(#inputCard)" stroke="#3fe0ca" stroke-opacity="0.42"/>
+        <circle cx="30" cy="28" r="16" fill="#42d6c3"/>
+        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#06231f">2</text>
+        <text x="24" y="68" class="node-title">Profile マッチング</text>
+        <text x="24" y="93" class="node-sub">動的な記述パターン</text>
+      </g>
+      <g transform="translate(72 582)">
+        <rect width="210" height="112" rx="20" fill="url(#inputCard)" stroke="#3fe0ca" stroke-opacity="0.36"/>
+        <circle cx="30" cy="28" r="16" fill="#3bc9bd"/>
+        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#06231f">3</text>
+        <text x="24" y="68" class="node-title">Semantic Diff</text>
+        <text x="24" y="93" class="node-sub">Canonical Snapshot</text>
+      </g>
+
+      <g transform="translate(390 270)">
+        <rect width="210" height="112" rx="20" fill="url(#analysisCard)" stroke="#5cc2ff" stroke-opacity="0.58"/>
+        <circle cx="30" cy="28" r="16" fill="#5cc2ff"/>
+        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#081e33">4</text>
+        <text x="24" y="68" class="node-title">Real RAG</text>
+        <text x="24" y="93" class="node-sub">Vector + Keyword</text>
+      </g>
+      <g transform="translate(634 270)">
+        <rect width="210" height="112" rx="20" fill="url(#analysisCard)" stroke="#5cc2ff" stroke-opacity="0.48"/>
+        <circle cx="30" cy="28" r="16" fill="#63bbff"/>
+        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#081e33">5</text>
+        <text x="24" y="68" class="node-title">Context Package</text>
+        <text x="24" y="93" class="node-sub">根拠を再構築</text>
+      </g>
+      <g transform="translate(390 500)">
+        <rect width="210" height="112" rx="20" fill="url(#analysisCard)" stroke="#5cc2ff" stroke-opacity="0.42"/>
+        <circle cx="30" cy="28" r="16" fill="#68adff"/>
+        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#081e33">6</text>
+        <text x="24" y="68" class="node-title">Code Graph Scope</text>
+        <text x="24" y="93" class="node-sub">編集・参照・テスト範囲</text>
+      </g>
+      <g transform="translate(634 500)">
+        <rect width="210" height="112" rx="20" fill="url(#analysisCard)" stroke="#5cc2ff" stroke-opacity="0.38"/>
+        <circle cx="30" cy="28" r="16" fill="#719fff"/>
+        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#081e33">7</text>
+        <text x="24" y="68" class="node-title">Impact Report</text>
+        <text x="24" y="93" class="node-sub">候補・証拠・未知項目</text>
+      </g>
+
+      <g transform="translate(868 270)">
+        <rect width="294" height="112" rx="20" fill="url(#editCard)" stroke="#9998ff" stroke-opacity="0.56"/>
+        <circle cx="30" cy="28" r="16" fill="#9897ff"/>
+        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#151434">8</text>
+        <text x="24" y="68" class="node-title">ユーザー承認</text>
+        <text x="24" y="93" class="node-sub">Impact Item を明示的に確認</text>
+      </g>
+      <g transform="translate(868 426)">
+        <rect width="294" height="112" rx="20" fill="url(#editCard)" stroke="#9998ff" stroke-opacity="0.46"/>
+        <circle cx="30" cy="28" r="16" fill="#a28eff"/>
+        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#151434">9</text>
+        <text x="24" y="68" class="node-title">Edit Packet</text>
+        <text x="24" y="93" class="node-sub">承認済みの最小コンテキスト</text>
+      </g>
+      <g transform="translate(868 582)">
+        <rect width="294" height="112" rx="20" fill="url(#editCard)" stroke="#9998ff" stroke-opacity="0.38"/>
+        <circle cx="30" cy="28" r="16" fill="#ad86ff"/>
+        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#151434">10</text>
+        <text x="24" y="68" class="node-title">VS Code Copilot</text>
+        <text x="24" y="93" class="node-sub">許可リスト内だけを変更</text>
+      </g>
+
+      <g transform="translate(1186 270)">
+        <rect width="342" height="112" rx="20" fill="url(#verifyCard)" stroke="#c797ff" stroke-opacity="0.54"/>
+        <circle cx="30" cy="28" r="16" fill="#c797ff"/>
+        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#231232">11</text>
+        <text x="24" y="68" class="node-title">OperaMind UI Test</text>
+        <text x="24" y="93" class="node-sub">Playwright・業務シナリオ・証拠</text>
+      </g>
+      <g transform="translate(1186 500)">
+        <rect width="342" height="112" rx="20" fill="url(#verifyCard)" stroke="#c797ff" stroke-opacity="0.45"/>
+        <circle cx="30" cy="28" r="16" fill="#d08fff"/>
+        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#231232">12</text>
+        <text x="24" y="68" class="node-title">Validation Closure</text>
+        <text x="24" y="93" class="node-sub">passed / failed / reanalysis</text>
+      </g>
+    </g>
+
+    <path class="flow" d="M177 382 L177 416"/>
+    <path class="flow" d="M177 538 L177 572"/>
+    <path class="flow" d="M282 638 C330 638 330 326 380 326"/>
+    <path class="flow" d="M600 326 L624 326"/>
+    <path class="flow" d="M739 382 C739 432 495 432 495 490"/>
+    <path class="flow" d="M600 556 L624 556"/>
+    <path class="flow" d="M844 556 C860 556 860 326 858 326"/>
+    <path class="flow" d="M1015 382 L1015 416"/>
+    <path class="flow" d="M1015 538 L1015 572"/>
+    <path class="flow" d="M1162 638 C1174 638 1174 326 1176 326"/>
+    <path class="flow" d="M1357 382 L1357 490"/>
+
+    <g transform="translate(310 260)">
+      <circle cx="0" cy="0" r="5" fill="#49ddc8" filter="url(#softGlow)"/>
+      <path class="flow-muted" d="M0 0 L48 0"/>
+    </g>
+    <g transform="translate(810 644)">
+      <circle cx="0" cy="0" r="5" fill="#61baff" filter="url(#softGlow)"/>
+      <path class="flow-muted" d="M0 0 L32 0"/>
+    </g>
+    <g transform="translate(1148 250)">
+      <circle cx="0" cy="0" r="5" fill="#a898ff" filter="url(#softGlow)"/>
+    </g>
+  </g>
+</svg>

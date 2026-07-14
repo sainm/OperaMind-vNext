@@ -1,0 +1,35 @@
+{
+  "case_id": "visiondemo-expense-status-filter",
+  "dataset_stage": "silver",
+  "required_contexts": [
+    {
+      "document": "02_画面設計書_経費精算申請一覧.xlsx",
+      "locations": ["画面項目一覧!A5:I5", "イベント一覧!A5:G6", "画面概要!A2"],
+      "reason": "Direct UI element change, search/reset behavior and screen purpose"
+    },
+    {
+      "document": "03_プログラム設計書_経費精算申請.xlsx",
+      "locations": ["メソッド一覧!A5:F5"],
+      "reason": "Search contract explicitly requires null or empty status to return all expenses"
+    },
+    {
+      "document": "04_API詳細設計書_経費精算申請.xlsx",
+      "locations": ["API一覧!A6:G6", "Object!A1:G8"],
+      "reason": "GET /expense/api/search is the UI search endpoint"
+    }
+  ],
+  "expected_query_concepts": [
+    "expense list status filter default all",
+    "expense search empty status returns all",
+    "GET /expense/api/search",
+    "returned status filter"
+  ],
+  "must_exclude_as_primary_context": [
+    "Order management status filter",
+    "System parameter management",
+    "Expense submit API response",
+    "Expense detail amount precision"
+  ],
+  "canonical_id_status": "to_be_filled_after_vnext_ingestion",
+  "review_status": "needs_review"
+}

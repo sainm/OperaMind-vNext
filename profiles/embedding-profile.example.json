@@ -1,0 +1,14 @@
+{
+  "profile_id": "local-openai-compatible-v1",
+  "profile_version": "1.0.0",
+  "provider": "openai_compatible",
+  "base_url_env": "EMBED_API_URL",
+  "api_key_env": "EMBED_API_KEY",
+  "model_env": "EMBED_MODEL",
+  "expected_dimensions": 0,
+  "batch_size": 32,
+  "timeout_seconds": 30,
+  "max_retries": 3,
+  "preprocessing_version": "canonical-section-v1",
+  "ranking_policy_version": "hybrid-rrf-v1"
+}

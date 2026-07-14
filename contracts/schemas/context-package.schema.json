@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/context-package.schema.json",
+  "title": "ContextPackage",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_type",
+    "schema_version",
+    "context_package_id",
+    "analysis_case_id",
+    "project_id",
+    "document_snapshot_id",
+    "embedding_profile_ref",
+    "ranking_policy_version",
+    "structured_change_refs",
+    "business_summary",
+    "context_items",
+    "retrieval_trace",
+    "token_budget",
+    "estimated_tokens"
+  ],
+  "properties": {
+    "artifact_type": {"const": "ContextPackage"},
+    "schema_version": {"const": "v1"},
+    "context_package_id": {"type": "string", "minLength": 1},
+    "analysis_case_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "document_snapshot_id": {"type": "string", "minLength": 1},
+    "document_profile_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "embedding_profile_ref": {"type": "string", "minLength": 1},
+    "ranking_policy_version": {"type": "string", "minLength": 1},
+    "structured_change_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "uniqueItems": true},
+    "business_summary": {"type": "string", "minLength": 1},
+    "context_items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["section_id", "document_id", "compressed_summary", "relevance_reason", "evidence_refs"],
+        "properties": {
+          "section_id": {"type": "string", "minLength": 1},
+          "document_id": {"type": "string", "minLength": 1},
+          "heading_path": {"type": "string"},
+          "compressed_summary": {"type": "string", "minLength": 1},
+          "relevance_reason": {"enum": ["direct_change", "rag_candidate", "parent", "adjacent", "related", "cross_document", "acceptance"]},
+          "evidence_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+        }
+      }
+    },
+    "retrieval_trace": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["query_id", "retrieval_mode", "candidate_refs"],
+        "properties": {
+          "query_id": {"type": "string", "minLength": 1},
+          "retrieval_mode": {"enum": ["hybrid", "keyword_degraded"]},
+          "candidate_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+        }
+      }
+    },
+    "token_budget": {"type": "integer", "minimum": 1},
+    "estimated_tokens": {"type": "integer", "minimum": 0},
+    "unknowns": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+  }
+}

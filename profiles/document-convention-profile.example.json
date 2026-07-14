@@ -1,0 +1,36 @@
+{
+  "profile_id": "api-design-conventions-example",
+  "profile_version": "1.0.0",
+  "document_type": "api_design",
+  "minimum_auto_match_score": 0.8,
+  "variants": [
+    {
+      "variant_id": "api-list",
+      "signals": [
+        {"type": "sheet_name", "values": ["API一覧", "API List"], "weight": 0.35},
+        {"type": "headers", "values": ["URI", "HTTPメソッド"], "weight": 0.45},
+        {"type": "filename_token", "values": ["API", "IF"], "weight": 0.2}
+      ],
+      "field_aliases": {
+        "api.path": ["URI", "Path", "Endpoint"],
+        "api.method": ["HTTPメソッド", "Method", "Operation"],
+        "api.summary": ["処理概要", "Summary", "Description"]
+      },
+      "stable_key_fields": ["api.method", "api.path"]
+    },
+    {
+      "variant_id": "interface-spec",
+      "signals": [
+        {"type": "heading", "values": ["インターフェース仕様", "Interface Specification"], "weight": 0.4},
+        {"type": "headers", "values": ["Path", "Operation", "Response"], "weight": 0.6}
+      ],
+      "field_aliases": {
+        "api.path": ["Path"],
+        "api.method": ["Operation"],
+        "api.response": ["Response", "戻り値"]
+      },
+      "stable_key_fields": ["api.method", "api.path"]
+    }
+  ],
+  "unmatched_policy": "canonical_text_needs_review"
+}

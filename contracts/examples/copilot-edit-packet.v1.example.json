@@ -1,0 +1,30 @@
+{
+  "artifact_type": "CopilotEditPacket",
+  "schema_version": "v1",
+  "edit_packet_id": "edit-packet-001",
+  "impact_report_id": "impact-report-001",
+  "confirmation_id": "confirmation-001",
+  "project_id": "project-001",
+  "repository_id": "repository-001",
+  "base_repository_revision": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6",
+  "editable_files": ["src/main/java/example/ExpenseService.java"],
+  "read_only_files": ["src/main/java/example/ExpenseRepository.java"],
+  "test_files": ["src/test/java/example/ExpenseServiceTest.java"],
+  "forbidden_globs": ["**/.env", "**/pom.xml"],
+  "allowed_items": [
+    {
+      "impact_item_id": "impact-item-001",
+      "target_path": "src/main/java/example/ExpenseService.java",
+      "target_symbols": ["search(String status)"],
+      "allowed_actions": ["modify"],
+      "business_summary": "Treat null, blank, and empty status as an all-records search.",
+      "implementation_constraints": [
+        "Do not change the submit flow.",
+        "Keep the repository query contract unchanged."
+      ]
+    }
+  ],
+  "required_ui_scenario_refs": ["expense-filter-default-all"],
+  "out_of_scope_policy": "stop_and_reanalyze",
+  "must_not_fetch_context_package": true
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/document-ingestion-result.schema.json",
+  "title": "DocumentIngestionResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_type",
+    "schema_version",
+    "ingestion_batch_id",
+    "project_id",
+    "target_snapshot_id",
+    "document_profile_refs",
+    "embedding_index_status",
+    "eligible_index_target_count",
+    "indexed_target_count",
+    "status"
+  ],
+  "properties": {
+    "artifact_type": {"const": "DocumentIngestionResult"},
+    "schema_version": {"const": "v1"},
+    "ingestion_batch_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "source_snapshot_id": {"type": "string"},
+    "target_snapshot_id": {"type": "string", "minLength": 1},
+    "analysis_case_id": {"type": "string"},
+    "document_profile_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "uploaded_document_count": {"type": "integer", "minimum": 0},
+    "changed_document_count": {"type": "integer", "minimum": 0},
+    "structured_change_count": {"type": "integer", "minimum": 0},
+    "eligible_index_target_count": {"type": "integer", "minimum": 0},
+    "indexed_target_count": {"type": "integer", "minimum": 0},
+    "embedding_profile_ref": {"type": "string"},
+    "embedding_index_status": {"enum": ["not_started", "indexing", "ready", "failed", "stale"]},
+    "status": {"enum": ["ingesting", "indexing_rag", "ready_for_impact", "needs_review", "blocked", "failed"]},
+    "blocking_reasons": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+  }
+}

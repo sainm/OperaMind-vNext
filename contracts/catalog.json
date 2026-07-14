@@ -1,0 +1,13 @@
+{
+  "catalog_version": "v1",
+  "artifacts": {
+    "DocumentIngestionResult": "schemas/document-ingestion-result.schema.json",
+    "StructuredChange": "schemas/structured-change.schema.json",
+    "ContextPackage": "schemas/context-package.schema.json",
+    "CodeGraphSnapshot": "schemas/code-graph-snapshot.schema.json",
+    "ImpactReport": "schemas/impact-report.schema.json",
+    "ImpactConfirmation": "schemas/impact-confirmation.schema.json",
+    "CopilotEditPacket": "schemas/copilot-edit-packet.schema.json",
+    "UiVerificationResult": "schemas/ui-verification-result.schema.json"
+  }
+}

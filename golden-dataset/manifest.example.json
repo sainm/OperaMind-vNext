@@ -1,0 +1,33 @@
+{
+  "dataset_id": "operamind-vnext-golden",
+  "dataset_version": "0.1.0",
+  "dataset_stage": "golden",
+  "status": "frozen",
+  "reviewers": ["business-owner", "developer", "qa-owner"],
+  "projects": [
+    {
+      "project_id": "project-a",
+      "repository_url": "REPLACE_WITH_REPOSITORY_URL",
+      "repository_commit": "REPLACE_WITH_COMMIT_SHA",
+      "scan_roots": ["src/main", "src/test"]
+    },
+    {
+      "project_id": "project-b",
+      "repository_url": "REPLACE_WITH_REPOSITORY_URL",
+      "repository_commit": "REPLACE_WITH_COMMIT_SHA",
+      "scan_roots": ["app", "tests"]
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "project-a-file-rename-no-business-change",
+      "project_id": "project-a",
+      "source_manifest": "cases/project-a-file-rename/source-manifest.json",
+      "expected_changes": "cases/project-a-file-rename/expected-changes.json",
+      "expected_rag_context": "cases/project-a-file-rename/expected-rag-context.json",
+      "expected_code_scope": "cases/project-a-file-rename/expected-code-scope.json",
+      "expected_ui_scenarios": "cases/project-a-file-rename/expected-ui-scenarios.json",
+      "review": "cases/project-a-file-rename/REVIEW.md"
+    }
+  ]
+}

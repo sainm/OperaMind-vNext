@@ -1,0 +1,27 @@
+{
+  "artifact_type": "StructuredChange",
+  "schema_version": "v1",
+  "change_id": "change-001",
+  "project_id": "project-001",
+  "source_snapshot_id": "document-snapshot-before-001",
+  "target_snapshot_id": "document-snapshot-after-001",
+  "stable_key": "screen_element:expense-list/status-filter",
+  "fact_type": "screen_element",
+  "domain": "ui",
+  "change_type": "modified",
+  "before": {
+    "fact_ref": "fact-before-001",
+    "values": {"default_value": "申請中"},
+    "source_refs": ["document-node-before-001"]
+  },
+  "after": {
+    "fact_ref": "fact-after-001",
+    "values": {"default_value": "すべて"},
+    "source_refs": ["document-node-after-001"]
+  },
+  "summary": "The expense status filter now defaults to All.",
+  "source_refs": ["document-node-before-001", "document-node-after-001"],
+  "confidence": "high",
+  "review_status": "accepted",
+  "unknowns": []
+}

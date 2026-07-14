@@ -1,0 +1,47 @@
+{
+  "artifact_type": "CodeGraphSnapshot",
+  "schema_version": "v1",
+  "code_graph_snapshot_id": "code-graph-001",
+  "project_id": "project-001",
+  "repository_id": "repository-001",
+  "repository_revision": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6",
+  "framework_profile_refs": ["spring-web@1.0.0"],
+  "scan_roots": ["src/main", "src/test"],
+  "scan_status": "complete",
+  "files": [
+    {
+      "file_id": "file-service-001",
+      "path": "src/main/java/example/ExpenseService.java",
+      "language": "java",
+      "role": "production",
+      "content_hash": "sha256:service-001",
+      "symbols": [
+        {
+          "symbol_id": "symbol-search-001",
+          "symbol_type": "method",
+          "name": "search",
+          "signature": "search(String status)",
+          "start_line": 20,
+          "end_line": 34
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge-contains-001",
+      "edge_type": "contains",
+      "from_ref": "file-service-001",
+      "to_ref": "symbol-search-001",
+      "resolution_status": "resolved",
+      "confidence": "high",
+      "extractor": "java_symbol",
+      "profile_version": "spring-web@1.0.0",
+      "source_location": {
+        "path": "src/main/java/example/ExpenseService.java",
+        "start_line": 20,
+        "end_line": 34
+      }
+    }
+  ]
+}

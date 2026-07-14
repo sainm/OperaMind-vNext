@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/ui-verification-result.schema.json",
+  "title": "UiVerificationResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_type",
+    "schema_version",
+    "verification_result_id",
+    "analysis_case_id",
+    "edit_packet_id",
+    "repository_revision",
+    "deployment_revision",
+    "environment_id",
+    "status",
+    "scenario_results",
+    "unresolved_impact_item_ids",
+    "out_of_scope_files"
+  ],
+  "properties": {
+    "artifact_type": {"const": "UiVerificationResult"},
+    "schema_version": {"const": "v1"},
+    "verification_result_id": {"type": "string", "minLength": 1},
+    "analysis_case_id": {"type": "string", "minLength": 1},
+    "edit_packet_id": {"type": "string", "minLength": 1},
+    "repository_revision": {"type": "string", "minLength": 1},
+    "deployment_revision": {"type": "string", "minLength": 1},
+    "environment_id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["passed", "failed", "blocked", "reanalysis_required"]},
+    "scenario_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["scenario_id", "status", "impact_item_refs", "evidence_refs", "failure_category"],
+        "properties": {
+          "scenario_id": {"type": "string", "minLength": 1},
+          "status": {"enum": ["passed", "failed", "blocked", "skipped"]},
+          "impact_item_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "evidence_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "failure_category": {"enum": ["none", "business_assertion", "environment", "test_data", "locator", "authentication", "blocked"]},
+          "summary": {"type": "string"}
+        }
+      }
+    },
+    "unresolved_impact_item_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "out_of_scope_files": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "failure_reasons": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+  }
+}

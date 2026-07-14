@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/copilot-edit-packet.schema.json",
+  "title": "CopilotEditPacket",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_type",
+    "schema_version",
+    "edit_packet_id",
+    "impact_report_id",
+    "confirmation_id",
+    "project_id",
+    "repository_id",
+    "base_repository_revision",
+    "editable_files",
+    "read_only_files",
+    "test_files",
+    "forbidden_globs",
+    "allowed_items",
+    "required_ui_scenario_refs",
+    "out_of_scope_policy"
+  ],
+  "properties": {
+    "artifact_type": {"const": "CopilotEditPacket"},
+    "schema_version": {"const": "v1"},
+    "edit_packet_id": {"type": "string", "minLength": 1},
+    "impact_report_id": {"type": "string", "minLength": 1},
+    "confirmation_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "repository_id": {"type": "string", "minLength": 1},
+    "base_repository_revision": {"type": "string", "minLength": 1},
+    "editable_files": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "read_only_files": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "test_files": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "forbidden_globs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "allowed_items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["impact_item_id", "target_path", "target_symbols", "allowed_actions", "business_summary"],
+        "properties": {
+          "impact_item_id": {"type": "string", "minLength": 1},
+          "target_path": {"type": "string", "minLength": 1},
+          "target_symbols": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "allowed_actions": {"type": "array", "items": {"enum": ["modify", "add", "delete"]}, "minItems": 1, "uniqueItems": true},
+          "business_summary": {"type": "string", "minLength": 1},
+          "implementation_constraints": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+        }
+      }
+    },
+    "required_ui_scenario_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "out_of_scope_policy": {"const": "stop_and_reanalyze"},
+    "must_not_fetch_context_package": {"const": true}
+  }
+}

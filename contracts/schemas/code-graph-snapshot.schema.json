@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/code-graph-snapshot.schema.json",
+  "title": "CodeGraphSnapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_type",
+    "schema_version",
+    "code_graph_snapshot_id",
+    "project_id",
+    "repository_id",
+    "repository_revision",
+    "framework_profile_refs",
+    "scan_roots",
+    "scan_status",
+    "files",
+    "edges"
+  ],
+  "properties": {
+    "artifact_type": {"const": "CodeGraphSnapshot"},
+    "schema_version": {"const": "v1"},
+    "code_graph_snapshot_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "repository_id": {"type": "string", "minLength": 1},
+    "repository_revision": {"type": "string", "minLength": 1},
+    "framework_profile_refs": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "scan_roots": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "scan_status": {"enum": ["complete", "truncated", "failed", "stale"]},
+    "files": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/file"}
+    },
+    "edges": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/edge"}
+    }
+  },
+  "$defs": {
+    "source_location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "start_line", "end_line"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "start_line": {"type": "integer", "minimum": 1},
+        "end_line": {"type": "integer", "minimum": 1}
+      }
+    },
+    "symbol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "symbol_id",
+        "symbol_type",
+        "name",
+        "signature",
+        "start_line",
+        "end_line"
+      ],
+      "properties": {
+        "symbol_id": {"type": "string", "minLength": 1},
+        "symbol_type": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "minLength": 1},
+        "signature": {"type": "string", "minLength": 1},
+        "start_line": {"type": "integer", "minimum": 1},
+        "end_line": {"type": "integer", "minimum": 1}
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_id", "path", "language", "role", "content_hash", "symbols"],
+      "properties": {
+        "file_id": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "language": {"type": "string", "minLength": 1},
+        "role": {
+          "enum": ["production", "test", "config", "migration", "contract", "script", "unknown"]
+        },
+        "content_hash": {"type": "string", "minLength": 1},
+        "symbols": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/symbol"}
+        }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "edge_id",
+        "edge_type",
+        "from_ref",
+        "to_ref",
+        "resolution_status",
+        "confidence",
+        "extractor",
+        "profile_version",
+        "source_location"
+      ],
+      "properties": {
+        "edge_id": {"type": "string", "minLength": 1},
+        "edge_type": {
+          "enum": [
+            "contains",
+            "imports",
+            "calls",
+            "implements",
+            "exposes",
+            "reads",
+            "writes",
+            "maps_to",
+            "tests",
+            "navigates_to"
+          ]
+        },
+        "from_ref": {"type": "string", "minLength": 1},
+        "to_ref": {"type": "string", "minLength": 1},
+        "resolution_status": {"enum": ["resolved", "unresolved", "external"]},
+        "confidence": {"enum": ["high", "medium", "low"]},
+        "extractor": {"type": "string", "minLength": 1},
+        "profile_version": {"type": "string", "minLength": 1},
+        "source_location": {"$ref": "#/$defs/source_location"}
+      }
+    }
+  }
+}

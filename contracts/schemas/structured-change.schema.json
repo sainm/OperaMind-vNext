@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/structured-change.schema.json",
+  "title": "StructuredChange",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_type",
+    "schema_version",
+    "change_id",
+    "project_id",
+    "source_snapshot_id",
+    "target_snapshot_id",
+    "stable_key",
+    "fact_type",
+    "domain",
+    "change_type",
+    "before",
+    "after",
+    "summary",
+    "source_refs",
+    "confidence",
+    "review_status"
+  ],
+  "properties": {
+    "artifact_type": {"const": "StructuredChange"},
+    "schema_version": {"const": "v1"},
+    "change_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "source_snapshot_id": {"type": "string", "minLength": 1},
+    "target_snapshot_id": {"type": "string", "minLength": 1},
+    "stable_key": {"type": "string", "minLength": 1},
+    "fact_type": {"type": "string", "minLength": 1},
+    "domain": {"type": "string", "minLength": 1},
+    "change_type": {"enum": ["added", "modified", "deleted"]},
+    "before": {
+      "oneOf": [
+        {"$ref": "#/$defs/fact_state"},
+        {"type": "null"}
+      ]
+    },
+    "after": {
+      "oneOf": [
+        {"$ref": "#/$defs/fact_state"},
+        {"type": "null"}
+      ]
+    },
+    "summary": {"type": "string", "minLength": 1},
+    "source_refs": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "confidence": {"enum": ["high", "medium", "low"]},
+    "review_status": {"enum": ["accepted", "needs_review", "rejected"]},
+    "unknowns": {
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "fact_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fact_ref", "values", "source_refs"],
+      "properties": {
+        "fact_ref": {"type": "string", "minLength": 1},
+        "values": {"type": "object"},
+        "source_refs": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"change_type": {"const": "added"}}},
+      "then": {
+        "properties": {
+          "before": {"type": "null"},
+          "after": {"$ref": "#/$defs/fact_state"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"change_type": {"const": "modified"}}},
+      "then": {
+        "properties": {
+          "before": {"$ref": "#/$defs/fact_state"},
+          "after": {"$ref": "#/$defs/fact_state"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"change_type": {"const": "deleted"}}},
+      "then": {
+        "properties": {
+          "before": {"$ref": "#/$defs/fact_state"},
+          "after": {"type": "null"}
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "case_id": "visiondemo-expense-status-filter",
+  "dataset_stage": "silver",
+  "expected_structured_change_count": 1,
+  "changes": [
+    {
+      "stable_key": "screen_element:screen_expense_list/expense-search-status",
+      "fact_type": "screen_element",
+      "domain": "ui",
+      "change_type": "modified",
+      "business_summary": "Expense list status filter defaults to All and supports Returned as a selectable status.",
+      "field_deltas": [
+        {
+          "field": "default_value",
+          "before": "申請中",
+          "after": "すべて",
+          "source_ref": "02_画面設計書_経費精算申請一覧.xlsx#画面項目一覧!G5"
+        },
+        {
+          "field": "description",
+          "before": "ステータスフィルタ（下書き/申請中/承認済）",
+          "after": "ステータスフィルタ（下書き/申請中/承認済/差戻し）",
+          "source_ref": "02_画面設計書_経費精算申請一覧.xlsx#画面項目一覧!I5"
+        }
+      ],
+      "confidence": "high",
+      "review_status": "needs_review"
+    }
+  ],
+  "must_not_report_as_changes": [
+    "Unchanged documents in the same snapshot",
+    "Workbook metadata or binary package ordering",
+    "Unrelated submit behavior",
+    "Expense detail amount precision"
+  ]
+}

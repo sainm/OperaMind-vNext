@@ -1,0 +1,41 @@
+{
+  "artifact_type": "ContextPackage",
+  "schema_version": "v1",
+  "context_package_id": "context-package-001",
+  "analysis_case_id": "analysis-case-001",
+  "project_id": "project-001",
+  "document_snapshot_id": "document-snapshot-after-001",
+  "document_profile_refs": ["screen-design@1.0.0"],
+  "embedding_profile_ref": "openai-compatible@1.0.0",
+  "ranking_policy_version": "hybrid-rrf-v1",
+  "structured_change_refs": ["change-001"],
+  "business_summary": "The expense list must show all records when status is empty.",
+  "context_items": [
+    {
+      "section_id": "section-001",
+      "document_id": "document-001",
+      "heading_path": "画面項目一覧/ステータス",
+      "compressed_summary": "The initial and reset status is All.",
+      "relevance_reason": "direct_change",
+      "evidence_refs": ["document-node-after-001"]
+    },
+    {
+      "section_id": "section-002",
+      "document_id": "document-002",
+      "heading_path": "メソッド一覧/search",
+      "compressed_summary": "Null or empty status returns all expenses.",
+      "relevance_reason": "cross_document",
+      "evidence_refs": ["document-node-program-001"]
+    }
+  ],
+  "retrieval_trace": [
+    {
+      "query_id": "query-001",
+      "retrieval_mode": "hybrid",
+      "candidate_refs": ["section-001", "section-002"]
+    }
+  ],
+  "token_budget": 4000,
+  "estimated_tokens": 620,
+  "unknowns": []
+}

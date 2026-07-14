@@ -1,0 +1,64 @@
+{
+  "case_id": "visiondemo-expense-status-filter",
+  "dataset_stage": "silver",
+  "base_repository_revision": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6",
+  "must_include_candidates": [
+    {
+      "path": "VisionDemo/src/main/webapp/WEB-INF/jsp/fragments/expense-list.jsp",
+      "symbols": ["expense-search-status", "doSearch"],
+      "expected_action": "review_only",
+      "reason": "Direct UI anchor; base commit already contains All and Returned options"
+    },
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/controller/ExpenseController.java",
+      "symbols": ["search"],
+      "expected_action": "review_or_modify",
+      "reason": "Receives the empty status value from the page"
+    },
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/service/ExpenseService.java",
+      "symbols": ["search"],
+      "expected_action": "modify_candidate",
+      "reason": "Currently forwards empty status without normalizing it to the all-records contract"
+    },
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/repository/ExpenseRepository.java",
+      "symbols": ["search"],
+      "expected_action": "review_or_modify",
+      "reason": "The query treats NULL as all records but not the empty string sent by the UI"
+    }
+  ],
+  "acceptable_edit_alternatives": [
+    {
+      "require_at_least_one": [
+        "VisionDemo/src/main/java/com/visiondemo/controller/ExpenseController.java#search",
+        "VisionDemo/src/main/java/com/visiondemo/service/ExpenseService.java#search",
+        "VisionDemo/src/main/java/com/visiondemo/repository/ExpenseRepository.java#search"
+      ],
+      "required_behavior": "A null, blank or empty status query returns all expense records"
+    }
+  ],
+  "required_test_scope": [
+    {
+      "target": "expense search with empty status",
+      "expected": "All seeded expense records are returned",
+      "acceptable_test_layers": ["service", "repository", "controller"]
+    }
+  ],
+  "must_not_modify_symbols": [
+    "ExpenseController#submit",
+    "ExpenseController#convertToDetail",
+    "ExpenseService#submit",
+    "ExpenseDetail#setAmount"
+  ],
+  "must_not_modify_paths": [
+    "VisionDemo/pom.xml"
+  ],
+  "known_base_behavior": {
+    "ui_options_match_after_document": true,
+    "empty_status_backend_contract_satisfied": false,
+    "seeded_expense_count": 4,
+    "seeded_returned_expense_count": 0
+  },
+  "review_status": "needs_developer_review"
+}

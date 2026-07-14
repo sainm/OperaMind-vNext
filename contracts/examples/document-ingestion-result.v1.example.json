@@ -1,0 +1,19 @@
+{
+  "artifact_type": "DocumentIngestionResult",
+  "schema_version": "v1",
+  "ingestion_batch_id": "ingestion-001",
+  "project_id": "project-001",
+  "source_snapshot_id": "document-snapshot-before-001",
+  "target_snapshot_id": "document-snapshot-after-001",
+  "analysis_case_id": "analysis-case-001",
+  "document_profile_refs": ["screen-design@1.0.0"],
+  "uploaded_document_count": 27,
+  "changed_document_count": 1,
+  "structured_change_count": 1,
+  "eligible_index_target_count": 42,
+  "indexed_target_count": 42,
+  "embedding_profile_ref": "openai-compatible@1.0.0",
+  "embedding_index_status": "ready",
+  "status": "ready_for_impact",
+  "blocking_reasons": []
+}

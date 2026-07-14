@@ -1,0 +1,24 @@
+{
+  "artifact_type": "UiVerificationResult",
+  "schema_version": "v1",
+  "verification_result_id": "verification-result-001",
+  "analysis_case_id": "analysis-case-001",
+  "edit_packet_id": "edit-packet-001",
+  "repository_revision": "commit-after-edit-001",
+  "deployment_revision": "build-001",
+  "environment_id": "visiondemo-local",
+  "status": "passed",
+  "scenario_results": [
+    {
+      "scenario_id": "expense-filter-default-all",
+      "status": "passed",
+      "impact_item_refs": ["impact-item-001"],
+      "evidence_refs": ["evidence-screenshot-001", "evidence-assertion-001"],
+      "failure_category": "none",
+      "summary": "All four seeded expenses are visible with the All filter selected."
+    }
+  ],
+  "unresolved_impact_item_ids": [],
+  "out_of_scope_files": [],
+  "failure_reasons": []
+}

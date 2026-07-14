@@ -1,0 +1,34 @@
+{
+  "artifact_type": "ImpactReport",
+  "schema_version": "v1",
+  "impact_report_id": "impact-report-001",
+  "analysis_case_id": "analysis-case-001",
+  "project_id": "project-001",
+  "document_snapshot_id": "document-snapshot-after-001",
+  "context_package_id": "context-package-001",
+  "code_graph_snapshot_id": "code-graph-001",
+  "repository_revision": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6",
+  "analysis_policy_version": "impact-policy-v1",
+  "status": "awaiting_confirmation",
+  "summary": "Normalize empty expense status before repository search.",
+  "items": [
+    {
+      "impact_item_id": "impact-item-001",
+      "structured_change_refs": ["change-001"],
+      "target_path": "src/main/java/example/ExpenseService.java",
+      "target_symbols": ["search(String status)"],
+      "impact_level": "high",
+      "impact_score": 0.94,
+      "recommended_action": "modify",
+      "rationale": "The UI sends an empty status while the data contract requires all records.",
+      "evidence_refs": ["document-node-program-001"],
+      "graph_path_refs": ["edge-contains-001"],
+      "test_file_refs": ["src/test/java/example/ExpenseServiceTest.java"],
+      "requires_confirmation": true,
+      "unknowns": []
+    }
+  ],
+  "ui_impact_status": "impacted",
+  "required_ui_scenario_refs": ["expense-filter-default-all"],
+  "blocking_unknowns": []
+}
