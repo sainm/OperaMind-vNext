@@ -19,7 +19,8 @@ Web 的 `Approve and Open in VS Code` 同时生成 Edit Packet 和 Approval Gran
   "read_only_files": [],
   "test_files": [],
   "allowed_actions": ["read", "modify", "add_test", "run_test", "record_result"],
-  "allowed_test_commands": [],
+  "command_profile_version_id": "command-profile-version-001",
+  "allowed_test_command_refs": [],
   "allowed_ui_scenarios": [],
   "forbidden_globs": [],
   "expires_at": "2026-07-15T12:00:00Z",
@@ -57,7 +58,7 @@ Grant 有效且 Git SHA 未变化时，以下动作自动允许：
 
 - 需要修改 Edit Packet 之外的 production/config/migration 文件。
 - 需要删除或重命名未批准的文件、API、DB 字段或 UI 功能。
-- Base Git SHA、Repository Remote 或 Workspace Root 不匹配。
+- Base Git SHA、Repository Remote 不匹配，或编辑目录不属于登记仓库同一 Git common-dir 的 linked worktree。
 - 文档 Snapshot、Impact Report 或 Code Graph 已 stale。
 - 需要执行未在白名单中的写数据库、部署、网络或破坏性命令。
 - 发现新的 high-impact 业务行为、数据迁移或安全风险。
@@ -81,6 +82,16 @@ new migration risk D
 
 不得每发现一个文件就弹出一次审批。
 
+### Test Case 修订后的执行授权
+
+自然语言修订生成新 Test Case Version 后，系统比较三个授权维度：TestDataPlan 内容、UI Scenario，以及 Repository Revision／Code Scope／执行方式／测试数据引用组成的执行范围。仅重新生成 Artifact ID 或修改不影响执行边界的非 UI 断言措辞，不视为范围变化。
+
+- 三个维度均不变：可复用同一 Project、Case、未过期且未撤销、Scenario 白名单完全一致的 Grant；即使 Grant 已完成，也只恢复 `run_test`／`record_evidence`，不恢复代码编辑权限。首次新 Run 预约时写入 `reused` 授权记录，确认者固定为 `system:scope-unchanged`。
+- 任一维度变化：开始按钮保持阻断，用户必须在可信 Web 对话中确认当前目标摘要和确切 Grant，写入 `reconfirmed` 记录后才能执行。
+- Grant 过期、撤销、Project／Case 不同或 Scenario 白名单不一致：不能复用或重新确认，必须获得新的有效 Grant。
+
+授权记录固定新旧范围摘要、变化维度、Revision、Orchestration、Grant 和确认者。旧 Run、Evidence、Screenshot 与 Closure 只能作为历史比较，不能参与新 Version 的通过判定。
+
 ## 6. 预定义命令
 
 Project Profile 定义安全命令模板，例如：
@@ -94,7 +105,21 @@ module integration test
 approved Playwright scenarios
 ```
 
-命令使用参数数组和固定工作目录，不把 Copilot 生成的任意 shell 字符串视为已批准。安装依赖、修改环境、执行 migration、部署和清理共享数据默认不在普通 Edit Grant 中。
+`CommandExecutionProfile` 与代码扫描使用的 `CodeFrameworkProfile` 分离并独立版本化。签发 Grant 时把当前激活的 Command Profile Version 固定到 Grant；之后激活新版本不能改变已经批准的命令。
+
+执行器只接受 Profile 中的固定参数数组，使用固定 Workspace 内工作目录、超时、显式环境变量白名单和预期退出码，并以 `shell=false` 启动绝对路径可执行文件。相对可执行文件必须解析在 Workspace 内；简单命令名只能从批准传入的 `PATH` 解析。安装依赖、修改环境、执行 migration、部署和清理共享数据默认不在普通 Edit Grant 中。
+
+每次运行先写入不可变 `command_execution_requests` 预约，再写入唯一的 `command_execution_results`，读取时重新计算 result digest。相同 ID 和相同内容可以重放已有结果；预约存在但结果缺失时不能静默重跑。确认原进程已退出后，操作员可用 `operamind-recover-command`、固定的 timezone-aware `--stale-before`、Recovery ID、操作者和原因写入唯一 `interrupted` Result；未来边界、未过边界的预约、已有正常 Result 和冲突重放都会阻断。stdout/stderr 通过独立 pipe 流式计算摘要，不写临时文件、不保留正文；结果只保存状态、退出码、路径、时间、SHA-256、字节数和超限标记。命令运行在独立进程组中，超时会杀死整个进程组；父进程退出后仍有子进程存活时也会清理并把结果记为 failed。
+
+```bash
+operamind-recover-command \
+  --recovery-id command-recovery-001 \
+  --command-execution-id command-execution-001 \
+  --project-id visiondemo \
+  --actor operator@example.com \
+  --reason 'approved command worker process was interrupted' \
+  --stale-before '2026-07-16T12:00:00Z'
+```
 
 ## 7. 用户体验
 
@@ -139,6 +164,7 @@ format/lint
 - Grant 对应的文档、Impact Report 和 Git SHA。
 - Copilot 实际修改的文件。
 - 自动执行的命令和结果。
+- 命令 Profile Version、模板摘要、请求摘要和 Workspace/Revision 身份。
 - 是否发生越界尝试。
 - Grant 何时完成、失效或被撤销。
 
@@ -147,5 +173,6 @@ format/lint
 - 每个 Change Group 一次业务审批。
 - 每个 Grant 默认最多 3-8 个 production 文件，数量来自 Project Policy。
 - 测试文件和 UI Scenario 与同一个 Grant 一起批准。
-- Grant 在首次成功提交、用户撤销、Base SHA 改变或超时后失效。
+- Grant source 只接受通过完整性读取的 active Edit Packet 和 `editing` Case。Packet 读取以不可变 Artifact 为权威，逐项核对规范化文件/Item 白名单、Repository Revision commit、confirmed Impact Report 和同一 `ImpactConfirmation`；任一漂移都失败关闭，不能靠修改状态列或 JSONB 白名单扩大权限。
+- Grant 在成功提交后进入 `ui_pending`，禁止继续修改代码，只允许执行原 Grant 固定的 UI Scenario；首次 UI closure 后进入 `completed`。若 Revision、Edit Packet、Scenario 集合、Deployment 和上游证据完全一致，`completed` Grant 可用于同范围 UI 证据再验证，但不能恢复编辑权限；任一范围或风险边界变化都必须重新审批。每次 inspect/authorize 都重新比对 Grant Artifact、完整规范化行、上游 Packet 完整性、生命周期事件摘要和固定 Command Profile payload 摘要。每次编辑/命令授权除锁定 Grant 外，还在同一事务中复核并锁定 active Packet、confirmed Impact Report、current/complete Code Graph 和 editing Case；任一上游身份失效都会立即阻断旧 Grant。UI 授权则要求 superseded Packet 已有同一 Grant 的 verified committed/in-scope/passing Edit Result，Report/Graph 仍有效且 Case 仍为 `verifying_ui`。Edit Result、UI Run 创建和非 blocked UI closure 都在锁定 Grant 与这些上游记录的事务中重新授权，避免撤销/过期或 stale 检查与副作用之间的竞态。用户撤销、Base SHA 改变或超时会立即失效；已启动 Run 不得在失效后发布 passed/failed closure，只能通过显式 Recovery 关闭为 blocked。
 - Reanalysis Request 汇总全部新增范围后只审批一次。

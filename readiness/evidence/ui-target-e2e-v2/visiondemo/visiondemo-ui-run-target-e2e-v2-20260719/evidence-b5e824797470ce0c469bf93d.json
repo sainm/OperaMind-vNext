@@ -1,0 +1,29 @@
+{
+  "assertions": [
+    {
+      "assertion_id": "status-default-is-all",
+      "kind": "value_equals",
+      "status": "passed"
+    },
+    {
+      "assertion_id": "default-expense-001-visible",
+      "kind": "visible",
+      "status": "passed"
+    },
+    {
+      "assertion_id": "default-expense-002-visible",
+      "kind": "visible",
+      "status": "passed"
+    },
+    {
+      "assertion_id": "default-expense-003-visible",
+      "kind": "visible",
+      "status": "passed"
+    },
+    {
+      "assertion_id": "default-expense-004-visible",
+      "kind": "visible",
+      "status": "passed"
+    }
+  ]
+}

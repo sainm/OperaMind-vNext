@@ -1,0 +1,22 @@
+{
+  "evidence_format_version": "v1",
+  "evidence_id": "replace-with-deployment-run-evidence-id",
+  "gate_id": "target_deployment_e2e",
+  "evidence_type": "deployment_run",
+  "outcome": "passed",
+  "observed_at": "2026-07-17T00:00:00Z",
+  "review_status": "pending",
+  "reviewed_by": [],
+  "subject": {
+    "project_id": "replace-with-project-id",
+    "analysis_case_id": "replace-with-analysis-case-id",
+    "ui_execution_plan_id": "replace-with-ui-execution-plan-id",
+    "ui_execution_run_id": "replace-with-ui-execution-run-id",
+    "verification_result_id": "replace-with-verification-result-id",
+    "environment_id": "replace-with-environment-id",
+    "deployment_revision": "replace-with-deployment-revision",
+    "repository_revision": "replace-with-result-repository-revision",
+    "status": "passed",
+    "evidence_ids": ["replace-with-sanitized-evidence-id"]
+  }
+}

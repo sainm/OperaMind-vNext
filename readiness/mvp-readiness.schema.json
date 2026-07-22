@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/readiness/mvp-readiness.schema.json",
+  "title": "OperaMindMvpReadiness",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["manifest_id", "manifest_version", "status", "gates"],
+  "properties": {
+    "manifest_id": {"type": "string", "minLength": 1},
+    "manifest_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[a-z0-9.-]+)?$"},
+    "status": {"enum": ["pending", "ready"]},
+    "gates": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "items": {"$ref": "#/$defs/gate"}
+    }
+  },
+  "$defs": {
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gate_id", "policy_version", "status", "evidence_refs", "reviewers"],
+      "properties": {
+        "gate_id": {
+          "enum": [
+            "embedding_provider_live",
+            "full_local_regression",
+            "github_copilot_live",
+            "golden_dataset",
+            "human_approval_e2e",
+            "target_deployment_e2e"
+          ]
+        },
+        "policy_version": {"type": "string", "pattern": "^v[0-9]+$"},
+        "status": {"enum": ["pending", "passed"]},
+        "blocking_reason": {"type": "string", "minLength": 1},
+        "evidence_refs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/evidence"}
+        },
+        "reviewers": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "pending"}}, "required": ["status"]},
+          "then": {
+            "required": ["blocking_reason"],
+            "properties": {
+              "evidence_refs": {"maxItems": 0},
+              "reviewers": {"maxItems": 0}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"status": {"const": "passed"}}, "required": ["status"]},
+          "then": {
+            "not": {"required": ["blocking_reason"]},
+            "properties": {
+              "evidence_refs": {"minItems": 1},
+              "reviewers": {"minItems": 1}
+            }
+          }
+        }
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "evidence_type", "path", "sha256", "observed_at"],
+      "properties": {
+        "evidence_id": {"type": "string", "minLength": 1},
+        "evidence_type": {
+          "enum": [
+            "copilot_session",
+            "deployment_run",
+            "golden_manifest",
+            "human_review",
+            "provider_probe",
+            "test_report"
+          ]
+        },
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "observed_at": {"type": "string", "format": "date-time"}
+      }
+    }
+  }
+}

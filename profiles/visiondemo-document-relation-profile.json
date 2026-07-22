@@ -1,0 +1,36 @@
+{
+  "profile_type": "DocumentRelationProfile",
+  "profile_id": "visiondemo-document-relations",
+  "profile_version": "1.0.0",
+  "rules": [
+    {
+      "rule_id": "screen-api-path",
+      "relation_label": "calls_api",
+      "source_document_types": [
+        "screen_design",
+        "program_design"
+      ],
+      "source_fact_types": [
+        "screen_event",
+        "program_method"
+      ],
+      "source_fields": [
+        "api_path"
+      ],
+      "target_document_types": [
+        "api_design"
+      ],
+      "target_fact_types": [
+        "api_endpoint"
+      ],
+      "target_fields": [
+        "path"
+      ],
+      "value_normalizers": [
+        "url_path"
+      ],
+      "ambiguity_policy": "require_unique_target"
+    }
+  ],
+  "unresolved_policy": "record_and_continue"
+}

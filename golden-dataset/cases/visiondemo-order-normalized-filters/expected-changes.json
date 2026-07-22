@@ -1,0 +1,41 @@
+{
+  "case_id": "visiondemo-order-normalized-filters",
+  "dataset_stage": "golden",
+  "expected_structured_change_count": 2,
+  "changes": [
+    {
+      "stable_key": "screen_element:screen_order_list/order-search-status",
+      "fact_type": "screen_element",
+      "domain": "ui",
+      "change_type": "modified",
+      "business_summary": "A blank order status returns every status.",
+      "field_deltas": [
+        {
+          "field": "description",
+          "before": "ステータスフィルタ（新規/発注済/納品済/キャンセル）",
+          "after": "ステータスフィルタ（新規/発注済/納品済/キャンセル、空白は全件）",
+          "source_ref": "02_画面設計書_発注一覧.xlsx#画面項目一覧!I5"
+        }
+      ],
+      "confidence": "high",
+      "review_status": "approved"
+    },
+    {
+      "stable_key": "screen_element:screen_order_list/order-search-supplier",
+      "fact_type": "screen_element",
+      "domain": "ui",
+      "change_type": "modified",
+      "business_summary": "Supplier search trims surrounding whitespace before partial matching.",
+      "field_deltas": [
+        {
+          "field": "description",
+          "before": "仕入先検索キーワード",
+          "after": "仕入先検索キーワード（前後空白を除去して部分一致）",
+          "source_ref": "02_画面設計書_発注一覧.xlsx#画面項目一覧!I6"
+        }
+      ],
+      "confidence": "high",
+      "review_status": "approved"
+    }
+  ]
+}

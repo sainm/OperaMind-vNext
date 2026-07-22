@@ -1,17 +1,33 @@
 {
   "artifact_type": "DocumentIngestionResult",
   "schema_version": "v1",
+  "ingestion_result_event_id": "ingestion-ready-001",
   "ingestion_batch_id": "ingestion-001",
   "project_id": "project-001",
   "source_snapshot_id": "document-snapshot-before-001",
   "target_snapshot_id": "document-snapshot-after-001",
   "analysis_case_id": "analysis-case-001",
   "document_profile_refs": ["screen-design@1.0.0"],
+  "document_profiles": [
+    {
+      "profile_version_id": "screen-design-profile-version-001",
+      "binding_key": "document:screen_design",
+      "activation_event_id": "screen-design-activation-001",
+      "profile_ref": "screen-design@1.0.0"
+    }
+  ],
+  "source_content_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+  "target_content_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+  "source_extractor_ref": "operamind-xlsx-structural@1+openpyxl-3.1.5",
+  "target_extractor_ref": "operamind-xlsx-structural@1+openpyxl-3.1.5",
   "uploaded_document_count": 27,
   "changed_document_count": 1,
   "structured_change_count": 1,
   "eligible_index_target_count": 42,
   "indexed_target_count": 42,
+  "search_index_build_id": "search-index-build-001",
+  "embedding_profile_version_id": "embedding-profile-version-001",
+  "embedding_profile_binding_key": "embedding:document_search",
   "embedding_profile_ref": "openai-compatible@1.0.0",
   "embedding_index_status": "ready",
   "status": "ready_for_impact",

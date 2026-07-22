@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/profiles/command-execution-profile.schema.json",
+  "title": "CommandExecutionProfile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile_type", "profile_id", "profile_version", "templates"],
+  "properties": {
+    "profile_type": {"const": "CommandExecutionProfile"},
+    "profile_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "profile_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "templates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/template"}
+    }
+  },
+  "$defs": {
+    "template": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command_ref",
+        "argv",
+        "working_directory",
+        "timeout_seconds",
+        "expected_exit_codes",
+        "environment_keys",
+        "output_limit_bytes",
+        "failure_policy"
+      ],
+      "properties": {
+        "command_ref": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*$"},
+        "argv": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1, "maxLength": 500},
+          "minItems": 1,
+          "maxItems": 64
+        },
+        "working_directory": {"type": "string", "minLength": 1},
+        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 1800},
+        "expected_exit_codes": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 0, "maximum": 255},
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "environment_keys": {
+          "type": "array",
+          "items": {"enum": ["PATH", "HOME", "JAVA_HOME", "GRADLE_USER_HOME", "LANG", "LC_ALL", "CI"]},
+          "uniqueItems": true
+        },
+        "output_limit_bytes": {"type": "integer", "minimum": 1024, "maximum": 1048576},
+        "failure_policy": {"const": "record_and_block"}
+      }
+    }
+  }
+}

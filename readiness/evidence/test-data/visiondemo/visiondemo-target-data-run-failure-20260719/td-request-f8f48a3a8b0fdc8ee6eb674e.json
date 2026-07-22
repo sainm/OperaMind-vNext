@@ -1,0 +1,26 @@
+{
+  "json": {
+    "details": [
+      {
+        "accountItem": "交通費",
+        "amount": 4321,
+        "description": "関連データ",
+        "expenseDate": "2026-07-19",
+        "lineNo": 1
+      }
+    ],
+    "expense": {
+      "applyDate": "2026-07-19",
+      "description": "OperaMind 跨画面 E2E",
+      "employee": {
+        "id": 10
+      },
+      "expenseNo": "EXP-OM-B5F8A720",
+      "status": "差戻し",
+      "totalAmount": 4321
+    }
+  },
+  "method": "POST",
+  "path": "/expense/api/save",
+  "query": {}
+}

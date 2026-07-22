@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/golden-dataset/review.schema.json",
+  "title": "GoldenCaseReview",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["case_id", "dataset_stage", "review_status", "steps"],
+  "properties": {
+    "case_id": {"type": "string", "minLength": 1},
+    "dataset_stage": {"enum": ["golden_candidate", "golden"]},
+    "review_status": {"enum": ["pending", "approved", "rejected"]},
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "reviewed_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step_id", "prompt", "decision"],
+        "properties": {
+          "step_id": {
+            "enum": [
+              "source_identity",
+              "expected_change_and_rag",
+              "code_scope",
+              "ui_scenarios"
+            ]
+          },
+          "prompt": {"type": "string", "minLength": 1},
+          "decision": {"enum": ["pending", "approved", "rejected"]},
+          "note": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"dataset_stage": {"const": "golden_candidate"}},
+        "required": ["dataset_stage"]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {"required": ["reviewed_by"]},
+            {"required": ["reviewed_at"]}
+          ]
+        },
+        "properties": {
+          "review_status": {"const": "pending"},
+          "steps": {
+            "items": {
+              "properties": {"decision": {"const": "pending"}}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"dataset_stage": {"const": "golden"}},
+        "required": ["dataset_stage"]
+      },
+      "then": {
+        "required": ["reviewed_by", "reviewed_at"],
+        "properties": {
+          "review_status": {"const": "approved"},
+          "steps": {
+            "items": {
+              "properties": {"decision": {"const": "approved"}}
+            }
+          }
+        }
+      }
+    }
+  ]
+}

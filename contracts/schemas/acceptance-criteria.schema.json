@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/acceptance-criteria.schema.json",
+  "title": "AcceptanceCriteria",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifact_type", "schema_version", "acceptance_criteria_id", "change_request_id", "project_id", "criteria"],
+  "properties": {
+    "artifact_type": {"const": "AcceptanceCriteria"},
+    "schema_version": {"const": "v1"},
+    "acceptance_criteria_id": {"type": "string", "minLength": 1},
+    "change_request_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["criterion_id", "business_rule_refs", "assertion_type", "subject", "operator", "expected", "test_case_refs"],
+        "properties": {
+          "criterion_id": {"type": "string", "minLength": 1},
+          "business_rule_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "uniqueItems": true},
+          "assertion_type": {"enum": ["source", "api", "ui"]},
+          "subject": {"type": "string", "minLength": 1},
+          "operator": {"enum": ["equals", "contains", "count_equals", "exists"]},
+          "expected": {},
+          "test_case_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "uniqueItems": true}
+        }
+      }
+    }
+  }
+}

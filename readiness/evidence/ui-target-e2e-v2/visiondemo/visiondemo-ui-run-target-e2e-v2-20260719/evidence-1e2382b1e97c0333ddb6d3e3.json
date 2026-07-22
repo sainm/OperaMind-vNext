@@ -1,0 +1,49 @@
+{
+  "responses": [
+    {
+      "method": "GET",
+      "path": "/popup",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/css/bootstrap.min.css",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/css/app.css",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/js/app/table-utils.js",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/js/app/common.js",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/js/jquery.min.js",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/expense/page",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/expense/api/search",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/expense/api/search",
+      "status": 200
+    }
+  ]
+}

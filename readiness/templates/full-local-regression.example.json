@@ -1,0 +1,30 @@
+{
+  "evidence_format_version": "v1",
+  "evidence_id": "replace-with-full-local-regression-evidence-id",
+  "gate_id": "full_local_regression",
+  "evidence_type": "test_report",
+  "outcome": "passed",
+  "observed_at": "2026-07-17T00:00:00Z",
+  "review_status": "pending",
+  "reviewed_by": [],
+  "subject": {
+    "source_tree_algorithm": "operamind-source-tree-v1",
+    "source_tree_sha256": "replace-with-operamind-baseline-print-source-tree-digest",
+    "test_command": [
+      ".venv/bin/pytest",
+      "-q",
+      "--ignore=tests/integration/test_live_embedding_provider.py",
+      "--ignore=tests/integration/test_golden_screen_change.py"
+    ],
+    "excluded_tests": [
+      "tests/integration/test_live_embedding_provider.py",
+      "tests/integration/test_golden_screen_change.py"
+    ],
+    "collected": 1,
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0,
+    "database_version": "replace-with-real-postgresql-version",
+    "browser_version": "replace-with-real-browser-version"
+  }
+}

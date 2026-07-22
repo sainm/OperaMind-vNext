@@ -1,0 +1,25 @@
+{
+  "case_id": "visiondemo-expense-status-filter-golden",
+  "dataset_stage": "golden",
+  "portability_status": "immutable_reference",
+  "project_id": "visiondemo",
+  "document_sources": {
+    "before_uri": "urn:sha256:1e4256a3fe1cdc2c48b3e1d95681bb23dac6d8b8892ef7aeaa253ddcc65daa42",
+    "after_uri": "urn:sha256:570f5acb204ead502d839c495dd594c9341117b58585378a9979c66257b0a23c",
+    "changed_file": "02_画面設計書_経費精算申請一覧.xlsx",
+    "before_sha256": "1e4256a3fe1cdc2c48b3e1d95681bb23dac6d8b8892ef7aeaa253ddcc65daa42",
+    "after_sha256": "570f5acb204ead502d839c495dd594c9341117b58585378a9979c66257b0a23c",
+    "before_document_count": 27,
+    "after_document_count": 27,
+    "changed_document_count": 1
+  },
+  "target_repository": {
+    "url": "git@github.com:d-e-chen/OperaMind-demo.git",
+    "base_commit": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6",
+    "branch_observed": "main",
+    "worktree_clean_at_analysis": false,
+    "worktree_note": "Uncommitted changes were observed in the original Silver inspection; expected scope is evaluated against base_commit."
+  },
+  "generated_by": "ai-assisted-from-reviewed-silver-candidate-v1",
+  "review_status": "approved"
+}

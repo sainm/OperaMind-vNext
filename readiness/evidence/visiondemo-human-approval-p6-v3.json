@@ -1,0 +1,20 @@
+{
+  "evidence_format_version": "v1",
+  "evidence_id": "operamind-vnext-visiondemo-human-approval-p6-v3-20260718T121716Z",
+  "gate_id": "human_approval_e2e",
+  "evidence_type": "human_review",
+  "outcome": "passed",
+  "observed_at": "2026-07-18T12:17:16.839069Z",
+  "review_status": "reviewed",
+  "reviewed_by": [
+    "conversation:user"
+  ],
+  "subject": {
+    "project_id": "visiondemo",
+    "analysis_case_id": "visiondemo-expense-status-filter-p6",
+    "impact_report_id": "visiondemo-expense-impact-p6-v3",
+    "confirmation_id": "visiondemo-expense-impact-confirmation-p6-v3",
+    "approval_grant_id": "visiondemo-expense-approval-grant-p6-v3",
+    "decision": "approved"
+  }
+}

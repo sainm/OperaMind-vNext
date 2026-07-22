@@ -1,0 +1,246 @@
+{
+  "schema_version": "v1",
+  "case_id": "visiondemo-employee-blank-name",
+  "project_id": "visiondemo",
+  "repository": {
+    "repository_id": "visiondemo-repository",
+    "base_revision": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6",
+    "application_root": "VisionDemo",
+    "scan_roots": ["VisionDemo/src/main", "VisionDemo/src/test"],
+    "code_profile": "profiles/code-framework-profile.example.json"
+  },
+  "document": {
+    "domain": "ui",
+    "fact_type": "screen_element",
+    "convention_profile": "profiles/screen-design-convention-profile.example.json"
+  },
+  "requirements": {
+    "canonical_requirement": "社員の氏名が空白または未指定の場合は、氏名で絞り込まず全件を検索する。",
+    "business_rules": [
+      {
+        "business_rule_id": "rule-blank-employee-name-all",
+        "text": "A null, empty or whitespace-only employee name is treated as no name filter.",
+        "source_refs": ["02_画面設計書_社員情報一覧.xlsx#画面項目一覧!I5"]
+      }
+    ],
+    "required_intents": [
+      {"message": "missing employee-name intent", "any_of": ["社員", "従業員", "employee", "姓名", "氏名"]},
+      {"message": "missing whitespace condition", "any_of": ["空白", "空格", "whitespace", "blank"]},
+      {"message": "missing no-filter behavior", "any_of": ["未指定", "全件", "全部", "no filter", "all"]}
+    ],
+    "conflicts": [
+      {"message": "blank employee name conflicts with the all-records contract", "any_of": ["0件", "ゼロ件", "no records", "不返回"]}
+    ]
+  },
+  "analysis": {
+    "policy_version": "configured-change-loop-v1",
+    "summary": "Employee name search must normalize whitespace-only input to no filter."
+  },
+  "impact_candidates": [
+    {
+      "path": "VisionDemo/src/main/webapp/WEB-INF/jsp/fragments/employee-list.jsp",
+      "symbols": ["emp-search-name", "doSearch"],
+      "reason": "Collects the name filter and renders the employee results"
+    },
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/controller/EmployeeController.java",
+      "symbols": ["search"],
+      "reason": "Receives the browser name parameter"
+    },
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/service/EmployeeService.java",
+      "symbols": ["search"],
+      "reason": "Forwards whitespace-only names without normalizing them"
+    },
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/repository/EmployeeRepository.java",
+      "symbols": ["search"],
+      "reason": "Treats NULL as no filter, while whitespace becomes a LIKE filter"
+    }
+  ],
+  "edit": {
+    "forbidden_paths": ["VisionDemo/pom.xml"],
+    "replacements": [
+      {
+        "path": "VisionDemo/src/main/java/com/visiondemo/service/EmployeeService.java",
+        "before": "    public Page<Employee> search(String name, Long deptId, int page, int size) {\n        return employeeRepository.search(name, deptId, PageRequest.of(page, size));\n    }\n",
+        "after": "    public Page<Employee> search(String name, Long deptId, int page, int size) {\n        String normalizedName = name == null || name.isBlank() ? null : name;\n        return employeeRepository.search(normalizedName, deptId, PageRequest.of(page, size));\n    }\n"
+      }
+    ],
+    "allowed_items": [
+      {
+        "path": "VisionDemo/src/main/java/com/visiondemo/service/EmployeeService.java",
+        "business_summary": "Normalize a whitespace-only employee name to no filter.",
+        "implementation_constraints": [
+          "Preserve nonblank name and department filtering.",
+          "Do not modify employee save or delete behavior."
+        ]
+      }
+    ]
+  },
+  "acceptance_criteria": [
+    {
+      "criterion_id": "criterion-source-employee-name-normalization",
+      "business_rule_refs": ["rule-blank-employee-name-all"],
+      "assertion_type": "source",
+      "subject": "VisionDemo/src/main/java/com/visiondemo/service/EmployeeService.java#search",
+      "operator": "contains",
+      "expected": "name == null || name.isBlank()",
+      "test_case_refs": ["test-source-employee-name-normalization"]
+    },
+    {
+      "criterion_id": "criterion-api-whitespace-name-count",
+      "business_rule_refs": ["rule-blank-employee-name-all"],
+      "assertion_type": "api",
+      "subject": "GET /employee/api/search?name=%20%20%20.totalElements",
+      "operator": "count_equals",
+      "expected": 8,
+      "test_case_refs": ["test-api-whitespace-employee-name"]
+    },
+    {
+      "criterion_id": "criterion-ui-whitespace-name-all",
+      "business_rule_refs": ["rule-blank-employee-name-all"],
+      "assertion_type": "ui",
+      "subject": "employee-whitespace-name-all",
+      "operator": "contains",
+      "expected": ["E001", "E008"],
+      "test_case_refs": ["employee-whitespace-name-all"]
+    },
+    {
+      "criterion_id": "criterion-ui-employee-reset-all",
+      "business_rule_refs": ["rule-blank-employee-name-all"],
+      "assertion_type": "ui",
+      "subject": "employee-reset-all",
+      "operator": "contains",
+      "expected": ["empty name", "E001", "E008"],
+      "test_case_refs": ["employee-reset-all"]
+    }
+  ],
+  "test_cases": [
+    {
+      "test_case_id": "test-source-employee-name-normalization",
+      "title": "Source normalizes whitespace-only employee names",
+      "level": "source",
+      "execution_mode": "deterministic",
+      "business_rule_refs": ["rule-blank-employee-name-all"],
+      "acceptance_criteria_refs": ["criterion-source-employee-name-normalization"],
+      "preconditions": ["Approved base revision is checked out"],
+      "steps": ["Inspect EmployeeService#search and compile the application"],
+      "expected_results": ["Whitespace-only name becomes null before repository search"],
+      "test_data_refs": []
+    },
+    {
+      "test_case_id": "test-api-whitespace-employee-name",
+      "title": "Whitespace-only name returns all seeded employees",
+      "level": "api",
+      "execution_mode": "deterministic",
+      "business_rule_refs": ["rule-blank-employee-name-all"],
+      "acceptance_criteria_refs": ["criterion-api-whitespace-name-count"],
+      "preconditions": ["Eight default employees are loaded"],
+      "steps": ["GET /employee/api/search with a three-space name"],
+      "expected_results": ["The response contains all eight employees"],
+      "test_data_refs": ["test-data-employees"]
+    },
+    {
+      "test_case_id": "employee-whitespace-name-all",
+      "title": "Whitespace-only name displays every employee",
+      "level": "ui",
+      "execution_mode": "browser",
+      "business_rule_refs": ["rule-blank-employee-name-all"],
+      "acceptance_criteria_refs": ["criterion-ui-whitespace-name-all"],
+      "preconditions": ["Eight default employees are loaded"],
+      "steps": ["Enter three spaces in the name field", "Click 検索"],
+      "expected_results": ["The first and last seeded employee are visible"],
+      "test_data_refs": ["test-data-employees"]
+    },
+    {
+      "test_case_id": "employee-reset-all",
+      "title": "Reset clears a name filter and restores all employees",
+      "level": "ui",
+      "execution_mode": "browser",
+      "business_rule_refs": ["rule-blank-employee-name-all"],
+      "acceptance_criteria_refs": ["criterion-ui-employee-reset-all"],
+      "preconditions": ["Eight default employees are loaded"],
+      "steps": ["Search for 山田", "Click リセット"],
+      "expected_results": ["The name is empty and all employees are visible"],
+      "test_data_refs": ["test-data-employees"]
+    }
+  ],
+  "data_sets": [
+    {
+      "test_data_id": "test-data-employees",
+      "test_case_refs": ["test-api-whitespace-employee-name", "employee-whitespace-name-all", "employee-reset-all"],
+      "setup_actions": [
+        {
+          "action_id": "load-default-employees",
+          "action_type": "fixture",
+          "target": "VisionDemo/src/main/resources/data.sql",
+          "payload": {"expected_employee_count": 8, "first_employee_no": "E001", "last_employee_no": "E008"}
+        }
+      ],
+      "cleanup_policy": "isolated_environment"
+    }
+  ],
+  "execution": {
+    "source_tests": [
+      {
+        "test_case_id": "test-source-employee-name-normalization",
+        "path": "VisionDemo/src/main/java/com/visiondemo/service/EmployeeService.java",
+        "contains": ["name == null || name.isBlank()", "employeeRepository.search(normalizedName"],
+        "success_summary": "Employee name normalization and Maven compile completed."
+      }
+    ],
+    "health_request": {"method": "GET", "path": "/employee/api/search", "query": {"name": "", "page": 0, "size": 20}},
+    "api_tests": [
+      {
+        "test_case_id": "test-api-whitespace-employee-name",
+        "request": {"method": "GET", "path": "/employee/api/search", "query": {"name": "   ", "page": 0, "size": 20}},
+        "assertions": [
+          {"path": "totalElements", "operator": "equals", "expected": 8},
+          {"path": "content", "operator": "count_equals", "expected": 8}
+        ],
+        "success_summary": "Whitespace-only name returned all eight seeded employees."
+      }
+    ],
+    "setup_requests": [],
+    "browser_phases": [
+      {"phase_id": "employee-search", "after_setup": false, "scenario_ids": ["employee-whitespace-name-all", "employee-reset-all"]}
+    ],
+    "browser_scenarios": [
+      {
+        "scenario_id": "employee-whitespace-name-all",
+        "trigger_path": "/popup?fragment=%2Femployee%2Fpage",
+        "actions": [
+          {"action_id": "fill-whitespace-name", "kind": "fill", "locator": {"strategy": "css", "value": "#emp-search-name"}, "value": {"source": "literal", "value": "   "}},
+          {"action_id": "search-whitespace-name", "kind": "click", "locator": {"strategy": "css", "value": "#emp-search-btn"}}
+        ],
+        "assertions": [
+          {"assertion_id": "whitespace-preserved", "kind": "value_equals", "locator": {"strategy": "css", "value": "#emp-search-name"}, "expected": {"source": "literal", "value": "   "}, "failure_category": "business_assertion"},
+          {"assertion_id": "first-employee-visible", "kind": "text_contains", "locator": {"strategy": "css", "value": "#emp-table-container"}, "expected": {"source": "literal", "value": "E001"}, "failure_category": "business_assertion"},
+          {"assertion_id": "last-employee-visible", "kind": "text_contains", "locator": {"strategy": "css", "value": "#emp-table-container"}, "expected": {"source": "literal", "value": "E008"}, "failure_category": "business_assertion"}
+        ],
+        "redaction_locators": []
+      },
+      {
+        "scenario_id": "employee-reset-all",
+        "trigger_path": "/popup?fragment=%2Femployee%2Fpage",
+        "actions": [
+          {"action_id": "fill-filtered-name", "kind": "fill", "locator": {"strategy": "css", "value": "#emp-search-name"}, "value": {"source": "literal", "value": "山田"}},
+          {"action_id": "search-filtered-name", "kind": "click", "locator": {"strategy": "css", "value": "#emp-search-btn"}},
+          {"action_id": "reset-name", "kind": "click", "locator": {"strategy": "css", "value": "#emp-reset-btn"}}
+        ],
+        "assertions": [
+          {"assertion_id": "reset-name-empty", "kind": "value_equals", "locator": {"strategy": "css", "value": "#emp-search-name"}, "expected": {"source": "literal", "value": ""}, "failure_category": "business_assertion"},
+          {"assertion_id": "reset-first-visible", "kind": "text_contains", "locator": {"strategy": "css", "value": "#emp-table-container"}, "expected": {"source": "literal", "value": "E001"}, "failure_category": "business_assertion"},
+          {"assertion_id": "reset-last-visible", "kind": "text_contains", "locator": {"strategy": "css", "value": "#emp-table-container"}, "expected": {"source": "literal", "value": "E008"}, "failure_category": "business_assertion"}
+        ],
+        "redaction_locators": []
+      }
+    ]
+  },
+  "review": {
+    "review_status": "approved",
+    "reviewed_by": "conversation:user",
+    "reviewed_at": "2026-07-18T00:00:00+08:00"
+  }
+}

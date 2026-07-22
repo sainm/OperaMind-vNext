@@ -1,0 +1,7 @@
+{
+  "observed": {
+    "employee_count": 0,
+    "expense_count": 0
+  },
+  "query_ref": "visiondemo.cleanup-by-ids"
+}

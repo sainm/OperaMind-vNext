@@ -1,0 +1,30 @@
+{
+  "artifact_type": "CopilotCodingTask",
+  "schema_version": "v1",
+  "coding_task_id": "coding-task-001",
+  "change_session_id": "analysis-case-001",
+  "change_request_id": "change-request-001",
+  "project_id": "project-001",
+  "analysis_case_id": "analysis-case-001",
+  "repository_id": "repository-001",
+  "edit_packet_id": "edit-packet-001",
+  "approval_grant_id": "approval-grant-001",
+  "base_repository_revision": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6",
+  "attempt_number": 1,
+  "execution_mode": "copilot_coding_plan",
+  "provider_contract": {
+    "interface": "coding_task_provider_v1",
+    "route": "local_bridge",
+    "provider_id": "vscode_github_copilot"
+  },
+  "task_summary": "费用状态检索增加差戻し选项，并执行批准的单元测试。",
+  "mcp_server_name": "operaMind",
+  "required_mcp_tools": [
+    "copilot_get_coding_task",
+    "copilot_run_task_command",
+    "copilot_validate_task_diff",
+    "copilot_record_task_result"
+  ],
+  "created_by": "product-owner@example.invalid",
+  "created_at": "2026-07-19T12:00:00Z"
+}

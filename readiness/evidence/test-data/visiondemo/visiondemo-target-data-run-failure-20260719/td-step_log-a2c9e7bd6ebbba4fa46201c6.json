@@ -1,0 +1,11 @@
+{
+  "observed": {
+    "matching_row": {
+      "employee_name": "連携試験 B5F8A720",
+      "expenseNo": "EXP-OM-B5F8A720",
+      "status": "差戻し"
+    }
+  },
+  "screen_ref": "expense-list",
+  "ui_action_ref": "search-created-expense"
+}

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/golden-dataset/observed-rag-results.schema.json",
+  "title": "ObservedRagResults",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["case_id", "project_id", "query_results"],
+  "properties": {
+    "case_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "query_results": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["query_purpose", "candidates"],
+        "properties": {
+          "query_purpose": {"enum": ["business_behavior", "precise_anchor", "acceptance_criteria"]},
+          "candidates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["target_id", "project_id"],
+              "properties": {
+                "target_id": {"type": "string", "minLength": 1},
+                "project_id": {"type": "string", "minLength": 1}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,245 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/test-data-plan.schema.json",
+  "title": "TestDataPlan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_type",
+    "schema_version",
+    "test_data_plan_id",
+    "test_plan_id",
+    "project_id",
+    "status",
+    "data_sets",
+    "generation_flows",
+    "blocking_reasons"
+  ],
+  "properties": {
+    "artifact_type": {"const": "TestDataPlan"},
+    "schema_version": {"const": "v1"},
+    "test_data_plan_id": {"type": "string", "minLength": 1},
+    "test_plan_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["ready", "blocked"]},
+    "template_instances": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/templateInstance"}
+    },
+    "data_sets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["test_data_id", "test_case_refs", "setup_actions", "cleanup_policy"],
+        "properties": {
+          "test_data_id": {"type": "string", "minLength": 1},
+          "test_case_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "uniqueItems": true},
+          "setup_actions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["action_id", "action_type", "target", "payload"],
+              "properties": {
+                "action_id": {"type": "string", "minLength": 1},
+                "action_type": {"enum": ["http", "sql", "fixture"]},
+                "target": {"type": "string", "minLength": 1},
+                "payload": {"type": "object"}
+              }
+            }
+          },
+          "cleanup_policy": {"enum": ["isolated_environment", "delete_after_run", "retain"]}
+        }
+      }
+    },
+    "generation_flows": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/generationFlow"}
+    },
+    "blocking_reasons": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "ready"}}},
+      "then": {"properties": {"blocking_reasons": {"maxItems": 0}}}
+    },
+    {
+      "if": {"properties": {"status": {"const": "blocked"}}},
+      "then": {"properties": {"blocking_reasons": {"minItems": 1}}}
+    }
+  ],
+  "$defs": {
+    "nonBlank": {"type": "string", "minLength": 1},
+    "assertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assertion_id", "observe_via", "subject", "operator", "expected"],
+      "properties": {
+        "assertion_id": {"$ref": "#/$defs/nonBlank"},
+        "observe_via": {"enum": ["response", "api", "database", "ui", "fixture", "test"]},
+        "subject": {"$ref": "#/$defs/nonBlank"},
+        "operator": {"enum": ["equals", "contains", "count_equals", "exists", "satisfies"]},
+        "expected": {}
+      }
+    },
+    "outputBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["variable", "source", "path", "required"],
+      "properties": {
+        "variable": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+        "source": {"enum": ["response", "database", "ui", "fixture"]},
+        "path": {"$ref": "#/$defs/nonBlank"},
+        "required": {"type": "boolean"}
+      }
+    },
+    "templateInstance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_id",
+        "template_id",
+        "template_key",
+        "template_version",
+        "parameter_names",
+        "precondition_results",
+        "entity_order",
+        "cleanup_entity_order"
+      ],
+      "properties": {
+        "instance_id": {"$ref": "#/$defs/nonBlank"},
+        "template_id": {"$ref": "#/$defs/nonBlank"},
+        "template_key": {"$ref": "#/$defs/nonBlank"},
+        "template_version": {"$ref": "#/$defs/nonBlank"},
+        "parameter_names": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
+        },
+        "precondition_results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["precondition_id", "description_ja", "status"],
+            "properties": {
+              "precondition_id": {"$ref": "#/$defs/nonBlank"},
+              "description_ja": {"$ref": "#/$defs/nonBlank"},
+              "status": {"enum": ["passed", "blocked"]}
+            }
+          }
+        },
+        "entity_order": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/nonBlank"}
+        },
+        "cleanup_entity_order": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/nonBlank"}
+        }
+      }
+    },
+    "generationStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "step_id",
+        "sequence",
+        "channel",
+        "business_action",
+        "inputs",
+        "depends_on",
+        "output_bindings",
+        "postconditions"
+      ],
+      "properties": {
+        "step_id": {"$ref": "#/$defs/nonBlank"},
+        "sequence": {"type": "integer", "minimum": 1},
+        "channel": {"enum": ["fixture", "http", "sql", "ui"]},
+        "business_action": {"$ref": "#/$defs/nonBlank"},
+        "entity_ref": {"$ref": "#/$defs/nonBlank"},
+        "target": {"$ref": "#/$defs/nonBlank"},
+        "screen_ref": {"$ref": "#/$defs/nonBlank"},
+        "ui_action_ref": {"$ref": "#/$defs/nonBlank"},
+        "inputs": {"type": "object"},
+        "depends_on": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/nonBlank"}
+        },
+        "output_bindings": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/outputBinding"}
+        },
+        "postconditions": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/assertion"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"channel": {"const": "ui"}}},
+          "then": {"required": ["screen_ref", "ui_action_ref"]},
+          "else": {"required": ["target"]}
+        }
+      ]
+    },
+    "generationFlow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "flow_id",
+        "title",
+        "test_data_refs",
+        "test_case_refs",
+        "steps",
+        "final_assertions",
+        "cleanup_policy",
+        "cleanup_steps"
+      ],
+      "properties": {
+        "flow_id": {"$ref": "#/$defs/nonBlank"},
+        "title": {"$ref": "#/$defs/nonBlank"},
+        "test_data_refs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/nonBlank"}
+        },
+        "test_case_refs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/nonBlank"}
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/generationStep"}
+        },
+        "final_assertions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/assertion"}
+        },
+        "cleanup_policy": {"enum": ["isolated_environment", "delete_after_run", "retain"]},
+        "cleanup_steps": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/generationStep"}
+        }
+      }
+    }
+  }
+}

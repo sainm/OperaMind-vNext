@@ -1,0 +1,10 @@
+{
+  "observed": {
+    "employee": {
+      "employeeNo": "OM-5AEC06E1",
+      "name": "連携試験 5AEC06E1"
+    }
+  },
+  "screen_ref": "employee-list",
+  "ui_action_ref": "search-created-employee"
+}

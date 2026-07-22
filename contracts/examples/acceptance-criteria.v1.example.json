@@ -1,0 +1,18 @@
+{
+  "artifact_type": "AcceptanceCriteria",
+  "schema_version": "v1",
+  "acceptance_criteria_id": "acceptance-expense-status",
+  "change_request_id": "change-request-expense-status",
+  "project_id": "visiondemo",
+  "criteria": [
+    {
+      "criterion_id": "criterion-empty-status-count",
+      "business_rule_refs": ["rule-empty-status-all"],
+      "assertion_type": "api",
+      "subject": "GET /expense/api/search?status=.totalElements",
+      "operator": "count_equals",
+      "expected": 4,
+      "test_case_refs": ["expense-empty-status-api"]
+    }
+  ]
+}

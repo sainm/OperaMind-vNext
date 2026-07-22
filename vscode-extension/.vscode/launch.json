@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "OperaMind Bridge Extension POC",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "${input:targetWorkspace}"
+      ]
+    }
+  ],
+  "inputs": [
+    {
+      "id": "targetWorkspace",
+      "type": "promptString",
+      "description": "OperaMind が承認した隔離 linked worktree の絶対パス"
+    }
+  ]
+}

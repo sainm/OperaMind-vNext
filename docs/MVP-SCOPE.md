@@ -51,6 +51,8 @@ Golden Dataset 必选代码文件 Recall = 100%
 
 范围准确率和 RAG Recall@K 的目标阈值由 Golden Dataset 固化，不能通过修改期待值迁就当前实现。
 
+`operamind-baseline --require-ready` 只证明 Golden Dataset 本身完成冻结；整个 MVP 还必须通过 `operamind-baseline --require-mvp-ready`。后者要求真实 Provider、人工批准、GitHub Copilot、绑定 Deployment E2E 和完整本地回归均有 digest 固定的最终证据。需要语义判断的证据记录人工确认，确定性回归记录机器验证；当前 readiness manifest 仍因外部 gate 保持 `pending`。
+
 ## 5. 预计工作量
 
 | 工作 | 人日 |

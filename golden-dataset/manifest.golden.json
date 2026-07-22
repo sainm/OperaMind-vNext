@@ -1,0 +1,31 @@
+{
+  "dataset_id": "operamind-vnext-golden",
+  "dataset_version": "1.0.0",
+  "dataset_stage": "golden",
+  "status": "frozen",
+  "reviewers": ["conversation:user"],
+  "projects": [
+    {
+      "project_id": "visiondemo",
+      "repository_url": "git@github.com:d-e-chen/OperaMind-demo.git",
+      "repository_commit": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6",
+      "repository_subdirectory": "VisionDemo",
+      "scan_roots": [
+        "VisionDemo/src/main",
+        "VisionDemo/src/test"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "visiondemo-expense-status-filter-golden",
+      "project_id": "visiondemo",
+      "source_manifest": "cases/visiondemo-expense-status-filter-golden/source-manifest.json",
+      "expected_changes": "cases/visiondemo-expense-status-filter-golden/expected-changes.json",
+      "expected_rag_context": "cases/visiondemo-expense-status-filter-golden/expected-rag-context.json",
+      "expected_code_scope": "cases/visiondemo-expense-status-filter-golden/expected-code-scope.json",
+      "expected_ui_scenarios": "cases/visiondemo-expense-status-filter-golden/expected-ui-scenarios.json",
+      "review": "cases/visiondemo-expense-status-filter-golden/review.json"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "artifact_type": "ChangeRequest",
+  "schema_version": "v1",
+  "change_request_id": "change-request-expense-status",
+  "project_id": "visiondemo",
+  "input_mode": "natural_language",
+  "requirement_text": "Show all expenses when status is blank and allow Returned filtering.",
+  "business_rules": [
+    {
+      "business_rule_id": "rule-empty-status-all",
+      "text": "A blank status returns every expense.",
+      "source_refs": ["requirement:1"]
+    }
+  ],
+  "ambiguity_status": "clear",
+  "confirmation_required": false,
+  "ambiguities": []
+}

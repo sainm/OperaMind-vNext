@@ -1,0 +1,27 @@
+{
+  "artifact_type": "TestCaseChangeProposal",
+  "schema_version": "v1",
+  "proposal_id": "test-case-proposal-expense-result",
+  "change_request_id": "change-request-expense-status",
+  "project_id": "visiondemo",
+  "source_orchestration_id": "orchestration-expense-status",
+  "source_test_plan_id": "test-plan-expense-status",
+  "instruction": "期待結果「4 件を表示する」を「5 件を表示する」に変更",
+  "analysis_status": "deterministic",
+  "operations": [
+    {
+      "operation_id": "operation-result-1",
+      "test_case_id": "expense-empty-status-api",
+      "case_title": "空ステータスで全件を取得する",
+      "field": "expected_results",
+      "action": "replace",
+      "before": "4 件を表示する",
+      "after": "5 件を表示する",
+      "criterion_id": "criterion-empty-status-count",
+      "summary_before": "期待結果：4 件を表示する",
+      "summary_after": "期待結果：5 件を表示する"
+    }
+  ],
+  "ambiguities": [],
+  "blocking_reasons": []
+}

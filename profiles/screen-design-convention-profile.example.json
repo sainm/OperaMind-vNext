@@ -1,0 +1,44 @@
+{
+  "profile_type": "DocumentConventionProfile",
+  "profile_id": "screen-design-conventions-example",
+  "profile_version": "1.0.0",
+  "document_type": "screen_design",
+  "minimum_auto_match_score": 0.8,
+  "variants": [
+    {
+      "variant_id": "screen-item-table-ja",
+      "signals": [
+        {"type": "sheet_name", "values": ["画面項目一覧", "Screen Items"], "weight": 0.35},
+        {"type": "headers", "values": ["項目名", "種別", "初期値", "備考"], "weight": 0.45},
+        {"type": "filename_token", "values": ["画面設計書", "Screen Design"], "weight": 0.2}
+      ],
+      "field_aliases": {
+        "screen_id": ["画面ID", "Screen ID"],
+        "screen_name": ["画面名", "Screen Name"],
+        "element_id": ["項目名", "Element ID", "Control ID"],
+        "business_name": ["業務項目名", "Business Name"],
+        "label": ["表示ラベル", "Label"],
+        "accessible_role": ["ARIAロール", "Accessible Role"],
+        "accessible_name": ["アクセシブル名", "Accessible Name"],
+        "test_id": ["テストID", "Test ID"],
+        "placeholder": ["プレースホルダー", "Placeholder"],
+        "trigger_path": ["画面パス", "Trigger Path"],
+        "business_attribute_name": ["業務属性名", "Business Attribute Name"],
+        "business_attribute_value": ["業務属性値", "Business Attribute Value"],
+        "kind": ["種別", "Type", "Control Type"],
+        "data_type": ["データ型", "Data Type"],
+        "length": ["桁数", "Length"],
+        "required": ["必須", "Required"],
+        "default_value": ["初期値", "Default", "Default Value"],
+        "validation": ["バリデーション", "Validation"],
+        "description": ["備考", "Description", "Notes"]
+      },
+      "stable_key_fields": ["screen_id", "element_id"],
+      "stable_key_normalizers": {
+        "screen_id": "casefold",
+        "element_id": "casefold"
+      }
+    }
+  ],
+  "unmatched_policy": "canonical_text_needs_review"
+}

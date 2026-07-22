@@ -9,22 +9,68 @@ description = "Evidence-bound design change impact analysis and UI validation"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "fastapi>=0.116,<1",
   "jsonschema>=4.23,<5",
+  "openpyxl>=3.1,<4",
+  "pathspec>=0.12,<2",
+  "playwright==1.61.0",
   "psycopg[binary]>=3.2,<4",
+  "python-docx>=1.1,<2",
+  "tree-sitter>=0.25,<0.27",
+  "tree-sitter-java>=0.23.5,<0.24",
+  "uvicorn>=0.35,<1",
 ]
 
 [project.optional-dependencies]
 dev = [
+  "httpx>=0.28,<1",
   "mypy>=1.15,<2",
   "pytest>=8.3,<9",
   "pytest-cov>=6,<7",
   "ruff>=0.11,<1",
   "types-jsonschema>=4.23,<5",
+  "types-openpyxl>=3.1,<4",
 ]
 
 [project.scripts]
 operamind-baseline = "operamind.commands.baseline:main"
+operamind-approval = "operamind.commands.approval_grant:main"
+operamind-start-analysis = "operamind.commands.start_analysis:main"
+operamind-build-code-graph = "operamind.commands.build_code_graph:main"
+operamind-runtime-routes = "operamind.commands.runtime_routes:main"
+operamind-unresolved-evidence = "operamind.commands.unresolved_evidence:main"
+operamind-change-loop = "operamind.commands.change_loop:main"
+operamind-change-cases = "operamind.commands.change_cases:main"
+operamind-change-draft = "operamind.commands.change_draft:main"
+operamind-change-automation = "operamind.commands.change_automation:main"
+operamind-orchestration-task = "operamind.commands.orchestration_tasks:main"
+operamind-orchestration-worker = "operamind.commands.orchestration_worker:main"
+operamind-orchestration-generate-handler = "operamind.commands.orchestration_generate_handler:main"
+operamind-orchestrate = "operamind.commands.orchestrate_change:main"
+operamind-close-change = "operamind.commands.close_change:main"
+operamind-copilot-checkpoint = "operamind.commands.copilot_checkpoint:main"
+operamind-build-edit-packet = "operamind.commands.build_edit_packet:main"
+operamind-build-context = "operamind.commands.build_context:main"
+operamind-build-index = "operamind.commands.build_index:main"
+operamind-recover-index = "operamind.commands.recover_index:main"
+operamind-build-impact = "operamind.commands.build_impact:main"
+operamind-build-relations = "operamind.commands.build_relations:main"
+operamind-diff = "operamind.commands.diff:main"
+operamind-evaluate-rag = "operamind.commands.evaluate_rag:main"
+operamind-finalize-rag = "operamind.commands.finalize_rag:main"
+operamind-ingest = "operamind.commands.ingest:main"
 operamind-migrate = "operamind.commands.migrate:main"
+operamind-mcp = "operamind.commands.mcp_server:main"
+operamind-profile = "operamind.commands.profile:main"
+operamind-review-change = "operamind.commands.review_change:main"
+operamind-record-edit-result = "operamind.commands.record_edit_result:main"
+operamind-recover-command = "operamind.commands.recover_command:main"
+operamind-readiness = "operamind.commands.readiness:main"
+operamind-web = "operamind.commands.web:main"
+operamind-run-approved-command = "operamind.commands.run_approved_command:main"
+operamind-confirm-impact = "operamind.commands.confirm_impact:main"
+operamind-resolve-code-scope = "operamind.commands.resolve_code_scope:main"
+operamind-ui = "operamind.commands.ui_verification:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

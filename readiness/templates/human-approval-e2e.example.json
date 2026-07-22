@@ -1,0 +1,18 @@
+{
+  "evidence_format_version": "v1",
+  "evidence_id": "replace-with-human-review-evidence-id",
+  "gate_id": "human_approval_e2e",
+  "evidence_type": "human_review",
+  "outcome": "passed",
+  "observed_at": "2026-07-17T00:00:00Z",
+  "review_status": "pending",
+  "reviewed_by": [],
+  "subject": {
+    "project_id": "replace-with-project-id",
+    "analysis_case_id": "replace-with-analysis-case-id",
+    "impact_report_id": "replace-with-impact-report-id",
+    "confirmation_id": "replace-with-confirmation-id",
+    "approval_grant_id": "replace-with-approval-grant-id",
+    "decision": "approved"
+  }
+}

@@ -14,6 +14,8 @@
     "framework_profile_refs",
     "scan_roots",
     "scan_status",
+    "framework_markers_found",
+    "diagnostics",
     "files",
     "edges"
   ],
@@ -37,6 +39,36 @@
       "uniqueItems": true
     },
     "scan_status": {"enum": ["complete", "truncated", "failed", "stale"]},
+    "scan_mode": {"enum": ["full", "incremental", "runtime_enriched"]},
+    "base_code_graph_snapshot_id": {"type": "string", "minLength": 1},
+    "changed_paths": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "affected_paths": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "scanned_file_count": {"type": "integer", "minimum": 0},
+    "reused_file_count": {"type": "integer", "minimum": 0},
+    "runtime_evidence_refs": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "framework_markers_found": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
     "files": {
       "type": "array",
       "items": {"$ref": "#/$defs/file"}
@@ -46,6 +78,49 @@
       "items": {"$ref": "#/$defs/edge"}
     }
   },
+  "allOf": [
+    {
+      "if": {"properties": {"scan_status": {"const": "complete"}}},
+      "then": {"properties": {"diagnostics": {"maxItems": 0}}}
+    },
+    {
+      "if": {"properties": {"scan_status": {"enum": ["truncated", "failed"]}}},
+      "then": {"properties": {"diagnostics": {"minItems": 1}}}
+    },
+    {
+      "if": {"required": ["scan_mode"], "properties": {"scan_mode": {"const": "incremental"}}},
+      "then": {
+        "required": [
+          "base_code_graph_snapshot_id",
+          "changed_paths",
+          "affected_paths",
+          "scanned_file_count",
+          "reused_file_count"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": ["scan_mode"],
+        "properties": {"scan_mode": {"const": "runtime_enriched"}}
+      },
+      "then": {
+        "required": [
+          "base_code_graph_snapshot_id",
+          "changed_paths",
+          "affected_paths",
+          "scanned_file_count",
+          "reused_file_count",
+          "runtime_evidence_refs"
+        ],
+        "properties": {
+          "changed_paths": {"maxItems": 0},
+          "affected_paths": {"maxItems": 0},
+          "scanned_file_count": {"const": 0}
+        }
+      }
+    }
+  ],
   "$defs": {
     "source_location": {
       "type": "object",
@@ -73,6 +148,7 @@
         "symbol_type": {"type": "string", "minLength": 1},
         "name": {"type": "string", "minLength": 1},
         "signature": {"type": "string", "minLength": 1},
+        "declared_type": {"type": "string", "minLength": 1},
         "start_line": {"type": "integer", "minimum": 1},
         "end_line": {"type": "integer", "minimum": 1}
       }
@@ -131,6 +207,13 @@
         "confidence": {"enum": ["high", "medium", "low"]},
         "extractor": {"type": "string", "minLength": 1},
         "profile_version": {"type": "string", "minLength": 1},
+        "provenance": {"enum": ["static", "runtime", "static_runtime"]},
+        "evidence_refs": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "static_edge_ref": {"type": "string", "minLength": 1},
         "source_location": {"$ref": "#/$defs/source_location"}
       }
     }

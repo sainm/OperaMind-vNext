@@ -46,6 +46,38 @@
     },
     "unresolved_impact_item_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
     "out_of_scope_files": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
-    "failure_reasons": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
-  }
+    "failure_reasons": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recovery_id", "cause", "actor", "reason", "stale_before"],
+      "properties": {
+        "recovery_id": {"type": "string", "minLength": 1},
+        "cause": {"const": "interrupted_execution"},
+        "actor": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "stale_before": {"type": "string", "format": "date-time"}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"required": ["recovery"]},
+      "then": {
+        "properties": {
+          "status": {"const": "blocked"},
+          "scenario_results": {
+            "items": {
+              "properties": {
+                "status": {"const": "blocked"},
+                "evidence_refs": {"maxItems": 0},
+                "failure_category": {"const": "blocked"}
+              }
+            }
+          },
+          "out_of_scope_files": {"maxItems": 0}
+        }
+      }
+    }
+  ]
 }

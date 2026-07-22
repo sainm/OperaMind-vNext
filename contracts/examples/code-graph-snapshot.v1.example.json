@@ -8,6 +8,13 @@
   "framework_profile_refs": ["spring-web@1.0.0"],
   "scan_roots": ["src/main", "src/test"],
   "scan_status": "complete",
+  "scan_mode": "full",
+  "changed_paths": [],
+  "affected_paths": ["src/main/java/example/ExpenseService.java"],
+  "scanned_file_count": 1,
+  "reused_file_count": 0,
+  "framework_markers_found": ["org.springframework.web.bind.annotation"],
+  "diagnostics": [],
   "files": [
     {
       "file_id": "file-service-001",
@@ -37,6 +44,8 @@
       "confidence": "high",
       "extractor": "java_symbol",
       "profile_version": "spring-web@1.0.0",
+      "provenance": "static",
+      "evidence_refs": [],
       "source_location": {
         "path": "src/main/java/example/ExpenseService.java",
         "start_line": 20,

@@ -1,6 +1,6 @@
 {
   "dataset_id": "operamind-vnext-silver",
-  "dataset_version": "0.1.0-silver",
+  "dataset_version": "0.2.0-silver",
   "dataset_stage": "silver",
   "status": "needs_review",
   "projects": [
@@ -22,6 +22,17 @@
       "expected_code_scope": "cases/visiondemo-expense-status-filter/expected-code-scope.silver.json",
       "expected_ui_scenarios": "cases/visiondemo-expense-status-filter/expected-ui-scenarios.silver.json",
       "review": "cases/visiondemo-expense-status-filter/REVIEW.md"
+    },
+    {
+      "case_id": "visiondemo-expense-employee-cross-screen",
+      "project_id": "visiondemo",
+      "source_manifest": "cases/visiondemo-expense-employee-cross-screen/source-manifest.json",
+      "expected_changes": "cases/visiondemo-expense-employee-cross-screen/expected-changes.silver.json",
+      "expected_rag_context": "cases/visiondemo-expense-employee-cross-screen/expected-rag-context.silver.json",
+      "expected_code_scope": "cases/visiondemo-expense-employee-cross-screen/expected-code-scope.silver.json",
+      "expected_ui_scenarios": "cases/visiondemo-expense-employee-cross-screen/expected-ui-scenarios.silver.json",
+      "test_data_plan": "cases/visiondemo-expense-employee-cross-screen/test-data-plan.silver.json",
+      "review": "cases/visiondemo-expense-employee-cross-screen/REVIEW.md"
     }
   ]
 }

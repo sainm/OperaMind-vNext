@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/copilot-coding-task.schema.json",
+  "title": "CopilotCodingTask",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_type",
+    "schema_version",
+    "coding_task_id",
+    "change_session_id",
+    "change_request_id",
+    "project_id",
+    "analysis_case_id",
+    "repository_id",
+    "edit_packet_id",
+    "approval_grant_id",
+    "base_repository_revision",
+    "execution_mode",
+    "provider_contract",
+    "task_summary",
+    "mcp_server_name",
+    "required_mcp_tools",
+    "created_by",
+    "created_at"
+  ],
+  "properties": {
+    "artifact_type": {"const": "CopilotCodingTask"},
+    "schema_version": {"const": "v1"},
+    "coding_task_id": {"type": "string", "minLength": 1},
+    "change_session_id": {"type": "string", "minLength": 1},
+    "change_request_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "analysis_case_id": {"type": "string", "minLength": 1},
+    "repository_id": {"type": "string", "minLength": 1},
+    "edit_packet_id": {"type": "string", "minLength": 1},
+    "approval_grant_id": {"type": "string", "minLength": 1},
+    "base_repository_revision": {"type": "string", "minLength": 1},
+    "retry_of_coding_task_id": {"type": "string", "minLength": 1},
+    "attempt_number": {"type": "integer", "minimum": 1},
+    "execution_mode": {"const": "copilot_coding_plan"},
+    "provider_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["interface", "route", "provider_id"],
+      "properties": {
+        "interface": {"const": "coding_task_provider_v1"},
+        "route": {"enum": ["local_bridge", "api_provider"]},
+        "provider_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "task_summary": {"type": "string", "minLength": 1, "maxLength": 10000},
+    "mcp_server_name": {"const": "operaMind"},
+    "required_mcp_tools": {
+      "type": "array",
+      "minItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "copilot_get_coding_task",
+          "copilot_run_task_command",
+          "copilot_validate_task_diff",
+          "copilot_record_task_result"
+        ]
+      }
+    },
+    "created_by": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "format": "date-time"}
+  }
+}

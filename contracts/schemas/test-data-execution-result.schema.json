@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/test-data-execution-result.schema.json",
+  "title": "TestDataExecutionResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_type",
+    "schema_version",
+    "execution_result_id",
+    "run_id",
+    "test_data_plan_id",
+    "project_id",
+    "status",
+    "started_at",
+    "completed_at",
+    "flow_results",
+    "evidence",
+    "failure_reasons",
+    "cleanup_status"
+  ],
+  "properties": {
+    "artifact_type": {"const": "TestDataExecutionResult"},
+    "schema_version": {"const": "v1"},
+    "execution_result_id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "test_data_plan_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["passed", "failed", "blocked", "interrupted"]},
+    "started_at": {"type": "string", "format": "date-time"},
+    "completed_at": {"type": "string", "format": "date-time"},
+    "flow_results": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/flowResult"}
+    },
+    "evidence": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/evidence"}
+    },
+    "failure_reasons": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "cleanup_status": {"enum": ["not_required", "passed", "failed", "interrupted"]}
+  },
+  "$defs": {
+    "stepResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["step_id", "sequence", "channel", "phase", "status", "output_variables", "evidence_refs"],
+      "properties": {
+        "step_id": {"type": "string", "minLength": 1},
+        "sequence": {"type": "integer", "minimum": 1},
+        "channel": {"enum": ["fixture", "http", "sql", "ui"]},
+        "phase": {"enum": ["setup", "cleanup"]},
+        "status": {"enum": ["passed", "failed", "blocked", "not_run"]},
+        "output_variables": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}},
+        "evidence_refs": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "failure_reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "flowResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["flow_id", "status", "step_results", "cleanup_results", "deferred_assertion_ids"],
+      "properties": {
+        "flow_id": {"type": "string", "minLength": 1},
+        "status": {"enum": ["passed", "failed", "blocked", "not_run"]},
+        "step_results": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/stepResult"}},
+        "cleanup_results": {"type": "array", "items": {"$ref": "#/$defs/stepResult"}},
+        "deferred_assertion_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "flow_id", "step_id", "phase", "evidence_type", "evidence_ref", "content_digest", "sanitized"],
+      "properties": {
+        "evidence_id": {"type": "string", "minLength": 1},
+        "flow_id": {"type": "string", "minLength": 1},
+        "step_id": {"type": "string", "minLength": 1},
+        "phase": {"enum": ["setup", "cleanup"]},
+        "evidence_type": {"enum": ["fixture", "request", "response", "sql", "screenshot", "assertion", "step_log", "cleanup"]},
+        "evidence_ref": {"type": "string", "minLength": 1},
+        "content_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "sanitized": {"const": true}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "passed"}}},
+      "then": {"properties": {"failure_reasons": {"maxItems": 0}, "cleanup_status": {"enum": ["not_required", "passed"]}}}
+    },
+    {
+      "if": {"properties": {"status": {"enum": ["failed", "blocked", "interrupted"]}}},
+      "then": {"properties": {"failure_reasons": {"minItems": 1}}}
+    }
+  ]
+}

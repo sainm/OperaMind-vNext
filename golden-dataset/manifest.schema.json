@@ -15,13 +15,23 @@
   "properties": {
     "dataset_id": {"type": "string", "minLength": 1},
     "dataset_version": {"type": "string", "minLength": 1},
-    "dataset_stage": {"enum": ["silver", "golden"]},
+    "dataset_stage": {"enum": ["silver", "golden_candidate", "golden"]},
     "status": {"enum": ["needs_review", "approved", "frozen"]},
     "reviewers": {
       "type": "array",
       "items": {"type": "string", "minLength": 1},
       "minItems": 1,
       "uniqueItems": true
+    },
+    "candidate_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["author_type", "author", "human_review_required"],
+      "properties": {
+        "author_type": {"const": "ai_assisted"},
+        "author": {"type": "string", "minLength": 1},
+        "human_review_required": {"const": true}
+      }
     },
     "projects": {
       "type": "array",
@@ -73,6 +83,7 @@
         "expected_rag_context": {"type": "string", "minLength": 1},
         "expected_code_scope": {"type": "string", "minLength": 1},
         "expected_ui_scenarios": {"type": "string", "minLength": 1},
+        "test_data_plan": {"type": "string", "minLength": 1},
         "review": {"type": "string", "minLength": 1}
       }
     }
@@ -80,14 +91,31 @@
   "allOf": [
     {
       "if": {
+        "properties": {"dataset_stage": {"const": "golden_candidate"}},
+        "required": ["dataset_stage"]
+      },
+      "then": {
+        "required": ["candidate_provenance"],
+        "not": {"required": ["reviewers"]},
+        "properties": {
+          "status": {"const": "needs_review"},
+          "projects": {"minItems": 1},
+          "cases": {"minItems": 1}
+        }
+      }
+    },
+    {
+      "if": {
         "properties": {"dataset_stage": {"const": "golden"}},
         "required": ["dataset_stage"]
       },
       "then": {
         "required": ["reviewers"],
+        "not": {"required": ["candidate_provenance"]},
         "properties": {
           "status": {"const": "frozen"},
-          "projects": {"minItems": 2}
+          "projects": {"minItems": 1},
+          "cases": {"minItems": 1, "maxItems": 5}
         }
       }
     }

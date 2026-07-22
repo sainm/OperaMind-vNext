@@ -1,0 +1,21 @@
+{
+  "evidence_format_version": "v1",
+  "evidence_id": "operamind-vnext-golden-dataset-1.0.0-reviewed-20260717T151945Z",
+  "gate_id": "golden_dataset",
+  "evidence_type": "golden_manifest",
+  "outcome": "passed",
+  "observed_at": "2026-07-17T15:19:45Z",
+  "review_status": "reviewed",
+  "reviewed_by": ["conversation:user"],
+  "subject": {
+    "dataset_id": "operamind-vnext-golden",
+    "dataset_version": "1.0.0",
+    "manifest_path": "golden-dataset/manifest.golden.json",
+    "manifest_sha256": "b43aeb23c31b5e911181b8bf4ecddbe4112ae587c6aa06839b7fde8130a80cac",
+    "dataset_digest_algorithm": "operamind-golden-dataset-v1",
+    "dataset_sha256": "d3b6d21d9d16a0a0f56c8a8b2df092ce5bffcf2b378b5d527f80c2aa93134165",
+    "project_count": 1,
+    "case_count": 1,
+    "status": "frozen"
+  }
+}

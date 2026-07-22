@@ -1,0 +1,33 @@
+{
+  "case_id": "visiondemo-expense-status-filter-golden",
+  "dataset_stage": "golden",
+  "review_status": "approved",
+  "reviewed_by": "conversation:user",
+  "reviewed_at": "2026-07-17T15:19:45Z",
+  "steps": [
+    {
+      "step_id": "source_identity",
+      "prompt": "Confirm the document hashes and repository commit identify the reviewed source.",
+      "decision": "approved",
+      "note": "Approved by the user in the current Codex conversation; hashes and repository fields remain deterministically validated."
+    },
+    {
+      "step_id": "expected_change_and_rag",
+      "prompt": "Confirm the expected design change, Canonical context and RAG thresholds.",
+      "decision": "approved",
+      "note": "Approved by the user in the current Codex conversation."
+    },
+    {
+      "step_id": "code_scope",
+      "prompt": "Confirm the candidate code paths, alternatives, tests and forbidden scope.",
+      "decision": "approved",
+      "note": "Approved by the user in the current Codex conversation."
+    },
+    {
+      "step_id": "ui_scenarios",
+      "prompt": "Confirm the three UI scenarios, visible outcomes and required test data.",
+      "decision": "approved",
+      "note": "Approved by the user in the current Codex conversation."
+    }
+  ]
+}

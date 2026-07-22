@@ -1,0 +1,27 @@
+{
+  "body": {
+    "applyDate": "2026-07-19",
+    "createdAt": "2026-07-19T13:09:11.597491",
+    "description": "OperaMind 跨画面 E2E",
+    "employee": {
+      "createdAt": null,
+      "department": null,
+      "email": null,
+      "employeeNo": null,
+      "hireDate": null,
+      "id": 9,
+      "name": null,
+      "nameKana": null,
+      "phone": null,
+      "position": null,
+      "updatedAt": null
+    },
+    "expenseNo": "EXP-OM-5AEC06E1",
+    "id": 5,
+    "status": "差戻し",
+    "totalAmount": 4321,
+    "updatedAt": null
+  },
+  "content_type": "application/json",
+  "status_code": 200
+}

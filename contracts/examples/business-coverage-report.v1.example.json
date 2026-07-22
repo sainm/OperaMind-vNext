@@ -1,0 +1,21 @@
+{
+  "artifact_type": "BusinessCoverageReport",
+  "schema_version": "v1",
+  "coverage_report_id": "coverage-expense-status",
+  "change_request_id": "change-request-expense-status",
+  "test_plan_id": "test-plan-expense-status",
+  "acceptance_criteria_id": "acceptance-expense-status",
+  "project_id": "visiondemo",
+  "business_rule_count": 1,
+  "covered_rule_count": 1,
+  "coverage_percent": 100,
+  "items": [
+    {
+      "business_rule_id": "rule-empty-status-all",
+      "test_case_refs": ["expense-empty-status-api"],
+      "criterion_refs": ["criterion-empty-status-count"],
+      "status": "covered"
+    }
+  ],
+  "status": "passed"
+}

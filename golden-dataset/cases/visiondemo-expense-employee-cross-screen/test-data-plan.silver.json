@@ -1,0 +1,164 @@
+{
+  "artifact_type": "TestDataPlan",
+  "schema_version": "v1",
+  "test_data_plan_id": "test-data-plan-visiondemo-expense-employee-cross-screen-silver",
+  "test_plan_id": "test-plan-visiondemo-expense-employee-cross-screen-silver",
+  "project_id": "visiondemo",
+  "status": "ready",
+  "data_sets": [
+    {
+      "test_data_id": "cross-screen-expense-employee",
+      "test_case_refs": ["expense-create-employee-update-list-verify"],
+      "setup_actions": [
+        {
+          "action_id": "create-isolated-employee",
+          "action_type": "http",
+          "target": "POST /employee/api/save",
+          "payload": {
+            "method": "POST",
+            "path": "/employee/api/save",
+            "json": {
+              "employeeNo": "OM-XSCREEN-001",
+              "name": "連携試験 太郎",
+              "nameKana": "レンケイシケン タロウ",
+              "department": {"id": 7},
+              "position": "テスト担当",
+              "hireDate": "2026-07-18",
+              "email": "cross-screen@example.invalid",
+              "phone": "03-9999-0001"
+            }
+          }
+        }
+      ],
+      "cleanup_policy": "delete_after_run"
+    }
+  ],
+  "generation_flows": [
+    {
+      "flow_id": "expense-create-employee-update-list-flow",
+      "title": "経費作成、社員更新、申請一覧確認を同じデータ系列で実行する",
+      "test_data_refs": ["cross-screen-expense-employee"],
+      "test_case_refs": ["expense-create-employee-update-list-verify"],
+      "steps": [
+        {
+          "step_id": "create-isolated-employee",
+          "sequence": 1,
+          "channel": "http",
+          "business_action": "テスト専用社員を作成する",
+          "target": "POST /employee/api/save",
+          "inputs": {
+            "method": "POST",
+            "path": "/employee/api/save",
+            "json": {
+              "employeeNo": "OM-XSCREEN-001",
+              "name": "連携試験 太郎",
+              "nameKana": "レンケイシケン タロウ",
+              "department": {"id": 7},
+              "position": "テスト担当",
+              "hireDate": "2026-07-18",
+              "email": "cross-screen@example.invalid",
+              "phone": "03-9999-0001"
+            }
+          },
+          "depends_on": [],
+          "output_bindings": [
+            {"variable": "employee_id", "source": "response", "path": "id", "required": true}
+          ],
+          "postconditions": [
+            {"assertion_id": "employee-created", "observe_via": "response", "subject": "employeeNo", "operator": "equals", "expected": "OM-XSCREEN-001"}
+          ]
+        },
+        {
+          "step_id": "create-expense-on-screen",
+          "sequence": 2,
+          "channel": "ui",
+          "business_action": "新規申請画面で経費を登録する",
+          "screen_ref": "expense-create",
+          "ui_action_ref": "create-expense-for-employee",
+          "inputs": {
+            "employee_id": "{{employee_id}}",
+            "apply_date": "2026-07-18",
+            "description": "OperaMind 跨画面連携試験",
+            "account_item": "交通費",
+            "amount": 4321,
+            "detail_description": "画面作成データ"
+          },
+          "depends_on": ["create-isolated-employee"],
+          "output_bindings": [
+            {"variable": "expense_id", "source": "ui", "path": "saved_expense.id", "required": true},
+            {"variable": "expense_no", "source": "ui", "path": "saved_expense.expenseNo", "required": true}
+          ],
+          "postconditions": [
+            {"assertion_id": "expense-screen-save-succeeded", "observe_via": "ui", "subject": "saved_expense.expenseNo", "operator": "equals", "expected": "{{expense_no}}"}
+          ]
+        },
+        {
+          "step_id": "update-employee-on-other-screen",
+          "sequence": 3,
+          "channel": "ui",
+          "business_action": "社員情報管理画面で申請者名を更新する",
+          "screen_ref": "employee-list",
+          "ui_action_ref": "edit-employee-name",
+          "inputs": {"employee_id": "{{employee_id}}", "updated_name": "連携試験 花子"},
+          "depends_on": ["create-expense-on-screen"],
+          "output_bindings": [
+            {"variable": "updated_employee_name", "source": "ui", "path": "employee.name", "required": true}
+          ],
+          "postconditions": [
+            {"assertion_id": "employee-name-updated", "observe_via": "ui", "subject": "employee.name", "operator": "equals", "expected": "連携試験 花子"}
+          ]
+        },
+        {
+          "step_id": "verify-expense-on-list-screen",
+          "sequence": 4,
+          "channel": "ui",
+          "business_action": "申請一覧で作成経費と最新社員名を検索確認する",
+          "screen_ref": "expense-list",
+          "ui_action_ref": "search-created-expense",
+          "inputs": {"expense_id": "{{expense_id}}", "expense_no": "{{expense_no}}", "status": "申請中"},
+          "depends_on": ["update-employee-on-other-screen"],
+          "output_bindings": [],
+          "postconditions": [
+            {"assertion_id": "expense-number-visible", "observe_via": "ui", "subject": "matching_row.expenseNo", "operator": "equals", "expected": "{{expense_no}}"},
+            {"assertion_id": "latest-employee-name-visible", "observe_via": "ui", "subject": "matching_row.employee_name", "operator": "equals", "expected": "{{updated_employee_name}}"},
+            {"assertion_id": "expense-amount-visible", "observe_via": "ui", "subject": "matching_row.totalAmount", "operator": "equals", "expected": 4321}
+          ]
+        }
+      ],
+      "final_assertions": [
+        {"assertion_id": "cross-screen-business-chain-passed", "observe_via": "ui", "subject": "matching_row.employee_name", "operator": "equals", "expected": "{{updated_employee_name}}"},
+        {"assertion_id": "ui-scenario-result", "observe_via": "test", "subject": "expense-create-employee-update-list-verify", "operator": "satisfies", "expected": "passed"}
+      ],
+      "cleanup_policy": "delete_after_run",
+      "cleanup_steps": [
+        {
+          "step_id": "delete-created-expense",
+          "sequence": 1,
+          "channel": "http",
+          "business_action": "作成した経費を削除する",
+          "target": "DELETE /expense/api/{{expense_id}}",
+          "inputs": {"method": "DELETE", "path": "/expense/api/{{expense_id}}"},
+          "depends_on": [],
+          "output_bindings": [],
+          "postconditions": [
+            {"assertion_id": "expense-cleaned", "observe_via": "api", "subject": "status_code", "operator": "equals", "expected": 200}
+          ]
+        },
+        {
+          "step_id": "delete-isolated-employee",
+          "sequence": 2,
+          "channel": "http",
+          "business_action": "テスト専用社員を削除する",
+          "target": "DELETE /employee/api/{{employee_id}}",
+          "inputs": {"method": "DELETE", "path": "/employee/api/{{employee_id}}"},
+          "depends_on": [],
+          "output_bindings": [],
+          "postconditions": [
+            {"assertion_id": "employee-cleaned", "observe_via": "api", "subject": "status_code", "operator": "equals", "expected": 200}
+          ]
+        }
+      ]
+    }
+  ],
+  "blocking_reasons": []
+}

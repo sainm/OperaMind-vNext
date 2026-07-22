@@ -1,0 +1,23 @@
+{
+  "artifact_type": "DocumentChangeProposal",
+  "schema_version": "v1",
+  "proposal_id": "proposal-expense-status",
+  "change_request_id": "change-request-expense-status",
+  "project_id": "visiondemo",
+  "source_document_ref": "immutable://screen-before.xlsx",
+  "target_document_ref": "workspace://screen-after.xlsx",
+  "source_content_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+  "target_content_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+  "status": "applied",
+  "operations": [
+    {
+      "operation_id": "set-status-default",
+      "sheet": "画面項目一覧",
+      "cell": "G5",
+      "field": "default_value",
+      "before": "申請中",
+      "after": "すべて",
+      "source_ref": "screen-before.xlsx#画面項目一覧!G5"
+    }
+  ]
+}

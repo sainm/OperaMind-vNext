@@ -1,0 +1,14 @@
+{
+  "assertions": [
+    {
+      "assertion_id": "diffback-expense-visible",
+      "kind": "visible",
+      "status": "passed"
+    },
+    {
+      "assertion_id": "approved-expense-hidden-in-diffback",
+      "kind": "hidden",
+      "status": "passed"
+    }
+  ]
+}

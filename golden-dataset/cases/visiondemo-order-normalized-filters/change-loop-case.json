@@ -1,0 +1,316 @@
+{
+  "schema_version": "v1",
+  "case_id": "visiondemo-order-normalized-filters",
+  "project_id": "visiondemo",
+  "repository": {
+    "repository_id": "visiondemo-repository",
+    "base_revision": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6",
+    "application_root": "VisionDemo",
+    "scan_roots": ["VisionDemo/src/main", "VisionDemo/src/test"],
+    "code_profile": "profiles/code-framework-profile.example.json"
+  },
+  "document": {
+    "domain": "ui",
+    "fact_type": "screen_element",
+    "convention_profile": "profiles/screen-design-convention-profile.example.json"
+  },
+  "requirements": {
+    "canonical_requirement": "発注検索ではステータスの空白は全件として扱い、仕入先名の前後空白を除去して検索する。",
+    "business_rules": [
+      {
+        "business_rule_id": "rule-blank-order-status-all",
+        "text": "A null, empty or whitespace-only order status is treated as all statuses.",
+        "source_refs": ["02_画面設計書_発注一覧.xlsx#画面項目一覧!I5"]
+      },
+      {
+        "business_rule_id": "rule-trim-order-supplier",
+        "text": "Supplier search removes surrounding whitespace before partial matching.",
+        "source_refs": ["02_画面設計書_発注一覧.xlsx#画面項目一覧!I6"]
+      }
+    ],
+    "required_intents": [
+      {"message": "missing order-filter intent", "any_of": ["発注", "order", "订单"]},
+      {"message": "missing blank-status-to-all behavior", "any_of": ["空白は全件", "空状态全部", "blank status", "empty status"]},
+      {"message": "missing supplier-trim behavior", "any_of": ["前後空白", "首尾空格", "trim supplier", "surrounding whitespace"]}
+    ],
+    "conflicts": [
+      {"message": "blank order status conflicts with the all-records contract", "any_of": ["0件", "ゼロ件", "no records", "不返回"]},
+      {"message": "supplier whitespace conflicts with the trim contract", "any_of": ["空白を保持", "保留空格", "preserve whitespace"]}
+    ]
+  },
+  "analysis": {
+    "policy_version": "configured-change-loop-v1",
+    "summary": "Order search normalizes blank status and surrounding supplier whitespace."
+  },
+  "impact_candidates": [
+    {
+      "path": "VisionDemo/src/main/webapp/WEB-INF/jsp/fragments/order-list.jsp",
+      "symbols": ["order-search-status", "order-search-supplier", "doSearch"],
+      "reason": "Collects both filters and renders order results"
+    },
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/controller/OrderController.java",
+      "symbols": ["search"],
+      "reason": "Receives blank status and supplier values from the page"
+    },
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/service/OrderService.java",
+      "symbols": ["search"],
+      "reason": "Currently forwards both raw filter values"
+    },
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/repository/OrderRepository.java",
+      "symbols": ["search"],
+      "reason": "Treats NULL as no filter and performs supplier partial matching"
+    }
+  ],
+  "edit": {
+    "forbidden_paths": ["VisionDemo/pom.xml"],
+    "replacements": [
+      {
+        "path": "VisionDemo/src/main/java/com/visiondemo/service/OrderService.java",
+        "before": "    public Page<Order> search(String status, String supplier, int page, int size) {\n        return orderRepository.search(status, supplier, PageRequest.of(page, size));\n    }\n",
+        "after": "    public Page<Order> search(String status, String supplier, int page, int size) {\n        String normalizedStatus = status == null || status.isBlank() ? null : status;\n        String normalizedSupplier = supplier == null || supplier.isBlank() ? null : supplier.trim();\n        return orderRepository.search(normalizedStatus, normalizedSupplier, PageRequest.of(page, size));\n    }\n"
+      }
+    ],
+    "allowed_items": [
+      {
+        "path": "VisionDemo/src/main/java/com/visiondemo/service/OrderService.java",
+        "business_summary": "Normalize status and supplier before order repository search.",
+        "implementation_constraints": [
+          "Treat null, empty and blank status as no status filter.",
+          "Trim nonblank supplier input and treat blank supplier as no filter.",
+          "Do not modify order save, cancel or copy behavior."
+        ]
+      }
+    ]
+  },
+  "acceptance_criteria": [
+    {
+      "criterion_id": "criterion-source-order-filter-normalization",
+      "business_rule_refs": ["rule-blank-order-status-all", "rule-trim-order-supplier"],
+      "assertion_type": "source",
+      "subject": "VisionDemo/src/main/java/com/visiondemo/service/OrderService.java#search",
+      "operator": "contains",
+      "expected": ["status.isBlank()", "supplier.trim()"],
+      "test_case_refs": ["test-source-order-filter-normalization"]
+    },
+    {
+      "criterion_id": "criterion-api-blank-order-status",
+      "business_rule_refs": ["rule-blank-order-status-all"],
+      "assertion_type": "api",
+      "subject": "GET /order/api/search?status=.totalElements",
+      "operator": "count_equals",
+      "expected": 5,
+      "test_case_refs": ["test-api-blank-order-status"]
+    },
+    {
+      "criterion_id": "criterion-api-padded-order-supplier",
+      "business_rule_refs": ["rule-trim-order-supplier"],
+      "assertion_type": "api",
+      "subject": "GET /order/api/search?supplier=%20山田%20.totalElements",
+      "operator": "count_equals",
+      "expected": 2,
+      "test_case_refs": ["test-api-padded-order-supplier"]
+    },
+    {
+      "criterion_id": "criterion-ui-order-default-all",
+      "business_rule_refs": ["rule-blank-order-status-all"],
+      "assertion_type": "ui",
+      "subject": "order-default-all",
+      "operator": "contains",
+      "expected": ["ORD-2026-001", "ORD-2026-005"],
+      "test_case_refs": ["order-default-all"]
+    },
+    {
+      "criterion_id": "criterion-ui-padded-supplier",
+      "business_rule_refs": ["rule-trim-order-supplier"],
+      "assertion_type": "ui",
+      "subject": "order-padded-supplier",
+      "operator": "contains",
+      "expected": ["ORD-2026-001", "ORD-2026-005"],
+      "test_case_refs": ["order-padded-supplier"]
+    },
+    {
+      "criterion_id": "criterion-ui-order-reset-all",
+      "business_rule_refs": ["rule-blank-order-status-all", "rule-trim-order-supplier"],
+      "assertion_type": "ui",
+      "subject": "order-reset-all",
+      "operator": "contains",
+      "expected": ["empty filters", "ORD-2026-003"],
+      "test_case_refs": ["order-reset-all"]
+    }
+  ],
+  "test_cases": [
+    {
+      "test_case_id": "test-source-order-filter-normalization",
+      "title": "Source normalizes both order filters",
+      "level": "source",
+      "execution_mode": "deterministic",
+      "business_rule_refs": ["rule-blank-order-status-all", "rule-trim-order-supplier"],
+      "acceptance_criteria_refs": ["criterion-source-order-filter-normalization"],
+      "preconditions": ["Approved base revision is checked out"],
+      "steps": ["Inspect OrderService#search and compile the application"],
+      "expected_results": ["Status and supplier are normalized before repository search"],
+      "test_data_refs": []
+    },
+    {
+      "test_case_id": "test-api-blank-order-status",
+      "title": "Blank order filters return all seeded orders",
+      "level": "api",
+      "execution_mode": "deterministic",
+      "business_rule_refs": ["rule-blank-order-status-all"],
+      "acceptance_criteria_refs": ["criterion-api-blank-order-status"],
+      "preconditions": ["Five default orders are loaded"],
+      "steps": ["GET /order/api/search with blank filters"],
+      "expected_results": ["All five orders are returned"],
+      "test_data_refs": ["test-data-orders"]
+    },
+    {
+      "test_case_id": "test-api-padded-order-supplier",
+      "title": "Padded supplier keyword matches both 山田 orders",
+      "level": "api",
+      "execution_mode": "deterministic",
+      "business_rule_refs": ["rule-trim-order-supplier"],
+      "acceptance_criteria_refs": ["criterion-api-padded-order-supplier"],
+      "preconditions": ["Five default orders are loaded"],
+      "steps": ["GET /order/api/search with supplier=' 山田 '"],
+      "expected_results": ["Two 山田 supplier orders are returned"],
+      "test_data_refs": ["test-data-orders"]
+    },
+    {
+      "test_case_id": "order-default-all",
+      "title": "Order list defaults to all statuses",
+      "level": "ui",
+      "execution_mode": "browser",
+      "business_rule_refs": ["rule-blank-order-status-all"],
+      "acceptance_criteria_refs": ["criterion-ui-order-default-all"],
+      "preconditions": ["Five default orders are loaded"],
+      "steps": ["Open the order list"],
+      "expected_results": ["The first and last seeded order are visible"],
+      "test_data_refs": ["test-data-orders"]
+    },
+    {
+      "test_case_id": "order-padded-supplier",
+      "title": "Padded supplier keyword returns both 山田 orders",
+      "level": "ui",
+      "execution_mode": "browser",
+      "business_rule_refs": ["rule-trim-order-supplier"],
+      "acceptance_criteria_refs": ["criterion-ui-padded-supplier"],
+      "preconditions": ["Five default orders are loaded"],
+      "steps": ["Enter ' 山田 '", "Click 検索"],
+      "expected_results": ["Both 山田 orders are visible and unrelated orders are hidden"],
+      "test_data_refs": ["test-data-orders"]
+    },
+    {
+      "test_case_id": "order-reset-all",
+      "title": "Reset clears both filters and restores all orders",
+      "level": "ui",
+      "execution_mode": "browser",
+      "business_rule_refs": ["rule-blank-order-status-all", "rule-trim-order-supplier"],
+      "acceptance_criteria_refs": ["criterion-ui-order-reset-all"],
+      "preconditions": ["Five default orders are loaded"],
+      "steps": ["Set status and supplier", "Click リセット"],
+      "expected_results": ["Both filters are empty and every order is visible"],
+      "test_data_refs": ["test-data-orders"]
+    }
+  ],
+  "data_sets": [
+    {
+      "test_data_id": "test-data-orders",
+      "test_case_refs": ["test-api-blank-order-status", "test-api-padded-order-supplier", "order-default-all", "order-padded-supplier", "order-reset-all"],
+      "setup_actions": [
+        {
+          "action_id": "load-default-orders",
+          "action_type": "fixture",
+          "target": "VisionDemo/src/main/resources/data.sql",
+          "payload": {"expected_order_count": 5, "expected_yamada_order_count": 2}
+        }
+      ],
+      "cleanup_policy": "isolated_environment"
+    }
+  ],
+  "execution": {
+    "source_tests": [
+      {
+        "test_case_id": "test-source-order-filter-normalization",
+        "path": "VisionDemo/src/main/java/com/visiondemo/service/OrderService.java",
+        "contains": ["status == null || status.isBlank()", "supplier == null || supplier.isBlank()", "supplier.trim()", "orderRepository.search(normalizedStatus, normalizedSupplier"],
+        "success_summary": "Order filter normalization and Maven compile completed."
+      }
+    ],
+    "health_request": {"method": "GET", "path": "/order/api/search", "query": {"status": "", "supplier": "", "page": 0, "size": 10}},
+    "api_tests": [
+      {
+        "test_case_id": "test-api-blank-order-status",
+        "request": {"method": "GET", "path": "/order/api/search", "query": {"status": "", "supplier": "", "page": 0, "size": 10}},
+        "assertions": [
+          {"path": "totalElements", "operator": "equals", "expected": 5},
+          {"path": "content", "operator": "count_equals", "expected": 5}
+        ],
+        "success_summary": "Blank order filters returned all five seeded orders."
+      },
+      {
+        "test_case_id": "test-api-padded-order-supplier",
+        "request": {"method": "GET", "path": "/order/api/search", "query": {"status": "", "supplier": " 山田 ", "page": 0, "size": 10}},
+        "assertions": [
+          {"path": "totalElements", "operator": "equals", "expected": 2},
+          {"path": "content", "operator": "count_equals", "expected": 2}
+        ],
+        "success_summary": "Padded supplier keyword returned both 山田 orders."
+      }
+    ],
+    "setup_requests": [],
+    "browser_phases": [
+      {"phase_id": "order-search", "after_setup": false, "scenario_ids": ["order-default-all", "order-padded-supplier", "order-reset-all"]}
+    ],
+    "browser_scenarios": [
+      {
+        "scenario_id": "order-default-all",
+        "trigger_path": "/popup?fragment=%2Forder%2Fpage",
+        "actions": [],
+        "assertions": [
+          {"assertion_id": "default-status-empty", "kind": "value_equals", "locator": {"strategy": "css", "value": "#order-search-status"}, "expected": {"source": "literal", "value": ""}, "failure_category": "business_assertion"},
+          {"assertion_id": "default-first-visible", "kind": "text_contains", "locator": {"strategy": "css", "value": "#order-table-container"}, "expected": {"source": "literal", "value": "ORD-2026-001"}, "failure_category": "business_assertion"},
+          {"assertion_id": "default-last-visible", "kind": "text_contains", "locator": {"strategy": "css", "value": "#order-table-container"}, "expected": {"source": "literal", "value": "ORD-2026-005"}, "failure_category": "business_assertion"}
+        ],
+        "redaction_locators": []
+      },
+      {
+        "scenario_id": "order-padded-supplier",
+        "trigger_path": "/popup?fragment=%2Forder%2Fpage",
+        "actions": [
+          {"action_id": "fill-padded-supplier", "kind": "fill", "locator": {"strategy": "css", "value": "#order-search-supplier"}, "value": {"source": "literal", "value": " 山田 "}},
+          {"action_id": "search-padded-supplier", "kind": "click", "locator": {"strategy": "css", "value": "#order-search-btn"}}
+        ],
+        "assertions": [
+          {"assertion_id": "padded-first-visible", "kind": "text_contains", "locator": {"strategy": "css", "value": "#order-table-container"}, "expected": {"source": "literal", "value": "ORD-2026-001"}, "failure_category": "business_assertion"},
+          {"assertion_id": "padded-second-visible", "kind": "text_contains", "locator": {"strategy": "css", "value": "#order-table-container"}, "expected": {"source": "literal", "value": "ORD-2026-005"}, "failure_category": "business_assertion"},
+          {"assertion_id": "unrelated-hidden", "kind": "hidden", "locator": {"strategy": "text", "value": "ORD-2026-003"}, "failure_category": "business_assertion"}
+        ],
+        "redaction_locators": []
+      },
+      {
+        "scenario_id": "order-reset-all",
+        "trigger_path": "/popup?fragment=%2Forder%2Fpage",
+        "actions": [
+          {"action_id": "select-status", "kind": "select_option", "locator": {"strategy": "css", "value": "#order-search-status"}, "value": {"source": "literal", "value": "発注済"}},
+          {"action_id": "fill-supplier", "kind": "fill", "locator": {"strategy": "css", "value": "#order-search-supplier"}, "value": {"source": "literal", "value": "山田"}},
+          {"action_id": "search-before-reset", "kind": "click", "locator": {"strategy": "css", "value": "#order-search-btn"}},
+          {"action_id": "reset-order-filters", "kind": "click", "locator": {"strategy": "css", "value": "#order-reset-btn"}}
+        ],
+        "assertions": [
+          {"assertion_id": "reset-status-empty", "kind": "value_equals", "locator": {"strategy": "css", "value": "#order-search-status"}, "expected": {"source": "literal", "value": ""}, "failure_category": "business_assertion"},
+          {"assertion_id": "reset-supplier-empty", "kind": "value_equals", "locator": {"strategy": "css", "value": "#order-search-supplier"}, "expected": {"source": "literal", "value": ""}, "failure_category": "business_assertion"},
+          {"assertion_id": "reset-middle-visible", "kind": "text_contains", "locator": {"strategy": "css", "value": "#order-table-container"}, "expected": {"source": "literal", "value": "ORD-2026-003"}, "failure_category": "business_assertion"}
+        ],
+        "redaction_locators": []
+      }
+    ]
+  },
+  "review": {
+    "review_status": "approved",
+    "reviewed_by": "conversation:user",
+    "reviewed_at": "2026-07-18T00:00:00+08:00"
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "artifact_type": "BusinessDataTemplate",
+  "schema_version": "v1",
+  "template_id": "business-data-template-employee-expense-v1",
+  "template_key": "visiondemo.employee-expense-cross-screen",
+  "template_version": "1.0.0",
+  "project_id": "visiondemo",
+  "name_ja": "社員と経費の画面横断データ",
+  "status": "approved",
+  "parameters": [
+    {
+      "name": "expense_status",
+      "required": true,
+      "description_ja": "登録する経費ステータス"
+    }
+  ],
+  "entities": [
+    {
+      "entity_ref": "employee",
+      "role": "master",
+      "depends_on": [],
+      "producer_step_id": "create-employee",
+      "cleanup_step_id": "delete-employee",
+      "identifier_variables": ["employee_id"]
+    },
+    {
+      "entity_ref": "expense",
+      "role": "detail",
+      "depends_on": ["employee"],
+      "producer_step_id": "create-expense",
+      "cleanup_step_id": "delete-expense",
+      "identifier_variables": ["expense_id"]
+    }
+  ],
+  "preconditions": [
+    {
+      "precondition_id": "status-supported",
+      "description_ja": "経費ステータスが利用できる",
+      "parameter": "expense_status",
+      "operator": "one_of",
+      "expected": ["申請中", "承認済", "差戻し"]
+    }
+  ],
+  "shared_variables": [
+    {
+      "variable": "employee_id",
+      "producer_step_id": "create-employee",
+      "consumer_step_ids": ["create-expense", "delete-employee"]
+    },
+    {
+      "variable": "expense_id",
+      "producer_step_id": "create-expense",
+      "consumer_step_ids": ["delete-expense"]
+    }
+  ],
+  "data_sets": [
+    {
+      "test_data_id": "employee-expense",
+      "setup_actions": [],
+      "cleanup_policy": "delete_after_run"
+    }
+  ],
+  "generation_flow": {
+    "flow_id": "employee-expense",
+    "title": "社員作成後に関連経費を作成する",
+    "steps": [
+      {
+        "step_id": "create-employee",
+        "sequence": 1,
+        "channel": "http",
+        "business_action": "社員を作成する",
+        "entity_ref": "employee",
+        "target": "POST /employee/api/save",
+        "inputs": {},
+        "depends_on": [],
+        "output_bindings": [
+          {"variable": "employee_id", "source": "response", "path": "id", "required": true}
+        ],
+        "postconditions": [
+          {"assertion_id": "employee-created", "observe_via": "response", "subject": "id", "operator": "exists", "expected": true}
+        ]
+      },
+      {
+        "step_id": "create-expense",
+        "sequence": 2,
+        "channel": "http",
+        "business_action": "関連経費を作成する",
+        "entity_ref": "expense",
+        "target": "POST /expense/api/save",
+        "inputs": {"employee_id": "{{employee_id}}", "status": "${expense_status}"},
+        "depends_on": ["create-employee"],
+        "output_bindings": [
+          {"variable": "expense_id", "source": "response", "path": "id", "required": true}
+        ],
+        "postconditions": [
+          {"assertion_id": "expense-created", "observe_via": "response", "subject": "id", "operator": "exists", "expected": true}
+        ]
+      }
+    ],
+    "final_assertions": [
+      {"assertion_id": "business-link-valid", "observe_via": "test", "subject": "employee-expense-link", "operator": "satisfies", "expected": "社員と経費が関連付いている"}
+    ],
+    "cleanup_policy": "delete_after_run",
+    "cleanup_steps": [
+      {
+        "step_id": "delete-expense",
+        "sequence": 1,
+        "channel": "http",
+        "business_action": "関連経費を削除する",
+        "entity_ref": "expense",
+        "target": "DELETE /expense/api/{{expense_id}}",
+        "inputs": {"expense_id": "{{expense_id}}"},
+        "depends_on": [],
+        "output_bindings": [],
+        "postconditions": [
+          {"assertion_id": "expense-deleted", "observe_via": "api", "subject": "status_code", "operator": "equals", "expected": 200}
+        ]
+      },
+      {
+        "step_id": "delete-employee",
+        "sequence": 2,
+        "channel": "http",
+        "business_action": "社員を削除する",
+        "entity_ref": "employee",
+        "target": "DELETE /employee/api/{{employee_id}}",
+        "inputs": {"employee_id": "{{employee_id}}"},
+        "depends_on": ["delete-expense"],
+        "output_bindings": [],
+        "postconditions": [
+          {"assertion_id": "employee-deleted", "observe_via": "api", "subject": "status_code", "operator": "equals", "expected": 200}
+        ]
+      }
+    ]
+  }
+}

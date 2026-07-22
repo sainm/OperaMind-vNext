@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/golden-dataset/expected-rag-context.schema.json",
+  "title": "GoldenRagContextExpectation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "case_id",
+    "dataset_stage",
+    "required_contexts",
+    "expected_query_concepts",
+    "must_exclude_as_primary_context",
+    "canonical_id_status",
+    "review_status"
+  ],
+  "properties": {
+    "case_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "dataset_stage": {"enum": ["silver", "golden_candidate", "golden"]},
+    "required_contexts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["document", "locations", "reason"],
+        "properties": {
+          "document": {"type": "string", "minLength": 1},
+          "locations": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "reason": {"type": "string", "minLength": 1},
+          "canonical_node_ids": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        }
+      }
+    },
+    "expected_query_concepts": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "must_exclude_as_primary_context": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "canonical_id_status": {"enum": ["to_be_filled_after_vnext_ingestion", "frozen"]},
+    "review_status": {"enum": ["needs_review", "approved"]},
+    "query_expectations": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["query_purpose", "required_candidate_refs", "irrelevant_candidate_refs"],
+        "properties": {
+          "query_purpose": {"enum": ["business_behavior", "precise_anchor", "acceptance_criteria"]},
+          "required_candidate_refs": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "irrelevant_candidate_refs": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "uniqueItems": true
+          }
+        }
+      }
+    },
+    "quality_thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min_recall_at_5", "min_recall_at_10", "min_mrr", "max_irrelevant_rate", "max_cross_project_leaks"],
+      "properties": {
+        "min_recall_at_5": {"type": "number", "minimum": 0, "maximum": 1},
+        "min_recall_at_10": {"type": "number", "minimum": 0, "maximum": 1},
+        "min_mrr": {"type": "number", "minimum": 0, "maximum": 1},
+        "max_irrelevant_rate": {"type": "number", "minimum": 0, "maximum": 1},
+        "max_cross_project_leaks": {"type": "integer", "minimum": 0}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"dataset_stage": {"const": "golden"}},
+        "required": ["dataset_stage"]
+      },
+      "then": {
+        "required": ["project_id", "query_expectations", "quality_thresholds"],
+        "properties": {
+          "canonical_id_status": {"const": "frozen"},
+          "review_status": {"const": "approved"},
+          "required_contexts": {
+            "items": {"required": ["canonical_node_ids"]}
+          }
+        }
+      }
+    }
+  ]
+}

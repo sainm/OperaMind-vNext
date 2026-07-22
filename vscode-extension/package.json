@@ -1,0 +1,75 @@
+{
+  "name": "operamind-copilot-bridge",
+  "displayName": "OperaMind Copilot Bridge",
+  "description": "Receive approved OperaMind Coding Plan tasks without handoff files.",
+  "version": "0.3.1",
+  "publisher": "operamind-local",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": ["Other"],
+  "extensionKind": ["ui"],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Only local diagnostics run while untrusted; OperaMind coding task operations remain disabled."
+    }
+  },
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "package:vsix": "npm test && node --check extension.js && node --check bridgeClient.js && node --check diagnostics.js && node -e \"require('node:fs').mkdirSync('dist',{recursive:true})\" && vsce package --allow-missing-repository --out dist/operamind-copilot-bridge.vsix"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "3.9.2"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "operamind.checkForTasks",
+        "title": "OperaMind: 承認済みタスクを確認"
+      },
+      {
+        "command": "operamind.configureBridgeToken",
+        "title": "OperaMind: Bridge Token を安全に登録"
+      },
+      {
+        "command": "operamind.resumeCurrentTask",
+        "title": "OperaMind: 現在のタスクを再開"
+      },
+      {
+        "command": "operamind.cancelCurrentTask",
+        "title": "OperaMind: 現在のタスクを取消"
+      },
+      {
+        "command": "operamind.diagnoseLocalEnvironment",
+        "title": "OperaMind: ローカル環境を診断"
+      }
+    ],
+    "configuration": {
+      "title": "OperaMind Copilot Bridge",
+      "properties": {
+        "operamind.bridge.url": {
+          "type": "string",
+          "default": "http://127.0.0.1:8765",
+          "description": "Loopback-only OperaMind Web URL."
+        },
+        "operamind.bridge.pollSeconds": {
+          "type": "number",
+          "default": 5,
+          "minimum": 2,
+          "maximum": 120,
+          "description": "Seconds between local Bridge task checks."
+        },
+        "operamind.bridge.acceptedBy": {
+          "type": "string",
+          "default": "vscode-user",
+          "description": "Audit label recorded when you confirm a task in VS Code."
+        }
+      }
+    }
+  }
+}

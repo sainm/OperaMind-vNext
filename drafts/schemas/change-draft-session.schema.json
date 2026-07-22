@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/drafts/change-draft-session.schema.json",
+  "title": "ChangeDraftSession",
+  "type": "object",
+  "required": [
+    "schema_version", "draft_id", "case_id", "project_id", "status", "input_mode",
+    "input", "repository", "provider", "artifacts", "confidence", "proposal",
+    "steps", "questions", "answers"
+  ],
+  "properties": {
+    "schema_version": {"const": "v1"},
+    "draft_id": {"type": "string", "minLength": 1},
+    "case_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["awaiting_confirmation", "revision_requested", "ready_for_approval", "finalized"]},
+    "input_mode": {"enum": ["documents", "natural_language"]},
+    "input": {"type": "object"},
+    "repository": {"type": "object"},
+    "provider": {"type": "object"},
+    "artifacts": {"type": "object"},
+    "confidence": {"type": "object"},
+    "proposal": {
+      "type": "object",
+      "required": ["case", "document_operations"],
+      "properties": {
+        "case": {"type": "object"},
+        "document_operations": {"type": "array"}
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "required": ["step", "status"],
+        "properties": {
+          "step": {"enum": ["document_change", "code_scope", "edit_plan", "verification_plan"]},
+          "status": {"enum": ["auto_confirmed", "needs_confirmation", "confirmed", "revision_requested"]}
+        }
+      }
+    },
+    "questions": {"type": "array", "items": {"type": "object"}},
+    "answers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["question_id", "option_id", "decision", "answered_by", "answered_at"],
+        "properties": {
+          "question_id": {"type": "string", "minLength": 1},
+          "option_id": {"type": "string", "minLength": 1},
+          "decision": {"enum": ["accept", "revise"]},
+          "answered_by": {"type": "string", "minLength": 1},
+          "answered_at": {"type": "string", "format": "date-time"}
+        }
+      }
+    },
+    "final_case_root": {"type": "string", "minLength": 1}
+  },
+  "additionalProperties": false
+}

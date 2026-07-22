@@ -14,14 +14,30 @@ from operamind.validation import ValidationIssue, ValidationReport
 
 EXPECTED_ARTIFACT_TYPES = frozenset(
     {
+        "ChangeRequest",
+        "DocumentChangeProposal",
         "DocumentIngestionResult",
         "StructuredChange",
         "ContextPackage",
         "CodeGraphSnapshot",
+        "RuntimeRouteEvidence",
+        "UnresolvedEvidenceReport",
         "ImpactReport",
         "ImpactConfirmation",
         "CopilotEditPacket",
+        "CopilotCodingTask",
+        "ApprovalGrant",
         "UiVerificationResult",
+        "TestPlan",
+        "TestDataPlan",
+        "BusinessDataTemplate",
+        "TestDataExecutionResult",
+        "AcceptanceCriteria",
+        "BusinessCoverageReport",
+        "ChangeClosureResult",
+        "ChangeOrchestrationPlan",
+        "TestCaseChangeProposal",
+        "TestCaseRevision",
     }
 )
 

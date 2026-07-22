@@ -5,9 +5,22 @@
   "analysis_case_id": "analysis-case-001",
   "project_id": "project-001",
   "document_snapshot_id": "document-snapshot-after-001",
+  "ingestion_batch_id": "ingestion-batch-001",
+  "document_ingestion_result_event_id": "ingestion-ready-001",
   "document_profile_refs": ["screen-design@1.0.0"],
   "embedding_profile_ref": "openai-compatible@1.0.0",
+  "search_index_build_id": "search-index-build-001",
+  "document_relation_build_id": "document-relation-build-001",
   "ranking_policy_version": "hybrid-rrf-v1",
+  "query_plan_version": "structured-change-query-v1",
+  "retrieval_policy": {
+    "embedding_profile_version_id": "embedding-profile-version-001",
+    "embedding_profile_binding_key": "embedding:document_search",
+    "vector_top_k": 10,
+    "keyword_top_k": 10,
+    "final_top_k": 10,
+    "adjacent_distance": 1
+  },
   "structured_change_refs": ["change-001"],
   "business_summary": "The expense list must show all records when status is empty.",
   "context_items": [
@@ -31,6 +44,7 @@
   "retrieval_trace": [
     {
       "query_id": "query-001",
+      "query_purpose": "business_behavior",
       "retrieval_mode": "hybrid",
       "candidate_refs": ["section-001", "section-002"]
     }

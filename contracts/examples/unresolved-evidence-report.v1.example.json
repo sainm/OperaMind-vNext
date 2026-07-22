@@ -1,0 +1,39 @@
+{
+  "artifact_type": "UnresolvedEvidenceReport",
+  "schema_version": "v1",
+  "unresolved_evidence_report_id": "unresolved-report-example-1",
+  "project_id": "project-example",
+  "repository_id": "repository-example",
+  "repository_revision": "abc123",
+  "code_graph_snapshot_id": "code-graph-example-1",
+  "report_status": "needs_evidence",
+  "trigger": {
+    "trigger_type": "static_graph",
+    "evidence_refs": ["code-graph-example-1"]
+  },
+  "open_count": 1,
+  "closed_count": 0,
+  "items": [
+    {
+      "item_id": "unresolved-item-example-1",
+      "finding_key": "finding-example-1",
+      "edge_ref": "edge-example-1",
+      "status": "open",
+      "category": "endpoint_route",
+      "reason": "runtime_observation_missing",
+      "edge_type": "calls",
+      "source_ref": "symbol-ui-route-example",
+      "unresolved_target_ref": "unresolved:endpoint:GET:dynamic:request.url",
+      "source_location": {
+        "path": "src/web/customer.js",
+        "start_line": 18,
+        "end_line": 18
+      },
+      "candidate_targets": [],
+      "missing_evidence": ["runtime_route_observation"],
+      "resolution_suggestions": ["collect_runtime_route"],
+      "provenance": "static",
+      "evidence_refs": []
+    }
+  ]
+}

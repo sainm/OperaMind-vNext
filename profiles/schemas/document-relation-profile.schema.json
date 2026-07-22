@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/profiles/document-relation-profile.schema.json",
+  "title": "DocumentRelationProfile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile_type", "profile_id", "profile_version", "rules", "unresolved_policy"],
+  "properties": {
+    "profile_type": {"const": "DocumentRelationProfile"},
+    "profile_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "profile_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "rules": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/rule"},
+      "minItems": 1
+    },
+    "unresolved_policy": {"const": "record_and_continue"}
+  },
+  "$defs": {
+    "non_empty_unique_strings": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "canonical_fields": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule_id",
+        "relation_label",
+        "source_document_types",
+        "source_fact_types",
+        "source_fields",
+        "target_document_types",
+        "target_fact_types",
+        "target_fields",
+        "value_normalizers",
+        "ambiguity_policy"
+      ],
+      "properties": {
+        "rule_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+        "relation_label": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "source_document_types": {"$ref": "#/$defs/non_empty_unique_strings"},
+        "source_fact_types": {"$ref": "#/$defs/non_empty_unique_strings"},
+        "source_fields": {"$ref": "#/$defs/canonical_fields"},
+        "target_document_types": {"$ref": "#/$defs/non_empty_unique_strings"},
+        "target_fact_types": {"$ref": "#/$defs/non_empty_unique_strings"},
+        "target_fields": {"$ref": "#/$defs/canonical_fields"},
+        "value_normalizers": {
+          "type": "array",
+          "items": {"enum": ["nfkc_casefold", "preserve", "url_path"]},
+          "minItems": 1
+        },
+        "ambiguity_policy": {"const": "require_unique_target"}
+      }
+    }
+  }
+}

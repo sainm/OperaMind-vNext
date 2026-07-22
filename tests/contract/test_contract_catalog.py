@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,28 @@ def test_unknown_artifact_type_is_rejected() -> None:
     assert captured.value.report.issues[0].code == "artifact.unknown_type"
 
 
+def test_ready_ingestion_artifact_requires_exact_build_and_profile_identity() -> None:
+    catalog = ContractCatalog.load(ROOT / "contracts")
+    artifact = json.loads(
+        (ROOT / "contracts/examples/document-ingestion-result.v1.example.json").read_text()
+    )
+
+    for field in (
+        "search_index_build_id",
+        "embedding_profile_version_id",
+        "embedding_profile_binding_key",
+        "embedding_profile_ref",
+    ):
+        incomplete = dict(artifact)
+        incomplete.pop(field)
+        with pytest.raises(ArtifactValidationError):
+            catalog.validate_artifact(incomplete)
+
+    artifact["embedding_index_status"] = "stale"
+    with pytest.raises(ArtifactValidationError):
+        catalog.validate_artifact(artifact)
+
+
 def test_code_graph_edge_requires_extraction_provenance() -> None:
     catalog = ContractCatalog.load(ROOT / "contracts")
     artifact = {
@@ -49,6 +72,8 @@ def test_code_graph_edge_requires_extraction_provenance() -> None:
         "framework_profile_refs": ["spring-web@1"],
         "scan_roots": ["src"],
         "scan_status": "complete",
+        "framework_markers_found": ["org.springframework"],
+        "diagnostics": [],
         "files": [],
         "edges": [
             {
@@ -69,3 +94,45 @@ def test_code_graph_edge_requires_extraction_provenance() -> None:
     assert any("extractor" in message for message in messages)
     assert any("profile_version" in message for message in messages)
     assert any("source_location" in message for message in messages)
+
+
+def test_ui_recovery_artifact_must_be_a_blocked_evidence_free_closure() -> None:
+    catalog = ContractCatalog.load(ROOT / "contracts")
+    artifact = json.loads(
+        (ROOT / "contracts/examples/ui-verification-result.v1.example.json").read_text()
+    )
+    artifact["status"] = "blocked"
+    artifact["scenario_results"][0].update(
+        {
+            "status": "blocked",
+            "evidence_refs": [],
+            "failure_category": "blocked",
+        }
+    )
+    artifact["recovery"] = {
+        "recovery_id": artifact["verification_result_id"],
+        "cause": "interrupted_execution",
+        "actor": "operator@example.invalid",
+        "reason": "browser worker process was interrupted",
+        "stale_before": "2026-07-16T12:00:00Z",
+    }
+
+    catalog.validate_artifact(artifact)
+
+    artifact["status"] = "passed"
+    with pytest.raises(ArtifactValidationError):
+        catalog.validate_artifact(artifact)
+
+
+def test_copilot_coding_task_contract_reserves_future_api_provider_route() -> None:
+    catalog = ContractCatalog.load(ROOT / "contracts")
+    artifact = json.loads(
+        (ROOT / "contracts/examples/copilot-coding-task.v1.example.json").read_text()
+    )
+    artifact["provider_contract"] = {
+        "interface": "coding_task_provider_v1",
+        "route": "api_provider",
+        "provider_id": "production-coding-provider",
+    }
+
+    catalog.validate_artifact(artifact)

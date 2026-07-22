@@ -1,0 +1,331 @@
+{
+  "schema_version": "v1",
+  "case_id": "visiondemo-expense-status-filter-golden",
+  "project_id": "visiondemo",
+  "repository": {
+    "repository_id": "visiondemo-repository",
+    "base_revision": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6",
+    "application_root": "VisionDemo",
+    "scan_roots": ["VisionDemo/src/main", "VisionDemo/src/test"],
+    "code_profile": "profiles/code-framework-profile.example.json"
+  },
+  "document": {
+    "domain": "ui",
+    "fact_type": "screen_element",
+    "convention_profile": "profiles/screen-design-convention-profile.example.json"
+  },
+  "requirements": {
+    "canonical_requirement": "経費精算のステータス初期値をすべてにし、差戻しを選択可能にする。ステータスが空の場合は全件を返す。",
+    "business_rules": [
+      {
+        "business_rule_id": "rule-status-default-all",
+        "text": "Status filter defaults to すべて.",
+        "source_refs": ["02_画面設計書_経費精算申請一覧.xlsx#画面項目一覧!G5"]
+      },
+      {
+        "business_rule_id": "rule-returned-selectable",
+        "text": "Returned is available as a status-filter option.",
+        "source_refs": ["02_画面設計書_経費精算申請一覧.xlsx#画面項目一覧!I5"]
+      },
+      {
+        "business_rule_id": "rule-empty-status-all",
+        "text": "A null, blank or empty status query returns all expense records",
+        "source_refs": ["03_プログラム設計書_経費精算申請.xlsx#メソッド一覧!A5:F5"]
+      }
+    ],
+    "required_intents": [
+      {"message": "missing default-All intent", "any_of": ["すべて", "all", "全部", "全件"]},
+      {"message": "missing Returned-option intent", "any_of": ["差戻し", "returned", "退回"]},
+      {"message": "missing blank-status condition", "any_of": ["空", "blank", "empty"]},
+      {
+        "message": "missing explicit blank-status-to-all behavior",
+        "any_of": ["空", "blank", "empty"],
+        "patterns": ["(?:空|blank|empty).{0,40}(?:全件|全部|すべて|all)"]
+      }
+    ],
+    "conflicts": [
+      {
+        "message": "blank-status behavior conflicts with the Golden all-records contract",
+        "any_of": ["0件", "ゼロ件", "no records", "不返回", "返さない"]
+      }
+    ]
+  },
+  "analysis": {
+    "policy_version": "configured-change-loop-v1",
+    "summary": "Expense status filter and blank-status search behavior change."
+  },
+  "impact_candidates": [
+    {
+      "path": "VisionDemo/src/main/webapp/WEB-INF/jsp/fragments/expense-list.jsp",
+      "symbols": ["expense-search-status", "doSearch"],
+      "reason": "Direct UI anchor; base commit already contains All and Returned options"
+    },
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/controller/ExpenseController.java",
+      "symbols": ["search"],
+      "reason": "Receives the empty status value from the page"
+    },
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/service/ExpenseService.java",
+      "symbols": ["search"],
+      "reason": "Currently forwards empty status without normalizing it"
+    },
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/repository/ExpenseRepository.java",
+      "symbols": ["search"],
+      "reason": "The query treats NULL as all records but not the empty string"
+    }
+  ],
+  "edit": {
+    "forbidden_paths": ["VisionDemo/pom.xml"],
+    "replacements": [
+      {
+        "path": "VisionDemo/src/main/java/com/visiondemo/service/ExpenseService.java",
+        "before": "    public Page<Expense> search(String status, int page, int size) {\n        return expenseRepository.search(status, PageRequest.of(page, size));\n    }\n",
+        "after": "    public Page<Expense> search(String status, int page, int size) {\n        String normalizedStatus = status == null || status.isBlank() ? null : status;\n        return expenseRepository.search(normalizedStatus, PageRequest.of(page, size));\n    }\n"
+      }
+    ],
+    "allowed_items": [
+      {
+        "path": "VisionDemo/src/main/java/com/visiondemo/service/ExpenseService.java",
+        "business_summary": "Normalize blank expense status to the all-records contract.",
+        "implementation_constraints": [
+          "Treat null, empty and blank status as no status filter.",
+          "Do not modify submit or amount behavior."
+        ]
+      }
+    ]
+  },
+  "acceptance_criteria": [
+    {
+      "criterion_id": "criterion-source-blank-normalization",
+      "business_rule_refs": ["rule-empty-status-all"],
+      "assertion_type": "source",
+      "subject": "VisionDemo/src/main/java/com/visiondemo/service/ExpenseService.java#search",
+      "operator": "contains",
+      "expected": "status == null || status.isBlank()",
+      "test_case_refs": ["test-source-blank-normalization"]
+    },
+    {
+      "criterion_id": "criterion-api-empty-status-count",
+      "business_rule_refs": ["rule-empty-status-all"],
+      "assertion_type": "api",
+      "subject": "GET /expense/api/search?status=.totalElements",
+      "operator": "count_equals",
+      "expected": 4,
+      "test_case_refs": ["test-api-empty-status"]
+    },
+    {
+      "criterion_id": "criterion-ui-expense-filter-default-all",
+      "business_rule_refs": ["rule-status-default-all", "rule-empty-status-all"],
+      "assertion_type": "ui",
+      "subject": "expense-filter-default-all",
+      "operator": "contains",
+      "expected": ["すべて", "all four seeded expenses"],
+      "test_case_refs": ["expense-filter-default-all"]
+    },
+    {
+      "criterion_id": "criterion-ui-expense-filter-returned-option",
+      "business_rule_refs": ["rule-returned-selectable"],
+      "assertion_type": "ui",
+      "subject": "expense-filter-returned-option",
+      "operator": "contains",
+      "expected": ["差戻し", "EXP-OM-RETURNED"],
+      "test_case_refs": ["expense-filter-returned-option"]
+    },
+    {
+      "criterion_id": "criterion-ui-expense-filter-reset-all",
+      "business_rule_refs": ["rule-status-default-all", "rule-empty-status-all"],
+      "assertion_type": "ui",
+      "subject": "expense-filter-reset-all",
+      "operator": "contains",
+      "expected": ["すべて", "all expenses"],
+      "test_case_refs": ["expense-filter-reset-all"]
+    }
+  ],
+  "test_cases": [
+    {
+      "test_case_id": "test-source-blank-normalization",
+      "title": "Source normalizes blank status",
+      "level": "source",
+      "execution_mode": "deterministic",
+      "business_rule_refs": ["rule-empty-status-all"],
+      "acceptance_criteria_refs": ["criterion-source-blank-normalization"],
+      "preconditions": ["Edit Packet base revision matches the workspace"],
+      "steps": ["Inspect the approved ExpenseService#search implementation"],
+      "expected_results": ["Blank status is normalized before repository search"],
+      "test_data_refs": []
+    },
+    {
+      "test_case_id": "test-api-empty-status",
+      "title": "Blank status returns every seeded expense",
+      "level": "api",
+      "execution_mode": "deterministic",
+      "business_rule_refs": ["rule-empty-status-all"],
+      "acceptance_criteria_refs": ["criterion-api-empty-status-count"],
+      "preconditions": ["Default seed data is loaded"],
+      "steps": ["GET /expense/api/search?status="],
+      "expected_results": ["totalElements equals four"],
+      "test_data_refs": ["test-data-default-seed"]
+    },
+    {
+      "test_case_id": "expense-filter-default-all",
+      "title": "Expense list defaults to All and displays every seeded expense",
+      "level": "ui",
+      "execution_mode": "browser",
+      "business_rule_refs": ["rule-status-default-all", "rule-empty-status-all"],
+      "acceptance_criteria_refs": ["criterion-ui-expense-filter-default-all"],
+      "preconditions": ["Default seed data is loaded"],
+      "steps": ["Open the expense list page", "Observe the default results"],
+      "expected_results": ["All four seeded expenses are displayed"],
+      "test_data_refs": ["test-data-default-seed"]
+    },
+    {
+      "test_case_id": "expense-filter-returned-option",
+      "title": "Returned is available and filters returned expenses",
+      "level": "ui",
+      "execution_mode": "browser",
+      "business_rule_refs": ["rule-returned-selectable"],
+      "acceptance_criteria_refs": ["criterion-ui-expense-filter-returned-option"],
+      "preconditions": ["A dedicated returned expense exists"],
+      "steps": ["Select 差戻し", "Click 検索"],
+      "expected_results": ["Only the returned expense is displayed"],
+      "test_data_refs": ["test-data-returned-expense"]
+    },
+    {
+      "test_case_id": "expense-filter-reset-all",
+      "title": "Reset restores All and reloads every expense",
+      "level": "ui",
+      "execution_mode": "browser",
+      "business_rule_refs": ["rule-status-default-all", "rule-empty-status-all"],
+      "acceptance_criteria_refs": ["criterion-ui-expense-filter-reset-all"],
+      "preconditions": ["A non-empty status filter is selected"],
+      "steps": ["Click リセット", "Wait for results"],
+      "expected_results": ["All five expenses are displayed"],
+      "test_data_refs": ["test-data-default-seed", "test-data-returned-expense"]
+    }
+  ],
+  "data_sets": [
+    {
+      "test_data_id": "test-data-default-seed",
+      "test_case_refs": ["test-api-empty-status", "expense-filter-default-all", "expense-filter-reset-all"],
+      "setup_actions": [
+        {
+          "action_id": "load-default-seed",
+          "action_type": "fixture",
+          "target": "VisionDemo/src/main/resources/data.sql",
+          "payload": {"expected_expense_count": 4}
+        }
+      ],
+      "cleanup_policy": "isolated_environment"
+    },
+    {
+      "test_data_id": "test-data-returned-expense",
+      "test_case_refs": ["expense-filter-returned-option", "expense-filter-reset-all"],
+      "setup_actions": [
+        {
+          "action_id": "create-returned-expense",
+          "action_type": "http",
+          "target": "POST /expense/api/save",
+          "payload": {"expenseNo": "EXP-OM-RETURNED", "status": "差戻し"}
+        }
+      ],
+      "cleanup_policy": "isolated_environment"
+    }
+  ],
+  "execution": {
+    "source_tests": [
+      {
+        "test_case_id": "test-source-blank-normalization",
+        "path": "VisionDemo/src/main/java/com/visiondemo/service/ExpenseService.java",
+        "contains": ["status == null || status.isBlank()", "expenseRepository.search(normalizedStatus"],
+        "success_summary": "Approved source replacement and Maven compile completed."
+      }
+    ],
+    "health_request": {"method": "GET", "path": "/expense/api/search", "query": {"status": "", "page": 0, "size": 10}},
+    "api_tests": [
+      {
+        "test_case_id": "test-api-empty-status",
+        "request": {"method": "GET", "path": "/expense/api/search", "query": {"status": "", "page": 0, "size": 10}},
+        "assertions": [
+          {"path": "totalElements", "operator": "equals", "expected": 4},
+          {"path": "content", "operator": "count_equals", "expected": 4}
+        ],
+        "success_summary": "Blank status returned all four seeded expenses."
+      }
+    ],
+    "setup_requests": [
+      {
+        "setup_id": "returned-expense",
+        "request": {
+          "method": "POST",
+          "path": "/expense/api/save",
+          "json": {
+            "expense": {
+              "expenseNo": "EXP-OM-RETURNED",
+              "employee": {"id": 1},
+              "totalAmount": 1000,
+              "status": "差戻し",
+              "applyDate": "2026-07-17",
+              "description": "OperaMind UI verification data"
+            },
+            "details": []
+          }
+        },
+        "assertions": [{"path": "expenseNo", "operator": "equals", "expected": "EXP-OM-RETURNED"}]
+      }
+    ],
+    "browser_phases": [
+      {"phase_id": "default", "after_setup": false, "scenario_ids": ["expense-filter-default-all"]},
+      {"phase_id": "returned-and-reset", "after_setup": true, "scenario_ids": ["expense-filter-returned-option", "expense-filter-reset-all"]}
+    ],
+    "browser_scenarios": [
+      {
+        "scenario_id": "expense-filter-default-all",
+        "trigger_path": "/popup?fragment=%2Fexpense%2Fpage%3Fview%3Dlist",
+        "actions": [],
+        "assertions": [
+          {"assertion_id": "default-value", "kind": "value_equals", "locator": {"strategy": "css", "value": "#expense-search-status"}, "expected": {"source": "literal", "value": ""}, "failure_category": "business_assertion"},
+          {"assertion_id": "visible-1", "kind": "text_contains", "locator": {"strategy": "css", "value": "#expense-table-container"}, "expected": {"source": "literal", "value": "EXP-2026-001"}, "failure_category": "business_assertion"},
+          {"assertion_id": "visible-2", "kind": "text_contains", "locator": {"strategy": "css", "value": "#expense-table-container"}, "expected": {"source": "literal", "value": "EXP-2026-002"}, "failure_category": "business_assertion"},
+          {"assertion_id": "visible-3", "kind": "text_contains", "locator": {"strategy": "css", "value": "#expense-table-container"}, "expected": {"source": "literal", "value": "EXP-2026-003"}, "failure_category": "business_assertion"},
+          {"assertion_id": "visible-4", "kind": "text_contains", "locator": {"strategy": "css", "value": "#expense-table-container"}, "expected": {"source": "literal", "value": "EXP-2026-004"}, "failure_category": "business_assertion"}
+        ],
+        "redaction_locators": []
+      },
+      {
+        "scenario_id": "expense-filter-returned-option",
+        "trigger_path": "/popup?fragment=%2Fexpense%2Fpage%3Fview%3Dlist",
+        "actions": [
+          {"action_id": "select-returned", "kind": "select_option", "locator": {"strategy": "css", "value": "#expense-search-status"}, "value": {"source": "literal", "value": "差戻し"}},
+          {"action_id": "search-returned", "kind": "click", "locator": {"strategy": "css", "value": "#expense-search-btn"}}
+        ],
+        "assertions": [
+          {"assertion_id": "returned-value", "kind": "value_equals", "locator": {"strategy": "css", "value": "#expense-search-status"}, "expected": {"source": "literal", "value": "差戻し"}, "failure_category": "business_assertion"},
+          {"assertion_id": "returned-visible", "kind": "text_contains", "locator": {"strategy": "css", "value": "#expense-table-container"}, "expected": {"source": "literal", "value": "EXP-OM-RETURNED"}, "failure_category": "business_assertion"}
+        ],
+        "redaction_locators": []
+      },
+      {
+        "scenario_id": "expense-filter-reset-all",
+        "trigger_path": "/popup?fragment=%2Fexpense%2Fpage%3Fview%3Dlist",
+        "actions": [
+          {"action_id": "select-before-reset", "kind": "select_option", "locator": {"strategy": "css", "value": "#expense-search-status"}, "value": {"source": "literal", "value": "差戻し"}},
+          {"action_id": "search-before-reset", "kind": "click", "locator": {"strategy": "css", "value": "#expense-search-btn"}},
+          {"action_id": "reset-status", "kind": "click", "locator": {"strategy": "css", "value": "#expense-reset-btn"}}
+        ],
+        "assertions": [
+          {"assertion_id": "reset-value", "kind": "value_equals", "locator": {"strategy": "css", "value": "#expense-search-status"}, "expected": {"source": "literal", "value": ""}, "failure_category": "business_assertion"},
+          {"assertion_id": "reset-visible-seed", "kind": "text_contains", "locator": {"strategy": "css", "value": "#expense-table-container"}, "expected": {"source": "literal", "value": "EXP-2026-001"}, "failure_category": "business_assertion"},
+          {"assertion_id": "reset-visible-returned", "kind": "text_contains", "locator": {"strategy": "css", "value": "#expense-table-container"}, "expected": {"source": "literal", "value": "EXP-OM-RETURNED"}, "failure_category": "business_assertion"}
+        ],
+        "redaction_locators": []
+      }
+    ]
+  },
+  "review": {
+    "review_status": "approved",
+    "reviewed_by": "conversation:user",
+    "reviewed_at": "2026-07-17T15:19:45Z"
+  }
+}

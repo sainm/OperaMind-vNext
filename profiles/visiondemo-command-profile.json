@@ -1,0 +1,47 @@
+{
+  "profile_type": "CommandExecutionProfile",
+  "profile_id": "visiondemo-maven",
+  "profile_version": "1.1.0",
+  "templates": [
+    {
+      "command_ref": "visiondemo-test",
+      "argv": ["VisionDemo/mvnw", "-q", "test"],
+      "working_directory": "VisionDemo",
+      "timeout_seconds": 900,
+      "expected_exit_codes": [0],
+      "environment_keys": ["PATH", "HOME", "JAVA_HOME", "LANG"],
+      "output_limit_bytes": 524288,
+      "failure_policy": "record_and_block"
+    },
+    {
+      "command_ref": "visiondemo-package",
+      "argv": ["VisionDemo/mvnw", "-q", "-DskipTests", "package"],
+      "working_directory": "VisionDemo",
+      "timeout_seconds": 900,
+      "expected_exit_codes": [0],
+      "environment_keys": ["PATH", "HOME", "JAVA_HOME", "LANG"],
+      "output_limit_bytes": 524288,
+      "failure_policy": "record_and_block"
+    },
+    {
+      "command_ref": "visiondemo-expense-status-api",
+      "argv": [
+        "bash",
+        "src/test/scripts/expense-status-search.sh"
+      ],
+      "working_directory": "VisionDemo",
+      "timeout_seconds": 900,
+      "expected_exit_codes": [
+        0
+      ],
+      "environment_keys": [
+        "PATH",
+        "HOME",
+        "JAVA_HOME",
+        "LANG"
+      ],
+      "output_limit_bytes": 524288,
+      "failure_policy": "record_and_block"
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "case_id": "visiondemo-expense-status-filter-golden",
+  "project_id": "visiondemo",
+  "dataset_stage": "golden",
+  "ui_impact_status": "impacted",
+  "scenarios": [
+    {
+      "scenario_id": "expense-filter-default-all",
+      "title": "Expense list defaults to All and displays every seeded expense",
+      "preconditions": [
+        "VisionDemo is deployed from the validated repository revision",
+        "Default seed data is loaded"
+      ],
+      "steps": [
+        "Open the expense list page",
+        "Observe the status filter without changing it",
+        "Wait for the initial search to finish"
+      ],
+      "expected_visible_results": [
+        "The status filter displays すべて",
+        "The list displays all four seeded expenses"
+      ],
+      "evidence": [
+        "status filter screenshot",
+        "expense table screenshot",
+        "GET /expense/api/search response summary"
+      ]
+    },
+    {
+      "scenario_id": "expense-filter-returned-option",
+      "title": "Returned is available and filters returned expenses",
+      "preconditions": ["A dedicated test expense with status 差戻し exists"],
+      "steps": [
+        "Open the expense list page",
+        "Select 差戻し in the status filter",
+        "Click 検索"
+      ],
+      "expected_visible_results": [
+        "差戻し is present as a selectable option",
+        "Only returned expenses are displayed"
+      ],
+      "evidence": [
+        "selected filter screenshot",
+        "filtered table screenshot",
+        "request parameter status=差戻し"
+      ]
+    },
+    {
+      "scenario_id": "expense-filter-reset-all",
+      "title": "Reset restores All and reloads every expense",
+      "preconditions": ["A non-empty status filter is selected"],
+      "steps": ["Click リセット", "Wait for the search to finish"],
+      "expected_visible_results": [
+        "The status filter displays すべて",
+        "All seeded expenses are displayed"
+      ],
+      "evidence": ["reset state screenshot", "expense table screenshot"]
+    }
+  ],
+  "expected_current_base_outcome": {
+    "expense-filter-default-all": "failed_business_assertion_or_empty_result",
+    "expense-filter-returned-option": "blocked_without_returned_test_data",
+    "expense-filter-reset-all": "failed_business_assertion_or_empty_result"
+  },
+  "review_status": "approved"
+}

@@ -1,4 +1,5 @@
 {
+  "profile_type": "DocumentConventionProfile",
   "profile_id": "api-design-conventions-example",
   "profile_version": "1.0.0",
   "document_type": "api_design",
@@ -12,11 +13,27 @@
         {"type": "filename_token", "values": ["API", "IF"], "weight": 0.2}
       ],
       "field_aliases": {
-        "api.path": ["URI", "Path", "Endpoint"],
-        "api.method": ["HTTPメソッド", "Method", "Operation"],
-        "api.summary": ["処理概要", "Summary", "Description"]
+        "path": ["URI", "Path", "Endpoint"],
+        "method": ["HTTPメソッド", "Method", "Operation"],
+        "summary": ["処理概要", "Summary", "Description"]
       },
-      "stable_key_fields": ["api.method", "api.path"]
+      "stable_key_fields": ["method", "path"],
+      "stable_key_normalizers": {"method": "uppercase", "path": "preserve"}
+    },
+    {
+      "variant_id": "api-list-url",
+      "signals": [
+        {"type": "sheet_name", "values": ["API一覧", "API List"], "weight": 0.35},
+        {"type": "headers", "values": ["URL", "HTTPメソッド"], "weight": 0.45},
+        {"type": "filename_token", "values": ["API", "IF"], "weight": 0.2}
+      ],
+      "field_aliases": {
+        "path": ["URL", "Path", "Endpoint"],
+        "method": ["HTTPメソッド", "Method", "Operation"],
+        "summary": ["API名", "処理概要", "Summary", "Description"]
+      },
+      "stable_key_fields": ["method", "path"],
+      "stable_key_normalizers": {"method": "uppercase", "path": "preserve"}
     },
     {
       "variant_id": "interface-spec",
@@ -25,11 +42,12 @@
         {"type": "headers", "values": ["Path", "Operation", "Response"], "weight": 0.6}
       ],
       "field_aliases": {
-        "api.path": ["Path"],
-        "api.method": ["Operation"],
-        "api.response": ["Response", "戻り値"]
+        "path": ["Path"],
+        "method": ["Operation"],
+        "response": ["Response", "戻り値"]
       },
-      "stable_key_fields": ["api.method", "api.path"]
+      "stable_key_fields": ["method", "path"],
+      "stable_key_normalizers": {"method": "uppercase", "path": "preserve"}
     }
   ],
   "unmatched_policy": "canonical_text_needs_review"

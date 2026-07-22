@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/test-case-revision.schema.json",
+  "title": "TestCaseRevision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_type",
+    "schema_version",
+    "revision_id",
+    "proposal_id",
+    "change_request_id",
+    "project_id",
+    "source_orchestration_id",
+    "target_orchestration_id",
+    "source_test_plan_id",
+    "target_test_plan_id",
+    "selections",
+    "applied_operations",
+    "stale_run_ids",
+    "stale_artifact_refs",
+    "stale_evidence_refs",
+    "stale_closure_result_ids",
+    "applied_by"
+  ],
+  "properties": {
+    "artifact_type": {"const": "TestCaseRevision"},
+    "schema_version": {"const": "v1"},
+    "revision_kind": {"enum": ["modification", "undo"]},
+    "undo_of_revision_id": {"$ref": "#/$defs/nonBlank"},
+    "revision_id": {"$ref": "#/$defs/nonBlank"},
+    "proposal_id": {"$ref": "#/$defs/nonBlank"},
+    "change_request_id": {"$ref": "#/$defs/nonBlank"},
+    "project_id": {"$ref": "#/$defs/nonBlank"},
+    "source_orchestration_id": {"$ref": "#/$defs/nonBlank"},
+    "target_orchestration_id": {"$ref": "#/$defs/nonBlank"},
+    "source_test_plan_id": {"$ref": "#/$defs/nonBlank"},
+    "target_test_plan_id": {"$ref": "#/$defs/nonBlank"},
+    "selections": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/nonBlank"}
+    },
+    "applied_operations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/operation"}
+    },
+    "stale_run_ids": {"$ref": "#/$defs/uniqueStrings"},
+    "stale_artifact_refs": {"$ref": "#/$defs/uniqueStrings"},
+    "stale_evidence_refs": {"$ref": "#/$defs/uniqueStrings"},
+    "stale_closure_result_ids": {"$ref": "#/$defs/uniqueStrings"},
+    "applied_by": {"$ref": "#/$defs/nonBlank"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["revision_kind"],
+        "properties": {"revision_kind": {"const": "undo"}}
+      },
+      "then": {"required": ["undo_of_revision_id"]}
+    }
+  ],
+  "$defs": {
+    "nonBlank": {"type": "string", "minLength": 1},
+    "uniqueStrings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/nonBlank"}
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "test_case_id",
+        "case_title",
+        "field",
+        "action",
+        "summary_before",
+        "summary_after"
+      ],
+      "properties": {
+        "operation_id": {"$ref": "#/$defs/nonBlank"},
+        "test_case_id": {"$ref": "#/$defs/nonBlank"},
+        "case_title": {"$ref": "#/$defs/nonBlank"},
+        "field": {
+          "enum": [
+            "steps",
+            "test_data_refs",
+            "test_data_values",
+            "expected_results",
+            "business_assertions"
+          ]
+        },
+        "action": {"enum": ["replace", "append", "insert_after", "remove", "restore"]},
+        "before": {},
+        "after": {},
+        "anchor": {},
+        "index": {"type": "integer", "minimum": 0},
+        "data_set_id": {"$ref": "#/$defs/nonBlank"},
+        "json_path": {
+          "type": "array",
+          "items": {"anyOf": [{"type": "string"}, {"type": "integer", "minimum": 0}]}
+        },
+        "criterion_id": {"$ref": "#/$defs/nonBlank"},
+        "flow_id": {"$ref": "#/$defs/nonBlank"},
+        "assertion_id": {"$ref": "#/$defs/nonBlank"},
+        "summary_before": {"$ref": "#/$defs/nonBlank"},
+        "summary_after": {"$ref": "#/$defs/nonBlank"}
+      }
+    }
+  }
+}

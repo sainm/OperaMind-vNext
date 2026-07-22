@@ -1,0 +1,27 @@
+{
+  "profile_type": "CommandExecutionProfile",
+  "profile_id": "gradle-project-example",
+  "profile_version": "1.0.0",
+  "templates": [
+    {
+      "command_ref": "targeted-unit",
+      "argv": ["./gradlew", "test", "--no-daemon"],
+      "working_directory": ".",
+      "timeout_seconds": 600,
+      "expected_exit_codes": [0],
+      "environment_keys": ["PATH", "JAVA_HOME", "GRADLE_USER_HOME", "LANG"],
+      "output_limit_bytes": 262144,
+      "failure_policy": "record_and_block"
+    },
+    {
+      "command_ref": "module-integration",
+      "argv": ["./gradlew", "integrationTest", "--no-daemon"],
+      "working_directory": ".",
+      "timeout_seconds": 1200,
+      "expected_exit_codes": [0],
+      "environment_keys": ["PATH", "JAVA_HOME", "GRADLE_USER_HOME", "LANG"],
+      "output_limit_bytes": 524288,
+      "failure_policy": "record_and_block"
+    }
+  ]
+}

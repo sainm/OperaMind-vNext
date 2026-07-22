@@ -1,0 +1,4 @@
+Copyright (c) 2026 OperaMind contributors.
+
+All rights reserved. This proof-of-concept extension is not licensed for
+redistribution or production use.

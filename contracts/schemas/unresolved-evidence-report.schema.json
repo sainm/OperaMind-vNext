@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/unresolved-evidence-report.schema.json",
+  "title": "UnresolvedEvidenceReport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_type",
+    "schema_version",
+    "unresolved_evidence_report_id",
+    "project_id",
+    "repository_id",
+    "repository_revision",
+    "code_graph_snapshot_id",
+    "report_status",
+    "trigger",
+    "open_count",
+    "closed_count",
+    "items"
+  ],
+  "properties": {
+    "artifact_type": {"const": "UnresolvedEvidenceReport"},
+    "schema_version": {"const": "v1"},
+    "unresolved_evidence_report_id": {"$ref": "#/$defs/nonBlank"},
+    "project_id": {"$ref": "#/$defs/nonBlank"},
+    "repository_id": {"$ref": "#/$defs/nonBlank"},
+    "repository_revision": {"$ref": "#/$defs/nonBlank"},
+    "code_graph_snapshot_id": {"$ref": "#/$defs/nonBlank"},
+    "predecessor_report_id": {"$ref": "#/$defs/nonBlank"},
+    "report_status": {"enum": ["clear", "needs_evidence"]},
+    "trigger": {"$ref": "#/$defs/trigger"},
+    "open_count": {"type": "integer", "minimum": 0},
+    "closed_count": {"type": "integer", "minimum": 0},
+    "items": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/item"}
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"report_status": {"const": "clear"}}},
+      "then": {"properties": {"open_count": {"const": 0}}},
+      "else": {"properties": {"open_count": {"minimum": 1}}}
+    }
+  ],
+  "$defs": {
+    "nonBlank": {"type": "string", "minLength": 1},
+    "sourceLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "start_line", "end_line"],
+      "properties": {
+        "path": {"$ref": "#/$defs/nonBlank"},
+        "start_line": {"type": "integer", "minimum": 1},
+        "end_line": {"type": "integer", "minimum": 1}
+      }
+    },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trigger_type", "evidence_refs"],
+      "properties": {
+        "trigger_type": {"enum": ["static_graph", "runtime_evidence"]},
+        "evidence_refs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/nonBlank"},
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_ref", "match_basis"],
+      "properties": {
+        "target_ref": {"$ref": "#/$defs/nonBlank"},
+        "match_basis": {
+          "enum": ["name", "signature", "route", "definition", "runtime_observation"]
+        },
+        "source_location": {"$ref": "#/$defs/sourceLocation"}
+      }
+    },
+    "closure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resolved_target_ref",
+        "resolved_edge_ref",
+        "proof_kind",
+        "evidence_refs"
+      ],
+      "properties": {
+        "resolved_target_ref": {"$ref": "#/$defs/nonBlank"},
+        "resolved_edge_ref": {"$ref": "#/$defs/nonBlank"},
+        "proof_kind": {
+          "enum": ["static_unique", "runtime_unique", "static_runtime_unique"]
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/nonBlank"},
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "item_id",
+        "finding_key",
+        "edge_ref",
+        "status",
+        "category",
+        "reason",
+        "edge_type",
+        "source_ref",
+        "unresolved_target_ref",
+        "source_location",
+        "candidate_targets",
+        "missing_evidence",
+        "resolution_suggestions",
+        "provenance",
+        "evidence_refs"
+      ],
+      "properties": {
+        "item_id": {"$ref": "#/$defs/nonBlank"},
+        "finding_key": {"$ref": "#/$defs/nonBlank"},
+        "edge_ref": {"$ref": "#/$defs/nonBlank"},
+        "status": {"enum": ["open", "closed"]},
+        "category": {
+          "enum": [
+            "call_target",
+            "endpoint_route",
+            "data_table",
+            "entity_mapping",
+            "config_key",
+            "navigation_target",
+            "generic_relation"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "target_definition_missing",
+            "target_ambiguous",
+            "runtime_observation_missing",
+            "external_reference_unverified",
+            "dynamic_reference",
+            "unresolved_reference",
+            "resolved_unique"
+          ]
+        },
+        "edge_type": {"$ref": "#/$defs/nonBlank"},
+        "source_ref": {"$ref": "#/$defs/nonBlank"},
+        "unresolved_target_ref": {"$ref": "#/$defs/nonBlank"},
+        "source_location": {"$ref": "#/$defs/sourceLocation"},
+        "candidate_targets": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/candidate"}
+        },
+        "missing_evidence": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/nonBlank"},
+          "uniqueItems": true
+        },
+        "resolution_suggestions": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "add_static_definition",
+              "configure_framework_adapter",
+              "collect_runtime_route",
+              "disambiguate_reference",
+              "verify_external_dependency",
+              "inspect_extractor_diagnostic"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "provenance": {"enum": ["static", "runtime", "static_runtime"]},
+        "evidence_refs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/nonBlank"},
+          "uniqueItems": true
+        },
+        "closure": {"$ref": "#/$defs/closure"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "closed"}}},
+          "then": {
+            "required": ["closure"],
+            "properties": {
+              "reason": {"const": "resolved_unique"},
+              "missing_evidence": {"maxItems": 0},
+              "candidate_targets": {"minItems": 1, "maxItems": 1}
+            }
+          },
+          "else": {"not": {"required": ["closure"]}}
+        }
+      ]
+    }
+  }
+}

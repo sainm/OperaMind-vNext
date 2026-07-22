@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/document-change-proposal.schema.json",
+  "title": "DocumentChangeProposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifact_type", "schema_version", "proposal_id", "change_request_id", "project_id", "source_document_ref", "target_document_ref", "source_content_digest", "target_content_digest", "status", "operations"],
+  "properties": {
+    "artifact_type": {"const": "DocumentChangeProposal"},
+    "schema_version": {"const": "v1"},
+    "proposal_id": {"type": "string", "minLength": 1},
+    "change_request_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "source_document_ref": {"type": "string", "minLength": 1},
+    "target_document_ref": {"type": "string", "minLength": 1},
+    "source_content_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "target_content_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "status": {"enum": ["applied", "needs_confirmation", "rejected"]},
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation_id", "sheet", "cell", "field", "before", "after", "source_ref"],
+        "properties": {
+          "operation_id": {"type": "string", "minLength": 1},
+          "sheet": {"type": "string", "minLength": 1},
+          "cell": {"type": "string", "pattern": "^[A-Z]+[1-9][0-9]*$"},
+          "field": {"type": "string", "minLength": 1},
+          "before": {},
+          "after": {},
+          "source_ref": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "confirmation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["confirmed_by", "confirmed_at"],
+      "properties": {
+        "confirmed_by": {"type": "string", "minLength": 1},
+        "confirmed_at": {"type": "string", "format": "date-time"}
+      }
+    }
+  }
+}

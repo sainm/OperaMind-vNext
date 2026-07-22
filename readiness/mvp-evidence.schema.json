@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/readiness/mvp-evidence.schema.json",
+  "title": "OperaMindMvpEvidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "evidence_format_version",
+    "evidence_id",
+    "gate_id",
+    "evidence_type",
+    "outcome",
+    "observed_at",
+    "review_status",
+    "reviewed_by",
+    "subject"
+  ],
+  "properties": {
+    "evidence_format_version": {"const": "v1"},
+    "evidence_id": {"type": "string", "minLength": 1},
+    "gate_id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+    "evidence_type": {
+      "enum": [
+        "copilot_session",
+        "deployment_run",
+        "golden_manifest",
+        "human_review",
+        "provider_probe",
+        "test_report"
+      ]
+    },
+    "outcome": {"const": "passed"},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "review_status": {"enum": ["pending", "reviewed", "verified"]},
+    "reviewed_by": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "subject": {"type": "object"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"review_status": {"const": "pending"}}, "required": ["review_status"]},
+      "then": {"properties": {"reviewed_by": {"maxItems": 0}}}
+    },
+    {
+      "if": {"properties": {"review_status": {"const": "reviewed"}}, "required": ["review_status"]},
+      "then": {"properties": {"reviewed_by": {"minItems": 1}}}
+    },
+    {
+      "if": {"properties": {"review_status": {"const": "verified"}}, "required": ["review_status"]},
+      "then": {
+        "properties": {
+          "evidence_type": {
+            "enum": ["deployment_run", "provider_probe", "test_report"]
+          },
+          "reviewed_by": {"minItems": 1}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "evidence_type": {"const": "golden_manifest"},
+          "review_status": {"const": "reviewed"}
+        },
+        "required": ["evidence_type", "review_status"]
+      },
+      "then": {
+        "properties": {
+          "subject": {
+            "properties": {"status": {"const": "frozen"}}
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"evidence_type": {"const": "golden_manifest"}}, "required": ["evidence_type"]},
+      "then": {
+        "properties": {
+          "gate_id": {"const": "golden_dataset"},
+          "subject": {"$ref": "#/$defs/golden_subject"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"evidence_type": {"const": "provider_probe"}}, "required": ["evidence_type"]},
+      "then": {
+        "properties": {
+          "gate_id": {"const": "embedding_provider_live"},
+          "subject": {"$ref": "#/$defs/provider_subject"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"evidence_type": {"const": "human_review"}}, "required": ["evidence_type"]},
+      "then": {
+        "properties": {
+          "gate_id": {"const": "human_approval_e2e"},
+          "subject": {"$ref": "#/$defs/human_review_subject"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"evidence_type": {"const": "copilot_session"}}, "required": ["evidence_type"]},
+      "then": {
+        "properties": {
+          "gate_id": {"const": "github_copilot_live"},
+          "subject": {"$ref": "#/$defs/copilot_subject"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"evidence_type": {"const": "deployment_run"}}, "required": ["evidence_type"]},
+      "then": {
+        "properties": {
+          "gate_id": {"const": "target_deployment_e2e"},
+          "subject": {"$ref": "#/$defs/deployment_subject"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"evidence_type": {"const": "test_report"}}, "required": ["evidence_type"]},
+      "then": {
+        "properties": {
+          "gate_id": {"const": "full_local_regression"},
+          "subject": {"$ref": "#/$defs/test_report_subject"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {"type": "string", "minLength": 1},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "command": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1
+    },
+    "golden_subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dataset_id", "dataset_version", "manifest_path", "manifest_sha256", "dataset_digest_algorithm", "dataset_sha256", "project_count", "case_count", "status"],
+      "properties": {
+        "dataset_id": {"$ref": "#/$defs/id"},
+        "dataset_version": {"$ref": "#/$defs/id"},
+        "manifest_path": {"$ref": "#/$defs/id"},
+        "manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "dataset_digest_algorithm": {"const": "operamind-golden-dataset-v1"},
+        "dataset_sha256": {"$ref": "#/$defs/sha256"},
+        "project_count": {"type": "integer", "minimum": 1},
+        "case_count": {"type": "integer", "minimum": 1, "maximum": 5},
+        "status": {"enum": ["needs_review", "frozen"]}
+      }
+    },
+    "provider_subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile_version_id", "model", "dimensions", "endpoint_origin", "test_command", "exit_code"],
+      "properties": {
+        "profile_version_id": {"$ref": "#/$defs/id"},
+        "model": {"$ref": "#/$defs/id"},
+        "dimensions": {"type": "integer", "minimum": 1, "maximum": 16000},
+        "endpoint_origin": {"type": "string", "format": "uri"},
+        "test_command": {"$ref": "#/$defs/command"},
+        "exit_code": {"const": 0}
+      }
+    },
+    "human_review_subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_id", "analysis_case_id", "impact_report_id", "confirmation_id", "approval_grant_id", "decision"],
+      "properties": {
+        "project_id": {"$ref": "#/$defs/id"},
+        "analysis_case_id": {"$ref": "#/$defs/id"},
+        "impact_report_id": {"$ref": "#/$defs/id"},
+        "confirmation_id": {"$ref": "#/$defs/id"},
+        "approval_grant_id": {"$ref": "#/$defs/id"},
+        "decision": {"const": "approved"}
+      }
+    },
+    "copilot_subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_id", "analysis_case_id", "coding_task_id", "edit_packet_id", "approval_grant_id", "base_repository_revision", "result_repository_revision", "mcp_protocol_version", "tool_approval_status", "vscode_session_id", "vscode_request_id", "vscode_response_id", "copilot_extension_version", "copilot_model_id", "session_transcript_sha256", "completed_mcp_tools"],
+      "properties": {
+        "project_id": {"$ref": "#/$defs/id"},
+        "analysis_case_id": {"$ref": "#/$defs/id"},
+        "coding_task_id": {"$ref": "#/$defs/id"},
+        "edit_packet_id": {"$ref": "#/$defs/id"},
+        "approval_grant_id": {"$ref": "#/$defs/id"},
+        "base_repository_revision": {"$ref": "#/$defs/id"},
+        "result_repository_revision": {"$ref": "#/$defs/id"},
+        "mcp_protocol_version": {"const": "2025-11-25"},
+        "tool_approval_status": {"const": "confirmed"},
+        "vscode_session_id": {"$ref": "#/$defs/id"},
+        "vscode_request_id": {"$ref": "#/$defs/id"},
+        "vscode_response_id": {"$ref": "#/$defs/id"},
+        "copilot_extension_version": {"$ref": "#/$defs/id"},
+        "copilot_model_id": {"$ref": "#/$defs/id"},
+        "session_transcript_sha256": {"$ref": "#/$defs/sha256"},
+        "completed_mcp_tools": {
+          "const": [
+            "copilot_get_coding_task",
+            "copilot_run_task_command",
+            "copilot_validate_task_diff",
+            "copilot_record_task_result"
+          ]
+        }
+      }
+    },
+    "deployment_subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_id", "analysis_case_id", "ui_execution_plan_id", "ui_execution_run_id", "verification_result_id", "environment_id", "deployment_revision", "repository_revision", "status", "evidence_ids"],
+      "properties": {
+        "project_id": {"$ref": "#/$defs/id"},
+        "analysis_case_id": {"$ref": "#/$defs/id"},
+        "ui_execution_plan_id": {"$ref": "#/$defs/id"},
+        "ui_execution_run_id": {"$ref": "#/$defs/id"},
+        "verification_result_id": {"$ref": "#/$defs/id"},
+        "environment_id": {"$ref": "#/$defs/id"},
+        "deployment_revision": {"$ref": "#/$defs/id"},
+        "repository_revision": {"$ref": "#/$defs/id"},
+        "status": {"const": "passed"},
+        "evidence_ids": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/id"},
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    },
+    "test_report_subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_tree_algorithm", "source_tree_sha256", "test_command", "excluded_tests", "collected", "passed", "failed", "skipped", "database_version", "browser_version"],
+      "properties": {
+        "source_tree_algorithm": {"const": "operamind-source-tree-v1"},
+        "source_tree_sha256": {"$ref": "#/$defs/sha256"},
+        "test_command": {"$ref": "#/$defs/command"},
+        "excluded_tests": {
+          "const": [
+            "tests/integration/test_live_embedding_provider.py",
+            "tests/integration/test_golden_screen_change.py"
+          ]
+        },
+        "collected": {"type": "integer", "minimum": 1},
+        "passed": {"type": "integer", "minimum": 1},
+        "failed": {"const": 0},
+        "skipped": {"const": 0},
+        "database_version": {"$ref": "#/$defs/id"},
+        "browser_version": {"$ref": "#/$defs/id"}
+      }
+    }
+  }
+}

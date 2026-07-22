@@ -1,0 +1,15 @@
+{
+  "folders": [
+    {
+      "name": "OperaMind linked worktree",
+      "path": "../OperaMind-vNext-local"
+    },
+    {
+      "name": "OperaMind control plane",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "operamind.bridge.url": "http://127.0.0.1:8765"
+  }
+}

@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/runtime-route-evidence.schema.json",
+  "title": "RuntimeRouteEvidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_type",
+    "schema_version",
+    "runtime_route_evidence_id",
+    "project_id",
+    "repository_id",
+    "repository_revision",
+    "code_graph_snapshot_id",
+    "browser_run_id",
+    "captured_at",
+    "source_evidence_refs",
+    "observations",
+    "resolutions"
+  ],
+  "properties": {
+    "artifact_type": {"const": "RuntimeRouteEvidence"},
+    "schema_version": {"const": "v1"},
+    "runtime_route_evidence_id": {"$ref": "#/$defs/nonBlank"},
+    "project_id": {"$ref": "#/$defs/nonBlank"},
+    "repository_id": {"$ref": "#/$defs/nonBlank"},
+    "repository_revision": {"$ref": "#/$defs/nonBlank"},
+    "code_graph_snapshot_id": {"$ref": "#/$defs/nonBlank"},
+    "browser_run_id": {"$ref": "#/$defs/nonBlank"},
+    "captured_at": {"type": "string", "format": "date-time"},
+    "source_evidence_refs": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/nonBlank"},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "observations": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/observation"},
+      "minItems": 1
+    },
+    "resolutions": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/resolution"},
+      "minItems": 1
+    }
+  },
+  "$defs": {
+    "nonBlank": {"type": "string", "minLength": 1},
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observation_id",
+        "scenario_id",
+        "event_kind",
+        "method",
+        "path",
+        "evidence_ref"
+      ],
+      "properties": {
+        "observation_id": {"$ref": "#/$defs/nonBlank"},
+        "scenario_id": {"$ref": "#/$defs/nonBlank"},
+        "event_kind": {"enum": ["network_request", "navigation", "form_submission"]},
+        "method": {"type": "string", "pattern": "^[A-Z][A-Z0-9_-]{0,31}$"},
+        "path": {"type": "string", "pattern": "^/"},
+        "source_action_id": {"$ref": "#/$defs/nonBlank"},
+        "source_route_ref": {"$ref": "#/$defs/nonBlank"},
+        "evidence_ref": {"$ref": "#/$defs/nonBlank"}
+      }
+    },
+    "resolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observation_id", "status", "reason", "candidate_endpoint_refs"],
+      "properties": {
+        "observation_id": {"$ref": "#/$defs/nonBlank"},
+        "status": {"enum": ["resolved", "unresolved"]},
+        "reason": {
+          "enum": [
+            "resolved_unique",
+            "missing_source_route_ref",
+            "source_route_not_found",
+            "source_route_not_unresolved",
+            "source_route_ambiguous",
+            "method_mismatch",
+            "endpoint_not_found",
+            "endpoint_ambiguous",
+            "source_maps_multiple_endpoints"
+          ]
+        },
+        "source_route_ref": {"$ref": "#/$defs/nonBlank"},
+        "endpoint_ref": {"$ref": "#/$defs/nonBlank"},
+        "candidate_endpoint_refs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/nonBlank"},
+          "uniqueItems": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "resolved"}}},
+          "then": {
+            "required": ["source_route_ref", "endpoint_ref"],
+            "properties": {
+              "reason": {"const": "resolved_unique"},
+              "candidate_endpoint_refs": {"minItems": 1, "maxItems": 1}
+            }
+          },
+          "else": {"not": {"required": ["endpoint_ref"]}}
+        }
+      ]
+    }
+  }
+}

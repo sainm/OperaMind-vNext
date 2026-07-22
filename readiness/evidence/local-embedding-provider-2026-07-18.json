@@ -1,0 +1,28 @@
+{
+  "evidence_format_version": "v1",
+  "evidence_id": "operamind-vnext-local-embedding-provider-20260718T125154Z",
+  "gate_id": "embedding_provider_live",
+  "evidence_type": "provider_probe",
+  "outcome": "passed",
+  "observed_at": "2026-07-18T12:51:54Z",
+  "review_status": "reviewed",
+  "reviewed_by": [
+    "conversation:user"
+  ],
+  "subject": {
+    "profile_version_id": "local-openai-compatible-v1@1.0.0",
+    "model": "text-embedding-nomic-embed-text-v1.5",
+    "dimensions": 768,
+    "endpoint_origin": "http://127.0.0.1:1234",
+    "test_command": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/integration/test_live_embedding_provider.py",
+      "tests/infrastructure/test_embedding_provider.py",
+      "tests/profiles"
+    ],
+    "exit_code": 0
+  }
+}

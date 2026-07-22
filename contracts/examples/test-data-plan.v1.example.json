@@ -1,0 +1,64 @@
+{
+  "artifact_type": "TestDataPlan",
+  "schema_version": "v1",
+  "test_data_plan_id": "test-data-expense-status",
+  "test_plan_id": "test-plan-expense-status",
+  "project_id": "visiondemo",
+  "status": "ready",
+  "data_sets": [
+    {
+      "test_data_id": "expense-default-seed",
+      "test_case_refs": ["expense-empty-status-api"],
+      "setup_actions": [
+        {
+          "action_id": "load-default-seed",
+          "action_type": "fixture",
+          "target": "classpath:data.sql",
+          "payload": {"expected_expense_count": 4}
+        }
+      ],
+      "cleanup_policy": "isolated_environment"
+    }
+  ],
+  "generation_flows": [
+    {
+      "flow_id": "flow-expense-default-seed",
+      "title": "既定の経費データを生成する",
+      "test_data_refs": ["expense-default-seed"],
+      "test_case_refs": ["expense-empty-status-api"],
+      "steps": [
+        {
+          "step_id": "load-default-seed",
+          "sequence": 1,
+          "channel": "fixture",
+          "business_action": "既定の経費データをロードする",
+          "target": "classpath:data.sql",
+          "inputs": {"expected_expense_count": 4},
+          "depends_on": [],
+          "output_bindings": [],
+          "postconditions": [
+            {
+              "assertion_id": "default-expense-count",
+              "observe_via": "fixture",
+              "subject": "expected_expense_count",
+              "operator": "equals",
+              "expected": 4
+            }
+          ]
+        }
+      ],
+      "final_assertions": [
+        {
+          "assertion_id": "all-expenses-searchable",
+          "observe_via": "api",
+          "subject": "GET /expense/api/search totalElements",
+          "operator": "equals",
+          "expected": 4
+        }
+      ],
+      "cleanup_policy": "isolated_environment",
+      "cleanup_steps": []
+    }
+  ],
+  "blocking_reasons": []
+}

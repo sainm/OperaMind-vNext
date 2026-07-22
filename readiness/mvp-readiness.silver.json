@@ -1,0 +1,55 @@
+{
+  "manifest_id": "operamind-vnext-mvp-readiness",
+  "manifest_version": "0.1.0-silver",
+  "status": "pending",
+  "gates": [
+    {
+      "gate_id": "golden_dataset",
+      "policy_version": "v1",
+      "status": "pending",
+      "blocking_reason": "Need one to five real cases with all required human-judgment steps confirmed.",
+      "evidence_refs": [],
+      "reviewers": []
+    },
+    {
+      "gate_id": "embedding_provider_live",
+      "policy_version": "v1",
+      "status": "pending",
+      "blocking_reason": "The opt-in live contract test has not run against a real configured Provider.",
+      "evidence_refs": [],
+      "reviewers": []
+    },
+    {
+      "gate_id": "human_approval_e2e",
+      "policy_version": "v1",
+      "status": "pending",
+      "blocking_reason": "A real reviewer has not completed and approved an end-to-end Impact decision.",
+      "evidence_refs": [],
+      "reviewers": []
+    },
+    {
+      "gate_id": "github_copilot_live",
+      "policy_version": "v1",
+      "status": "pending",
+      "blocking_reason": "A signed-in GitHub Copilot session and organization MCP policy have not been exercised.",
+      "evidence_refs": [],
+      "reviewers": []
+    },
+    {
+      "gate_id": "target_deployment_e2e",
+      "policy_version": "v1",
+      "status": "pending",
+      "blocking_reason": "Playwright has not closed a Golden change on its real revision-bound target Deployment.",
+      "evidence_refs": [],
+      "reviewers": []
+    },
+    {
+      "gate_id": "full_local_regression",
+      "policy_version": "v1",
+      "status": "pending",
+      "blocking_reason": "The current worktree has not completed the full PostgreSQL and real Chrome regression gate.",
+      "evidence_refs": [],
+      "reviewers": []
+    }
+  ]
+}

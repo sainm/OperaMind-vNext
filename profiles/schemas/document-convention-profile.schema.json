@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/profiles/document-convention-profile.schema.json",
+  "title": "DocumentConventionProfile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "profile_type",
+    "profile_id",
+    "profile_version",
+    "document_type",
+    "minimum_auto_match_score",
+    "variants",
+    "unmatched_policy"
+  ],
+  "properties": {
+    "profile_type": {"const": "DocumentConventionProfile"},
+    "profile_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "profile_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "document_type": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+    "minimum_auto_match_score": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+    "variants": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/variant"},
+      "minItems": 1
+    },
+    "unmatched_policy": {"const": "canonical_text_needs_review"}
+  },
+  "$defs": {
+    "signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "values", "weight"],
+      "properties": {
+        "type": {
+          "enum": ["filename_token", "sheet_name", "heading", "headers", "business_term"]
+        },
+        "values": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "weight": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}
+      }
+    },
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["variant_id", "signals", "field_aliases", "stable_key_fields", "stable_key_normalizers"],
+      "properties": {
+        "variant_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+        "signals": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/signal"},
+          "minItems": 1
+        },
+        "field_aliases": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"pattern": "^[a-z][a-z0-9_]*$"},
+          "additionalProperties": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "stable_key_fields": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "stable_key_normalizers": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"pattern": "^[a-z][a-z0-9_]*$"},
+          "additionalProperties": {
+            "enum": ["preserve", "casefold", "uppercase", "lowercase"]
+          }
+        }
+      }
+    }
+  }
+}

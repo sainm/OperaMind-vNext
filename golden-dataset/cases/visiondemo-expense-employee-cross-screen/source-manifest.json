@@ -1,0 +1,27 @@
+{
+  "case_id": "visiondemo-expense-employee-cross-screen",
+  "dataset_stage": "silver",
+  "portability_status": "portable",
+  "project_id": "visiondemo",
+  "requirement_source": {
+    "type": "confirmed_conversation_requirement",
+    "language": "zh-CN",
+    "summary": "测试数据生成必须覆盖画面创建数据、其他画面更新以及列表画面查询验证的完整业务链路。"
+  },
+  "target_repository": {
+    "url": "git@github.com:d-e-chen/OperaMind-demo.git",
+    "subdirectory": "VisionDemo",
+    "base_commit": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6",
+    "branch_observed": "main",
+    "worktree_clean_at_analysis": true
+  },
+  "inspected_sources": [
+    "VisionDemo/src/main/webapp/WEB-INF/jsp/fragments/expense-create.jsp",
+    "VisionDemo/src/main/webapp/WEB-INF/jsp/fragments/employee-list.jsp",
+    "VisionDemo/src/main/webapp/WEB-INF/jsp/fragments/expense-list.jsp",
+    "VisionDemo/src/main/java/com/visiondemo/service/ExpenseService.java",
+    "VisionDemo/src/main/resources/schema.sql"
+  ],
+  "generated_by": "codex-source-inspection-assisted",
+  "review_status": "needs_business_developer_and_qa_review"
+}

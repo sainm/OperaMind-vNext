@@ -11,8 +11,13 @@
     "analysis_case_id",
     "project_id",
     "document_snapshot_id",
+    "ingestion_batch_id",
+    "document_ingestion_result_event_id",
     "embedding_profile_ref",
+    "search_index_build_id",
     "ranking_policy_version",
+    "query_plan_version",
+    "retrieval_policy",
     "structured_change_refs",
     "business_summary",
     "context_items",
@@ -27,9 +32,34 @@
     "analysis_case_id": {"type": "string", "minLength": 1},
     "project_id": {"type": "string", "minLength": 1},
     "document_snapshot_id": {"type": "string", "minLength": 1},
+    "ingestion_batch_id": {"type": "string", "minLength": 1},
+    "document_ingestion_result_event_id": {"type": "string", "minLength": 1},
     "document_profile_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
     "embedding_profile_ref": {"type": "string", "minLength": 1},
+    "search_index_build_id": {"type": "string", "minLength": 1},
+    "document_relation_build_id": {"type": "string", "minLength": 1},
     "ranking_policy_version": {"type": "string", "minLength": 1},
+    "query_plan_version": {"type": "string", "minLength": 1},
+    "retrieval_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "embedding_profile_version_id",
+        "embedding_profile_binding_key",
+        "vector_top_k",
+        "keyword_top_k",
+        "final_top_k",
+        "adjacent_distance"
+      ],
+      "properties": {
+        "embedding_profile_version_id": {"type": "string", "minLength": 1},
+        "embedding_profile_binding_key": {"type": "string", "minLength": 1},
+        "vector_top_k": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "keyword_top_k": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "final_top_k": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "adjacent_distance": {"type": "integer", "minimum": 0, "maximum": 10}
+      }
+    },
     "structured_change_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "uniqueItems": true},
     "business_summary": {"type": "string", "minLength": 1},
     "context_items": {
@@ -53,10 +83,11 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["query_id", "retrieval_mode", "candidate_refs"],
+        "required": ["query_id", "query_purpose", "retrieval_mode", "candidate_refs"],
         "properties": {
           "query_id": {"type": "string", "minLength": 1},
-          "retrieval_mode": {"enum": ["hybrid", "keyword_degraded"]},
+          "query_purpose": {"enum": ["business_behavior", "precise_anchor", "acceptance_criteria"]},
+          "retrieval_mode": {"const": "hybrid"},
           "candidate_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
         }
       }

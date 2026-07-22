@@ -1,0 +1,34 @@
+{
+  "artifact_type": "RuntimeRouteEvidence",
+  "schema_version": "v1",
+  "runtime_route_evidence_id": "runtime-route-evidence-001",
+  "project_id": "project-001",
+  "repository_id": "repository-001",
+  "repository_revision": "0123456789abcdef",
+  "code_graph_snapshot_id": "code-graph-001",
+  "browser_run_id": "ui-run-001",
+  "captured_at": "2026-07-20T08:00:00Z",
+  "source_evidence_refs": ["evidence://project-001/ui-run-001/network-001"],
+  "observations": [
+    {
+      "observation_id": "route-observation-001",
+      "scenario_id": "customer-search",
+      "event_kind": "network_request",
+      "method": "GET",
+      "path": "/api/customers",
+      "source_action_id": "submit-search",
+      "source_route_ref": "symbol-dynamic-route-001",
+      "evidence_ref": "evidence://project-001/ui-run-001/network-001"
+    }
+  ],
+  "resolutions": [
+    {
+      "observation_id": "route-observation-001",
+      "status": "resolved",
+      "reason": "resolved_unique",
+      "source_route_ref": "symbol-dynamic-route-001",
+      "endpoint_ref": "symbol-endpoint-001",
+      "candidate_endpoint_refs": ["symbol-endpoint-001"]
+    }
+  ]
+}

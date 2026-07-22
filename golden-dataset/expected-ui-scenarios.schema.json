@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/golden-dataset/expected-ui-scenarios.schema.json",
+  "title": "GoldenUiScenarioExpectation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "case_id",
+    "project_id",
+    "dataset_stage",
+    "ui_impact_status",
+    "scenarios",
+    "expected_current_base_outcome",
+    "review_status"
+  ],
+  "properties": {
+    "case_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "dataset_stage": {"enum": ["silver", "golden_candidate", "golden"]},
+    "ui_impact_status": {"enum": ["impacted", "not_impacted", "unknown"]},
+    "scenarios": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/scenario"}
+    },
+    "expected_current_base_outcome": {
+      "type": "object",
+      "propertyNames": {"type": "string", "minLength": 1},
+      "additionalProperties": {"type": "string", "minLength": 1}
+    },
+    "review_status": {"enum": ["needs_business_and_qa_review", "approved"]}
+  },
+  "$defs": {
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_id",
+        "title",
+        "preconditions",
+        "steps",
+        "expected_visible_results",
+        "evidence"
+      ],
+      "properties": {
+        "scenario_id": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1},
+        "preconditions": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "steps": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "expected_visible_results": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "evidence": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"ui_impact_status": {"const": "impacted"}},
+        "required": ["ui_impact_status"]
+      },
+      "then": {"properties": {"scenarios": {"minItems": 1}}}
+    },
+    {
+      "if": {
+        "properties": {"ui_impact_status": {"const": "not_impacted"}},
+        "required": ["ui_impact_status"]
+      },
+      "then": {"properties": {"scenarios": {"maxItems": 0}}}
+    },
+    {
+      "if": {
+        "properties": {"dataset_stage": {"const": "golden"}},
+        "required": ["dataset_stage"]
+      },
+      "then": {"properties": {"review_status": {"const": "approved"}}}
+    }
+  ]
+}

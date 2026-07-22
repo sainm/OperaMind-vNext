@@ -1,13 +1,29 @@
 {
   "catalog_version": "v1",
   "artifacts": {
+    "ChangeRequest": "schemas/change-request.schema.json",
+    "DocumentChangeProposal": "schemas/document-change-proposal.schema.json",
     "DocumentIngestionResult": "schemas/document-ingestion-result.schema.json",
     "StructuredChange": "schemas/structured-change.schema.json",
     "ContextPackage": "schemas/context-package.schema.json",
     "CodeGraphSnapshot": "schemas/code-graph-snapshot.schema.json",
+    "RuntimeRouteEvidence": "schemas/runtime-route-evidence.schema.json",
+    "UnresolvedEvidenceReport": "schemas/unresolved-evidence-report.schema.json",
     "ImpactReport": "schemas/impact-report.schema.json",
     "ImpactConfirmation": "schemas/impact-confirmation.schema.json",
     "CopilotEditPacket": "schemas/copilot-edit-packet.schema.json",
-    "UiVerificationResult": "schemas/ui-verification-result.schema.json"
+    "CopilotCodingTask": "schemas/copilot-coding-task.schema.json",
+    "ApprovalGrant": "schemas/approval-grant.schema.json",
+    "UiVerificationResult": "schemas/ui-verification-result.schema.json",
+    "TestPlan": "schemas/test-plan.schema.json",
+    "TestDataPlan": "schemas/test-data-plan.schema.json",
+    "BusinessDataTemplate": "schemas/business-data-template.schema.json",
+    "AcceptanceCriteria": "schemas/acceptance-criteria.schema.json",
+    "BusinessCoverageReport": "schemas/business-coverage-report.schema.json",
+    "ChangeClosureResult": "schemas/change-closure-result.schema.json",
+    "ChangeOrchestrationPlan": "schemas/change-orchestration-plan.schema.json",
+    "TestDataExecutionResult": "schemas/test-data-execution-result.schema.json",
+    "TestCaseChangeProposal": "schemas/test-case-change-proposal.schema.json",
+    "TestCaseRevision": "schemas/test-case-revision.schema.json"
   }
 }

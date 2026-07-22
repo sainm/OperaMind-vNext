@@ -1,0 +1,44 @@
+{
+  "artifact_type": "TestDataExecutionResult",
+  "schema_version": "v1",
+  "execution_result_id": "test-data-result-expense",
+  "run_id": "test-data-run-expense",
+  "test_data_plan_id": "test-data-expense-status",
+  "project_id": "visiondemo",
+  "status": "passed",
+  "started_at": "2026-07-18T12:00:00Z",
+  "completed_at": "2026-07-18T12:00:03Z",
+  "flow_results": [
+    {
+      "flow_id": "flow-expense",
+      "status": "passed",
+      "step_results": [
+        {
+          "step_id": "create-expense",
+          "sequence": 1,
+          "channel": "http",
+          "phase": "setup",
+          "status": "passed",
+          "output_variables": ["expense_id"],
+          "evidence_refs": ["evidence://visiondemo/test-data-run-expense/create-response"]
+        }
+      ],
+      "cleanup_results": [],
+      "deferred_assertion_ids": []
+    }
+  ],
+  "evidence": [
+    {
+      "evidence_id": "create-response",
+      "flow_id": "flow-expense",
+      "step_id": "create-expense",
+      "phase": "setup",
+      "evidence_type": "response",
+      "evidence_ref": "evidence://visiondemo/test-data-run-expense/create-response",
+      "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sanitized": true
+    }
+  ],
+  "failure_reasons": [],
+  "cleanup_status": "not_required"
+}

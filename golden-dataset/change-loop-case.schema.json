@@ -1,0 +1,365 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/golden-dataset/change-loop-case.schema.json",
+  "title": "ChangeLoopCase",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "case_id",
+    "project_id",
+    "repository",
+    "document",
+    "requirements",
+    "analysis",
+    "impact_candidates",
+    "edit",
+    "acceptance_criteria",
+    "test_cases",
+    "data_sets",
+    "execution",
+    "review"
+  ],
+  "properties": {
+    "schema_version": {"const": "v1"},
+    "case_id": {"$ref": "#/$defs/nonBlank"},
+    "project_id": {"$ref": "#/$defs/nonBlank"},
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository_id", "base_revision", "application_root", "scan_roots"],
+      "properties": {
+        "repository_id": {"$ref": "#/$defs/nonBlank"},
+        "base_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "application_root": {"$ref": "#/$defs/path"},
+        "scan_roots": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/path"}},
+        "code_profile": {"$ref": "#/$defs/path"}
+      }
+    },
+    "document": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain", "fact_type", "convention_profile"],
+      "properties": {
+        "domain": {"const": "ui"},
+        "fact_type": {"const": "screen_element"},
+        "convention_profile": {"$ref": "#/$defs/path"}
+      }
+    },
+    "requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["business_rules", "required_intents", "conflicts"],
+      "properties": {
+        "canonical_requirement": {"$ref": "#/$defs/nonBlank"},
+        "business_rules": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/businessRule"}},
+        "required_intents": {"type": "array", "items": {"$ref": "#/$defs/intentCheck"}},
+        "conflicts": {"type": "array", "items": {"$ref": "#/$defs/intentCheck"}}
+      }
+    },
+    "analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy_version", "summary"],
+      "properties": {
+        "policy_version": {"$ref": "#/$defs/nonBlank"},
+        "summary": {"$ref": "#/$defs/nonBlank"}
+      }
+    },
+    "impact_candidates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "symbols", "reason"],
+        "properties": {
+          "path": {"$ref": "#/$defs/path"},
+          "symbols": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonBlank"}},
+          "reason": {"$ref": "#/$defs/nonBlank"}
+        }
+      }
+    },
+    "edit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["forbidden_paths", "replacements", "allowed_items"],
+      "properties": {
+        "forbidden_paths": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/path"}},
+        "replacements": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "before", "after"],
+            "properties": {
+              "path": {"$ref": "#/$defs/path"},
+              "before": {"$ref": "#/$defs/nonBlank"},
+              "after": {"$ref": "#/$defs/nonBlank"}
+            }
+          }
+        },
+        "allowed_items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "business_summary", "implementation_constraints"],
+            "properties": {
+              "path": {"$ref": "#/$defs/path"},
+              "business_summary": {"$ref": "#/$defs/nonBlank"},
+              "implementation_constraints": {"type": "array", "items": {"$ref": "#/$defs/nonBlank"}}
+            }
+          }
+        }
+      }
+    },
+    "acceptance_criteria": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/criterion"}},
+    "test_cases": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/testCase"}},
+    "data_sets": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/dataSet"}},
+    "data_generation_flows": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/dataGenerationFlow"}
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_tests", "health_request", "api_tests", "setup_requests", "browser_phases", "browser_scenarios"],
+      "properties": {
+        "source_tests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["test_case_id", "path", "contains", "success_summary"],
+            "properties": {
+              "test_case_id": {"$ref": "#/$defs/nonBlank"},
+              "path": {"$ref": "#/$defs/path"},
+              "contains": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/nonBlank"}},
+              "success_summary": {"$ref": "#/$defs/nonBlank"}
+            }
+          }
+        },
+        "health_request": {"$ref": "#/$defs/httpRequest"},
+        "api_tests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["test_case_id", "request", "assertions", "success_summary"],
+            "properties": {
+              "test_case_id": {"$ref": "#/$defs/nonBlank"},
+              "request": {"$ref": "#/$defs/httpRequest"},
+              "assertions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/jsonAssertion"}},
+              "success_summary": {"$ref": "#/$defs/nonBlank"}
+            }
+          }
+        },
+        "setup_requests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["setup_id", "request", "assertions"],
+            "properties": {
+              "setup_id": {"$ref": "#/$defs/nonBlank"},
+              "request": {"$ref": "#/$defs/httpRequest"},
+              "assertions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/jsonAssertion"}}
+            }
+          }
+        },
+        "browser_phases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["phase_id", "after_setup", "scenario_ids"],
+            "properties": {
+              "phase_id": {"$ref": "#/$defs/nonBlank"},
+              "after_setup": {"type": "boolean"},
+              "scenario_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonBlank"}}
+            }
+          }
+        },
+        "browser_scenarios": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["scenario_id", "trigger_path", "actions", "assertions", "redaction_locators"],
+            "properties": {
+              "scenario_id": {"$ref": "#/$defs/nonBlank"},
+              "trigger_path": {"type": "string", "pattern": "^/"},
+              "actions": {"type": "array", "items": {"type": "object"}},
+              "assertions": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+              "redaction_locators": {"type": "array", "items": {"type": "object"}},
+              "preflight_assertions": {"type": "array", "items": {"type": "object"}}
+            }
+          }
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["review_status", "reviewed_by", "reviewed_at"],
+      "properties": {
+        "review_status": {"enum": ["draft", "approved", "rejected"]},
+        "reviewed_by": {"$ref": "#/$defs/nonBlank"},
+        "reviewed_at": {"type": "string", "format": "date-time"}
+      }
+    }
+  },
+  "$defs": {
+    "nonBlank": {"type": "string", "minLength": 1},
+    "path": {"type": "string", "minLength": 1, "not": {"pattern": "(^/|(^|/)\\.\\.(/|$))"}},
+    "businessRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["business_rule_id", "text", "source_refs"],
+      "properties": {
+        "business_rule_id": {"$ref": "#/$defs/nonBlank"},
+        "text": {"$ref": "#/$defs/nonBlank"},
+        "source_refs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonBlank"}}
+      }
+    },
+    "intentCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message", "any_of"],
+      "properties": {
+        "message": {"$ref": "#/$defs/nonBlank"},
+        "any_of": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/nonBlank"}},
+        "patterns": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/nonBlank"}}
+      }
+    },
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["criterion_id", "business_rule_refs", "assertion_type", "subject", "operator", "expected", "test_case_refs"],
+      "properties": {
+        "criterion_id": {"$ref": "#/$defs/nonBlank"},
+        "business_rule_refs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonBlank"}},
+        "assertion_type": {"enum": ["source", "api", "ui"]},
+        "subject": {"$ref": "#/$defs/nonBlank"},
+        "operator": {"enum": ["equals", "contains", "count_equals", "exists"]},
+        "expected": {},
+        "test_case_refs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonBlank"}}
+      }
+    },
+    "testCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["test_case_id", "title", "level", "execution_mode", "business_rule_refs", "acceptance_criteria_refs", "preconditions", "steps", "expected_results", "test_data_refs"],
+      "properties": {
+        "test_case_id": {"$ref": "#/$defs/nonBlank"},
+        "title": {"$ref": "#/$defs/nonBlank"},
+        "level": {"enum": ["source", "api", "ui"]},
+        "execution_mode": {"enum": ["deterministic", "browser"]},
+        "business_rule_refs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonBlank"}},
+        "acceptance_criteria_refs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonBlank"}},
+        "preconditions": {"type": "array", "items": {"$ref": "#/$defs/nonBlank"}},
+        "steps": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/nonBlank"}},
+        "expected_results": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/nonBlank"}},
+        "test_data_refs": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/nonBlank"}}
+      }
+    },
+    "dataSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["test_data_id", "test_case_refs", "setup_actions", "cleanup_policy"],
+      "properties": {
+        "test_data_id": {"$ref": "#/$defs/nonBlank"},
+        "test_case_refs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonBlank"}},
+        "setup_actions": {"type": "array", "items": {"type": "object"}},
+        "cleanup_policy": {"enum": ["isolated_environment", "delete_after_run", "retain"]}
+      }
+    },
+    "testDataAssertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assertion_id", "observe_via", "subject", "operator", "expected"],
+      "properties": {
+        "assertion_id": {"$ref": "#/$defs/nonBlank"},
+        "observe_via": {"enum": ["response", "api", "database", "ui", "fixture", "test"]},
+        "subject": {"$ref": "#/$defs/nonBlank"},
+        "operator": {"enum": ["equals", "contains", "count_equals", "exists", "satisfies"]},
+        "expected": {}
+      }
+    },
+    "testDataOutputBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["variable", "source", "path", "required"],
+      "properties": {
+        "variable": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+        "source": {"enum": ["response", "database", "ui", "fixture"]},
+        "path": {"$ref": "#/$defs/nonBlank"},
+        "required": {"type": "boolean"}
+      }
+    },
+    "dataGenerationStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["step_id", "sequence", "channel", "business_action", "inputs", "depends_on", "output_bindings", "postconditions"],
+      "properties": {
+        "step_id": {"$ref": "#/$defs/nonBlank"},
+        "sequence": {"type": "integer", "minimum": 1},
+        "channel": {"enum": ["fixture", "http", "sql", "ui"]},
+        "business_action": {"$ref": "#/$defs/nonBlank"},
+        "target": {"$ref": "#/$defs/nonBlank"},
+        "screen_ref": {"$ref": "#/$defs/nonBlank"},
+        "ui_action_ref": {"$ref": "#/$defs/nonBlank"},
+        "inputs": {"type": "object"},
+        "depends_on": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/nonBlank"}},
+        "output_bindings": {"type": "array", "items": {"$ref": "#/$defs/testDataOutputBinding"}},
+        "postconditions": {"type": "array", "items": {"$ref": "#/$defs/testDataAssertion"}}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"channel": {"const": "ui"}}},
+          "then": {"required": ["screen_ref", "ui_action_ref"]},
+          "else": {"required": ["target"]}
+        }
+      ]
+    },
+    "dataGenerationFlow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["flow_id", "title", "test_data_refs", "test_case_refs", "steps", "final_assertions", "cleanup_policy", "cleanup_steps"],
+      "properties": {
+        "flow_id": {"$ref": "#/$defs/nonBlank"},
+        "title": {"$ref": "#/$defs/nonBlank"},
+        "test_data_refs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonBlank"}},
+        "test_case_refs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonBlank"}},
+        "steps": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/dataGenerationStep"}},
+        "final_assertions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/testDataAssertion"}},
+        "cleanup_policy": {"enum": ["isolated_environment", "delete_after_run", "retain"]},
+        "cleanup_steps": {"type": "array", "items": {"$ref": "#/$defs/dataGenerationStep"}}
+      }
+    },
+    "httpRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path"],
+      "properties": {
+        "method": {"enum": ["GET", "POST"]},
+        "path": {"type": "string", "pattern": "^/(?!/)"},
+        "query": {"type": "object"},
+        "json": {}
+      }
+    },
+    "jsonAssertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "operator"],
+      "properties": {
+        "path": {"type": "string"},
+        "operator": {"enum": ["equals", "count_equals", "contains", "exists"]},
+        "expected": {}
+      }
+    }
+  }
+}

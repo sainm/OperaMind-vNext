@@ -1,0 +1,102 @@
+{
+  "case_id": "visiondemo-expense-employee-cross-screen",
+  "dataset_stage": "silver",
+  "base_repository_revision": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6",
+  "must_include_candidates": [
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/service/ExpenseService.java",
+      "symbols": ["saveWithDetails", "search"],
+      "expected_action": "modify_candidate",
+      "reason": "未指定の申請番号を保存前に自動採番し、一覧の空ステータスを全件検索へ正規化する境界"
+    },
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/service/ExpenseNumberGenerator.java",
+      "symbols": ["nextNumber"],
+      "expected_action": "add_candidate",
+      "reason": "20文字以内の一意な申請番号を衝突確認付きで生成する分離可能な責務"
+    },
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/repository/ExpenseRepository.java",
+      "symbols": ["existsByExpenseNo"],
+      "expected_action": "modify_candidate",
+      "reason": "申請番号候補の衝突を保存前に確認する"
+    },
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/controller/EmployeeController.java",
+      "symbols": ["getOne", "EmployeeResponse"],
+      "expected_action": "modify_candidate",
+      "reason": "社員編集画面に必要な値だけを返し、Hibernate の遅延ロード代理を JSON 応答へ漏らさない"
+    },
+    {
+      "path": "VisionDemo/pom.xml",
+      "symbols": ["spring-boot-starter-test"],
+      "expected_action": "modify_candidate",
+      "reason": "自動採番、空ステータス正規化、社員詳細 DTO の回帰テストを実行可能にする"
+    },
+    {
+      "path": "VisionDemo/src/main/webapp/WEB-INF/jsp/fragments/expense-create.jsp",
+      "symbols": ["exp-wiz-submit", "postJSON"],
+      "expected_action": "review_only",
+      "reason": "画面は申請番号を入力せず保存APIを呼び出す"
+    },
+    {
+      "path": "VisionDemo/src/main/webapp/WEB-INF/jsp/fragments/employee-list.jsp",
+      "symbols": ["editEmployee", "ef-name"],
+      "expected_action": "review_only",
+      "reason": "同じ社員を別画面で更新する操作アンカー"
+    },
+    {
+      "path": "VisionDemo/src/main/webapp/WEB-INF/jsp/fragments/expense-list.jsp",
+      "symbols": ["expense-table-container", "doSearch"],
+      "expected_action": "review_only",
+      "reason": "作成した経費と最新の申請者名を最終確認する一覧アンカー"
+    }
+  ],
+  "acceptable_edit_alternatives": [
+    {
+      "require_at_least_one": [
+        "VisionDemo/src/main/java/com/visiondemo/service/ExpenseService.java#saveWithDetails",
+        "VisionDemo/src/main/java/com/visiondemo/controller/ExpenseController.java#save"
+      ],
+      "required_behavior": "expenseNo が未指定の場合だけ、20文字以内の一意な申請番号を保存前に採番する"
+    }
+  ],
+  "required_test_scope": [
+    {
+      "target": "新規申請画面からの経費登録",
+      "expected": "DB制約違反なく一意な申請番号付きで登録される",
+      "acceptable_test_layers": ["service", "controller", "browser"]
+    },
+    {
+      "target": "経費作成後の社員名更新と申請一覧表示",
+      "expected": "同じ経費行に更新後の社員名が表示される",
+      "acceptable_test_layers": ["browser"]
+    },
+    {
+      "target": "社員詳細 API の編集画面向け応答",
+      "expected": "部署 ID を含み、Hibernate 代理や children 遅延集合を含まない JSON が返る",
+      "acceptable_test_layers": ["controller", "browser"]
+    },
+    {
+      "target": "申請一覧のデフォルト検索",
+      "expected": "null、空文字、空白のステータスを未指定として扱い、作成した経費を含む全件を返す",
+      "acceptable_test_layers": ["service", "api", "browser"]
+    }
+  ],
+  "must_not_modify_symbols": [
+    "EmployeeController#delete",
+    "ExpenseService#submit",
+    "ExpenseDetail#setAmount"
+  ],
+  "must_not_modify_paths": [],
+  "known_base_behavior": {
+    "expense_create_sends_expense_no": false,
+    "expense_no_database_nullable": false,
+    "employee_edit_available": true,
+    "employee_detail_serializes_department": false,
+    "empty_status_returns_all_expenses": false,
+    "expense_list_renders_employee_name": true
+  },
+  "isolated_e2e_observation_ref": "readiness/evidence/visiondemo-cross-screen-e2e-20260718.json",
+  "review_status": "needs_developer_review"
+}

@@ -7,10 +7,16 @@
   "required": [
     "artifact_type",
     "schema_version",
+    "ingestion_result_event_id",
     "ingestion_batch_id",
     "project_id",
     "target_snapshot_id",
     "document_profile_refs",
+    "document_profiles",
+    "source_content_digest",
+    "target_content_digest",
+    "source_extractor_ref",
+    "target_extractor_ref",
     "embedding_index_status",
     "eligible_index_target_count",
     "indexed_target_count",
@@ -19,20 +25,76 @@
   "properties": {
     "artifact_type": {"const": "DocumentIngestionResult"},
     "schema_version": {"const": "v1"},
+    "ingestion_result_event_id": {"type": "string", "minLength": 1},
     "ingestion_batch_id": {"type": "string", "minLength": 1},
     "project_id": {"type": "string", "minLength": 1},
     "source_snapshot_id": {"type": "string"},
     "target_snapshot_id": {"type": "string", "minLength": 1},
     "analysis_case_id": {"type": "string"},
     "document_profile_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "document_profiles": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "profile_version_id",
+          "binding_key",
+          "activation_event_id",
+          "profile_ref"
+        ],
+        "properties": {
+          "profile_version_id": {"type": "string", "minLength": 1},
+          "binding_key": {"type": "string", "minLength": 1},
+          "activation_event_id": {"type": "string", "minLength": 1},
+          "profile_ref": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "source_content_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "target_content_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_extractor_ref": {"type": "string", "minLength": 1},
+    "target_extractor_ref": {"type": "string", "minLength": 1},
     "uploaded_document_count": {"type": "integer", "minimum": 0},
     "changed_document_count": {"type": "integer", "minimum": 0},
     "structured_change_count": {"type": "integer", "minimum": 0},
     "eligible_index_target_count": {"type": "integer", "minimum": 0},
     "indexed_target_count": {"type": "integer", "minimum": 0},
-    "embedding_profile_ref": {"type": "string"},
+    "search_index_build_id": {"type": "string", "minLength": 1},
+    "embedding_profile_version_id": {"type": "string", "minLength": 1},
+    "embedding_profile_binding_key": {"type": "string", "minLength": 1},
+    "embedding_profile_ref": {"type": "string", "minLength": 1},
     "embedding_index_status": {"enum": ["not_started", "indexing", "ready", "failed", "stale"]},
     "status": {"enum": ["ingesting", "indexing_rag", "ready_for_impact", "needs_review", "blocked", "failed"]},
     "blocking_reasons": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "embedding_index_status": {"not": {"const": "not_started"}}
+        },
+        "required": ["embedding_index_status"]
+      },
+      "then": {
+        "required": [
+          "search_index_build_id",
+          "embedding_profile_version_id",
+          "embedding_profile_binding_key",
+          "embedding_profile_ref"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {"status": {"const": "ready_for_impact"}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {"embedding_index_status": {"const": "ready"}}
+      }
+    }
+  ]
 }

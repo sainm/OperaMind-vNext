@@ -1,0 +1,19 @@
+{
+  "case_id": "visiondemo-employee-blank-name",
+  "dataset_stage": "golden",
+  "portability_status": "reviewed_fixture_with_external_before",
+  "project_id": "visiondemo",
+  "document_sources": {
+    "changed_file": "02_画面設計書_社員情報一覧.xlsx",
+    "before_uri": "urn:sha256:dcbe937c08009ced138c231bdcc462f05046fa6e1daa0dc03063f7b5e7cb8058",
+    "before_sha256": "dcbe937c08009ced138c231bdcc462f05046fa6e1daa0dc03063f7b5e7cb8058",
+    "after_fixture": "fixtures/after.xlsx",
+    "after_sha256": "e43b4d24eba1bda1a9a588c1ec81f4faf3af4d1b0df87e715a89086a2c05e4b0"
+  },
+  "target_repository": {
+    "url": "git@github.com:d-e-chen/OperaMind-demo.git",
+    "base_commit": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6"
+  },
+  "generated_by": "artifact-tool-from-reviewed-source-v1",
+  "review_status": "approved"
+}

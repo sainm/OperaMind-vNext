@@ -1,0 +1,63 @@
+{
+  "case_id": "visiondemo-expense-status-filter-golden",
+  "project_id": "visiondemo",
+  "dataset_stage": "golden",
+  "required_contexts": [
+    {
+      "document": "02_画面設計書_経費精算申請一覧.xlsx",
+      "locations": ["画面項目一覧!A5:I5", "イベント一覧!A5:G6", "画面概要!A2"],
+      "reason": "Direct UI element change, search/reset behavior and screen purpose",
+      "canonical_node_ids": ["visiondemo:screen-expense-list:status-filter"]
+    },
+    {
+      "document": "03_プログラム設計書_経費精算申請.xlsx",
+      "locations": ["メソッド一覧!A5:F5"],
+      "reason": "Search contract explicitly requires null or empty status to return all expenses",
+      "canonical_node_ids": ["visiondemo:expense-search:empty-status-contract"]
+    },
+    {
+      "document": "04_API詳細設計書_経費精算申請.xlsx",
+      "locations": ["API一覧!A6:G6", "Object!A1:G8"],
+      "reason": "GET /expense/api/search is the UI search endpoint",
+      "canonical_node_ids": ["visiondemo:expense-api:search-endpoint"]
+    }
+  ],
+  "expected_query_concepts": [
+    "expense list status filter default all",
+    "expense search empty status returns all",
+    "GET /expense/api/search",
+    "returned status filter"
+  ],
+  "must_exclude_as_primary_context": [
+    "Order management status filter",
+    "System parameter management",
+    "Expense submit API response",
+    "Expense detail amount precision"
+  ],
+  "canonical_id_status": "frozen",
+  "review_status": "approved",
+  "query_expectations": [
+    {
+      "query_purpose": "business_behavior",
+      "required_candidate_refs": ["visiondemo:screen-expense-list:status-filter"],
+      "irrelevant_candidate_refs": ["order-management:status-filter"]
+    },
+    {
+      "query_purpose": "precise_anchor",
+      "required_candidate_refs": ["visiondemo:expense-search:empty-status-contract"],
+      "irrelevant_candidate_refs": ["visiondemo:expense-submit:response"]
+    },
+    {
+      "query_purpose": "acceptance_criteria",
+      "required_candidate_refs": ["visiondemo:expense-api:search-endpoint"],
+      "irrelevant_candidate_refs": ["visiondemo:expense-detail:amount-precision"]
+    }
+  ],
+  "quality_thresholds": {
+    "min_recall_at_5": 1.0,
+    "min_recall_at_10": 1.0,
+    "min_mrr": 0.9,
+    "max_irrelevant_rate": 0.0,
+    "max_cross_project_leaks": 0
+  }
+}

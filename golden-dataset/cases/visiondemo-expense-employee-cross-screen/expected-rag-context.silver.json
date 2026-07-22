@@ -1,0 +1,42 @@
+{
+  "case_id": "visiondemo-expense-employee-cross-screen",
+  "project_id": "visiondemo",
+  "dataset_stage": "silver",
+  "required_contexts": [
+    {
+      "document": "経費精算新規申請画面設計",
+      "locations": ["基本情報", "明細入力", "申請イベント"],
+      "reason": "画面入力、保存要求、保存後の一覧遷移を特定するため"
+    },
+    {
+      "document": "社員情報管理画面設計",
+      "locations": ["社員編集モーダル", "保存イベント", "社員検索結果"],
+      "reason": "別画面で同じ申請者を更新する操作を特定するため"
+    },
+    {
+      "document": "経費精算申請一覧画面設計",
+      "locations": ["検索条件", "一覧項目", "初期検索イベント"],
+      "reason": "作成した経費と最新の申請者名を一覧で検証するため"
+    },
+    {
+      "document": "経費精算API詳細設計",
+      "locations": ["POST /expense/api/save", "GET /expense/api/search", "DELETE /expense/api/{id}"],
+      "reason": "出力ID、後置条件、失敗時クリーンアップを束縛するため"
+    }
+  ],
+  "expected_query_concepts": [
+    "expense automatic number generation",
+    "expense create screen save",
+    "employee edit latest name",
+    "expense list cross-screen verification",
+    "test data cleanup"
+  ],
+  "must_exclude_as_primary_context": [
+    "Order filter normalization",
+    "System parameter management",
+    "Organization tree deletion",
+    "Expense status All filter"
+  ],
+  "canonical_id_status": "to_be_filled_after_vnext_ingestion",
+  "review_status": "needs_review"
+}

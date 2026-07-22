@@ -1,0 +1,32 @@
+{
+  "evidence_format_version": "v1",
+  "evidence_id": "readiness-full_local_regression-2dcf14680313bcc718d5942c",
+  "gate_id": "full_local_regression",
+  "evidence_type": "test_report",
+  "outcome": "passed",
+  "observed_at": "2026-07-19T12:35:56.339962+08:00",
+  "review_status": "verified",
+  "reviewed_by": [
+    "automation:operamind-readiness"
+  ],
+  "subject": {
+    "failed": 0,
+    "passed": 381,
+    "skipped": 0,
+    "collected": 381,
+    "test_command": [
+      ".venv/bin/pytest",
+      "-q",
+      "--ignore=tests/integration/test_live_embedding_provider.py",
+      "--ignore=tests/integration/test_golden_screen_change.py"
+    ],
+    "excluded_tests": [
+      "tests/integration/test_live_embedding_provider.py",
+      "tests/integration/test_golden_screen_change.py"
+    ],
+    "browser_version": "Chromium 150.0.7871.125",
+    "database_version": "PostgreSQL 18.4 (Homebrew) on aarch64-apple-darwin25.4.0, compiled by Apple clang version 21.0.0 (clang-2100.0.123.102), 64-bit",
+    "source_tree_sha256": "ccbf47dc83d3d47106515850fae57c9c05c412c5688eaf9b669d4101b2b9c1bd",
+    "source_tree_algorithm": "operamind-source-tree-v1"
+  }
+}

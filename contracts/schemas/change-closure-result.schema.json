@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/change-closure-result.schema.json",
+  "title": "ChangeClosureResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifact_type", "schema_version", "closure_result_id", "change_request_id", "project_id", "input_mode", "artifact_refs", "structured_change_refs", "modified_paths", "test_results", "ui_status", "business_coverage_percent", "status", "unresolved_items"],
+  "properties": {
+    "artifact_type": {"const": "ChangeClosureResult"},
+    "schema_version": {"const": "v1"},
+    "closure_result_id": {"type": "string", "minLength": 1},
+    "change_request_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "input_mode": {"enum": ["documents", "natural_language", "hybrid"]},
+    "artifact_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "uniqueItems": true},
+    "structured_change_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "uniqueItems": true},
+    "modified_paths": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "test_results": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["test_case_id", "status", "evidence_refs"],
+        "properties": {
+          "test_case_id": {"type": "string", "minLength": 1},
+          "status": {"enum": ["passed", "failed", "blocked"]},
+          "evidence_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+          "summary": {"type": "string"}
+        }
+      }
+    },
+    "ui_status": {"enum": ["passed", "failed", "blocked", "not_impacted"]},
+    "business_coverage_percent": {"type": "number", "minimum": 0, "maximum": 100},
+    "status": {"enum": ["passed", "failed", "blocked", "reanalysis_required"]},
+    "unresolved_items": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+  }
+}

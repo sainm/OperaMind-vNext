@@ -1,0 +1,38 @@
+{
+  "case_id": "visiondemo-expense-employee-cross-screen",
+  "project_id": "visiondemo",
+  "dataset_stage": "silver",
+  "ui_impact_status": "impacted",
+  "scenarios": [
+    {
+      "scenario_id": "expense-create-employee-update-list-verify",
+      "title": "経費作成後に申請者を更新し、申請一覧で最新名を確認する",
+      "preconditions": [
+        "固定リビジョンから起動した隔離環境である",
+        "テスト専用社員がAPIで作成され、そのIDが後続画面に渡される"
+      ],
+      "steps": [
+        "新規申請画面でテスト社員、申請日、摘要、明細金額を入力して申請する",
+        "保存応答から expense_id と expense_no を取得する",
+        "社員情報管理画面で同じ社員の氏名を更新して保存する",
+        "申請一覧画面で申請中を検索し、expense_no と更新後氏名を含む行を確認する"
+      ],
+      "expected_visible_results": [
+        "経費登録が成功し、一意な申請番号が表示対象になる",
+        "社員画面の一覧に更新後氏名が表示される",
+        "申請一覧の同じ経費行に申請番号、更新後氏名、金額が表示される"
+      ],
+      "evidence": [
+        "経費作成画面の確認ステップと保存後スクリーンショット",
+        "POST /expense/api/save のサニタイズ済み応答概要",
+        "社員更新後の一覧スクリーンショット",
+        "申請一覧の行断言とスクリーンショット",
+        "経費と社員のクリーンアップ結果"
+      ]
+    }
+  ],
+  "expected_current_base_outcome": {
+    "expense-create-employee-update-list-verify": "Base failed at missing expenseNo; sequential isolated fixes then exposed the employee-detail Hibernate proxy and blank-status search defects. All three fixes passed with EXP-20260719-0C60E2A / OperaMind 検証後 / ¥12,345 / 申請中; cleanup passed."
+  },
+  "review_status": "needs_business_and_qa_review"
+}

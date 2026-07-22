@@ -9,7 +9,9 @@
 ```text
 React Operations Web
         |
-FastAPI Control Plane / MCP Server
+FastAPI Control Plane -- local Bridge --> VS Code Extension --> GitHub Copilot
+        |                                                    |
+        +-------------------- MCP Server <-------------------+
         |
         +-- Document Ingestion and Semantic Diff
         +-- Embedding Index and Context Rebuilder
@@ -29,8 +31,10 @@ MVP 默认使用一个 Python Control Plane，避免同时维护 Java 和 Python
 - Project、Repository 和不可变 Revision
 - Document、DocumentVersion、DocumentNode、Fact、Relation 和 Snapshot
 - StructuredChange 和 ContextPackage
-- CodeGraphSnapshot、CodeFile、CodeSymbol、CodeEdge 和 Test Binding
+- CodeGraphSnapshot、CodeFile、CodeSymbol、CodeEdge、Test Binding、RuntimeRouteEvidence 和 UnresolvedEvidenceReport 历史
 - ImpactReport、Confirmation、EditPacket 和 EditResult
+- CopilotCodingTask、Bridge Event、Command/Edit Result 绑定
+- OrchestrationTask、Dependency、Claim Lease、Result 和 Event 台账
 - VerificationScenario、UiExecutionRun、Evidence 和 ValidationResult
 
 `Derived Index`
@@ -63,9 +67,13 @@ ingesting
 ## 5. Web、MCP 和 VS Code
 
 - Web：项目接入、文档导入、报告审阅、批准、UI 执行和证据查看。
-- MCP：向 VS Code 提供 ready case、Impact Report、确认和 Edit Packet 工具。
-- VS Code Copilot：读取本地批准文件并修改代码，不负责定义影响范围和最终验收。
+- Local Bridge：Web 只向匹配当前 Workspace 的 VS Code 扩展发布任务 ID 和通知；Bearer Token 只保存在 VS Code SecretStorage，入口只允许 loopback。Task claim 使用 60 秒 lease，heartbeat 续租；断线后可按持久化 Task ID resume，lease 失效后由同 Workspace 新 consumer 追加 `claim_recovered` 并接管。用户在 VS Code 确认后 MCP 才能取得任务上下文。取消保留终端 Event，重试创建带 retry lineage 和 attempt number 的新 Task，不改写旧 Task。
+- MCP：当前通过 stdio 提供十三个有界工具。九个兼容细粒度工具处理 ready case、Report、Packet、Grant、命令、Diff、UI Plan 和 Validation Result；四个 Coding Task 工具从任务身份推导全部范围，并把测试摘要、path-only Diff 和 committed 结果自动回传 Web。分析启动、人类确认、UI 原始结果写入仍不开放给模型。
+- VS Code Copilot：按 `copilot_coding_plan` 读取本地批准文件并修改代码，不负责定义影响范围和最终验收。
+- Provider Boundary：`CopilotCodingTask` 的 `coding_task_provider_v1` 在 POC 使用 `local_bridge`；生产 `api_provider` 复用同一契约，当前不实现远程调用。
 - Playwright Runner：在绑定的 Build/Deployment 上执行 OperaMind 生成或复用的 UI 场景。
+
+Change Automation 的每个当前 Action 会同步为 Agent-neutral `OrchestrationTask`。Task Definition 只声明 Capability、输入输出、依赖和验收条件；Agent、Subagent、人工使用同一 Claim／Lease／Result 协议，具体执行者不进入业务状态机。当前 Scheduler 对每个 Automation Run 只允许一个活动 Claim。未来启用多 Subagent 时只调整 Capability 匹配和并发策略。人工判断仍由 Canonical 人工确认 Artifact 验收，领取 Task 本身不等于批准。CopilotCodingTask 是代码修改 Action 的 local Bridge 配送适配器，不替代通用任务协议。
 
 ## 6. 可复现性
 

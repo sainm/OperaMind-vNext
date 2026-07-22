@@ -1,9 +1,14 @@
 # 真实 RAG 设计
 
+当前可执行实现、命令、验证证据和剩余边界见 `P2-REAL-RAG.md`。
+
+当前主链路已实现到确定性的 Context Package，包括 Profile 驱动的 Relation Build、完整检索请求身份、Artifact SHA-256 读取复核、Golden Dataset 检索质量门和显式 opt-in 的真实 Provider live 合约测试入口。MVP 不依赖模型压缩；实际 Provider 通过记录与冻结 Golden 数据证据仍是 P2 readiness 未完成项。
+
 ## 1. 正式主链路
 
 ```text
 Canonical Snapshot committed
+  -> Document Relation Build ready
   -> Embedding Build started
   -> eligible node coverage = 100%
   -> RAG index ready
@@ -38,6 +43,8 @@ relation labels
 
 保存 input digest。相同 digest、模型和预处理版本复用 embedding，避免增量 Snapshot 重复计算。
 
+Relation Build 必须先于 Embedding Build。索引记录其使用的 current Relation Build ID；关系规则更新会使旧索引 stale，防止 relation labels 与向量内容漂移。无唯一目标的规则结果进入 unresolved 台账，不生成推测边。
+
 ## 4. 混合检索
 
 每个 Structured Change 至少生成：
@@ -67,6 +74,7 @@ relation labels
 - Model 或 dimension 漂移导致索引 stale。
 - 任何跨 Project/Snapshot 命中都属于数据隔离缺陷。
 - Context Package 超 Token 时按变化组拆分，不截断 Canonical 候选账本。
+- Context Package 固定 ingestion、Embedding Profile 版本/绑定、Top-K 和邻接距离；同 ID 参数漂移不是重放，必须失败。
 
 ## 6. 质量指标
 

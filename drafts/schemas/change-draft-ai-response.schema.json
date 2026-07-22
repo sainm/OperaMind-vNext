@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/drafts/change-draft-ai-response.schema.json",
+  "title": "ChangeDraftAiResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "case", "document_operations", "confidence", "questions"],
+  "properties": {
+    "schema_version": {"const": "v1"},
+    "case": {"type": "object"},
+    "document_operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation_id", "sheet", "cell", "field", "before", "after", "source_ref"],
+        "properties": {
+          "operation_id": {"$ref": "#/$defs/nonBlank"},
+          "sheet": {"$ref": "#/$defs/nonBlank"},
+          "cell": {"type": "string", "pattern": "^[A-Z]+[1-9][0-9]*$"},
+          "field": {"$ref": "#/$defs/nonBlank"},
+          "before": {},
+          "after": {},
+          "source_ref": {"type": "string", "pattern": "^[^#]+#[^!]+![A-Z]+[1-9][0-9]*$"}
+        }
+      }
+    },
+    "confidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["document_change", "code_scope", "edit_plan", "verification_plan"],
+      "properties": {
+        "document_change": {"$ref": "#/$defs/confidence"},
+        "code_scope": {"$ref": "#/$defs/confidence"},
+        "edit_plan": {"$ref": "#/$defs/confidence"},
+        "verification_plan": {"$ref": "#/$defs/confidence"}
+      }
+    },
+    "questions": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/question"}
+    }
+  },
+  "$defs": {
+    "nonBlank": {"type": "string", "minLength": 1},
+    "confidence": {"enum": ["high", "medium", "low"]},
+    "question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["question_id", "step", "prompt", "reason", "options"],
+      "properties": {
+        "question_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+        "step": {"enum": ["document_change", "code_scope", "edit_plan", "verification_plan"]},
+        "prompt": {"$ref": "#/$defs/nonBlank"},
+        "reason": {"$ref": "#/$defs/nonBlank"},
+        "recommended_option_id": {"type": "string", "minLength": 1},
+        "options": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["option_id", "label", "decision", "updates"],
+            "properties": {
+              "option_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+              "label": {"$ref": "#/$defs/nonBlank"},
+              "decision": {"enum": ["accept", "revise"]},
+              "updates": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["path", "value"],
+                  "properties": {
+                    "path": {"type": "string", "pattern": "^/(case/(requirements|analysis|impact_candidates|edit|acceptance_criteria|test_cases|data_sets|execution)|document_operations)(/.*)?$"},
+                    "value": {}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

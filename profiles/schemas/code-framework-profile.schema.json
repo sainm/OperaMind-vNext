@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/profiles/code-framework-profile.schema.json",
+  "title": "CodeFrameworkProfile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "profile_type",
+    "profile_id",
+    "profile_version",
+    "languages",
+    "framework_markers",
+    "default_scan_roots",
+    "excluded_globs",
+    "anchor_extractors",
+    "relation_policies",
+    "unknown_framework_policy"
+  ],
+  "properties": {
+    "profile_type": {"const": "CodeFrameworkProfile"},
+    "profile_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "profile_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "languages": {"$ref": "#/$defs/non_empty_unique_strings"},
+    "framework_markers": {"$ref": "#/$defs/non_empty_unique_strings"},
+    "default_scan_roots": {"$ref": "#/$defs/non_empty_unique_strings"},
+    "excluded_globs": {"$ref": "#/$defs/non_empty_unique_strings"},
+    "anchor_extractors": {"$ref": "#/$defs/non_empty_unique_strings"},
+    "relation_policies": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/relation_policy"},
+      "minItems": 1
+    },
+    "unknown_framework_policy": {"const": "index_symbols_and_require_review"}
+  },
+  "$defs": {
+    "non_empty_unique_strings": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "relation_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["change_domain", "edge_types", "max_depth", "include_reverse"],
+      "properties": {
+        "change_domain": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "edge_types": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "contains",
+              "imports",
+              "calls",
+              "implements",
+              "exposes",
+              "reads",
+              "writes",
+              "maps_to",
+              "tests",
+              "navigates_to"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "max_depth": {"type": "integer", "minimum": 1, "maximum": 8},
+        "include_reverse": {"type": "boolean"}
+      }
+    }
+  }
+}

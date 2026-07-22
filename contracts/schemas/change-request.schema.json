@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/change-request.schema.json",
+  "title": "ChangeRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifact_type", "schema_version", "change_request_id", "project_id", "input_mode", "business_rules", "ambiguity_status", "confirmation_required"],
+  "properties": {
+    "artifact_type": {"const": "ChangeRequest"},
+    "schema_version": {"const": "v1"},
+    "change_request_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "input_mode": {"enum": ["documents", "natural_language", "hybrid"]},
+    "requirement_text": {"type": "string", "minLength": 1},
+    "source_document_ref": {"type": "string", "minLength": 1},
+    "target_document_ref": {"type": "string", "minLength": 1},
+    "business_rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["business_rule_id", "text", "source_refs"],
+        "properties": {
+          "business_rule_id": {"type": "string", "minLength": 1},
+          "text": {"type": "string", "minLength": 1},
+          "source_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+        }
+      }
+    },
+    "ambiguity_status": {"enum": ["clear", "needs_confirmation"]},
+    "confirmation_required": {"type": "boolean"},
+    "ambiguities": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"input_mode": {"enum": ["natural_language", "hybrid"]}}, "required": ["input_mode"]},
+      "then": {"required": ["requirement_text"]}
+    },
+    {
+      "if": {"properties": {"input_mode": {"enum": ["documents", "hybrid"]}}, "required": ["input_mode"]},
+      "then": {"required": ["source_document_ref", "target_document_ref"]}
+    },
+    {
+      "if": {"properties": {"ambiguity_status": {"const": "clear"}}, "required": ["ambiguity_status"]},
+      "then": {"properties": {"confirmation_required": {"const": false}, "ambiguities": {"maxItems": 0}}}
+    },
+    {
+      "if": {"properties": {"ambiguity_status": {"const": "needs_confirmation"}}, "required": ["ambiguity_status"]},
+      "then": {"required": ["ambiguities"], "properties": {"confirmation_required": {"const": true}, "ambiguities": {"minItems": 1}}}
+    }
+  ]
+}

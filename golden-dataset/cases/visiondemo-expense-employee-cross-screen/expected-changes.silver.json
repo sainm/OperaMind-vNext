@@ -1,0 +1,47 @@
+{
+  "case_id": "visiondemo-expense-employee-cross-screen",
+  "dataset_stage": "silver",
+  "expected_structured_change_count": 2,
+  "changes": [
+    {
+      "stable_key": "screen_behavior:expense-create/automatic-expense-number",
+      "fact_type": "screen_behavior",
+      "domain": "ui",
+      "change_type": "modified",
+      "business_summary": "新規申請画面で申請番号を入力しなくても、保存時に一意の申請番号を自動採番する。",
+      "field_deltas": [
+        {
+          "field": "save_precondition",
+          "before": "画面は expenseNo を送信せず、DB の NOT NULL 制約で登録に失敗する",
+          "after": "未指定の expenseNo をサービス層で自動採番して登録する",
+          "source_ref": "confirmed-requirement:cross-screen-data-flow#screen-create"
+        }
+      ],
+      "confidence": "high",
+      "review_status": "needs_review"
+    },
+    {
+      "stable_key": "business_flow:expense-employee/latest-master-data",
+      "fact_type": "business_flow",
+      "domain": "ui",
+      "change_type": "added",
+      "business_summary": "経費登録後に社員画面で申請者名を更新すると、申請一覧は同じ経費に最新の社員名を表示する。",
+      "field_deltas": [
+        {
+          "field": "cross_screen_verification",
+          "before": "単一画面の固定データ検証のみ",
+          "after": "経費作成、社員更新、申請一覧検索を同一データ系列として検証",
+          "source_ref": "confirmed-requirement:cross-screen-data-flow#update-and-list"
+        }
+      ],
+      "confidence": "medium",
+      "review_status": "needs_review"
+    }
+  ],
+  "must_not_report_as_changes": [
+    "Expense status-filter normalization",
+    "Order management behavior",
+    "Employee deletion behavior",
+    "Expense detail amount precision"
+  ]
+}

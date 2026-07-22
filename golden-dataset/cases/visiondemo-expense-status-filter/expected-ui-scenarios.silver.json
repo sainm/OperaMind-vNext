@@ -1,5 +1,6 @@
 {
   "case_id": "visiondemo-expense-status-filter",
+  "project_id": "visiondemo",
   "dataset_stage": "silver",
   "ui_impact_status": "impacted",
   "scenarios": [

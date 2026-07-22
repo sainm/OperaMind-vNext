@@ -1,0 +1,31 @@
+{
+  "audit_format_version": "v1",
+  "audit_id": "operamind-vnext-golden-dataset-1.0.0-readiness-audit",
+  "dataset_id": "operamind-vnext-golden",
+  "dataset_version": "1.0.0",
+  "manifest_path": "golden-dataset/manifest.golden.json",
+  "status": "resolved_with_recorded_limitation",
+  "findings": [
+    {
+      "code": "golden.unverified_reviewer",
+      "detail": "The rejected twelve-case attempt used dataset-reviewer@example.invalid in its manifest and REVIEW files."
+    },
+    {
+      "code": "golden.placeholder_repository",
+      "detail": "workflowdemo used an example.invalid repository URL and an unverified commit."
+    },
+    {
+      "code": "golden.selected_repository_not_reverified",
+      "detail": "GitHub access was unavailable during the audit. The user explicitly accepted the recorded repository URL, commit and document hashes in the current Codex conversation; this is not represented as an independent GitHub verification."
+    }
+  ],
+  "resolutions": [
+    "Unsupported placeholder cases were removed; only the evidence-backed VisionDemo status-filter case remains.",
+    "The current conversation identity conversation:user approved the four human-judgment steps.",
+    "The dataset was promoted to golden/frozen and a digest-bound reviewed evidence envelope was added.",
+    "The golden_dataset readiness gate now references the formal evidence by SHA-256."
+  ],
+  "remaining_limitation": [
+    "The repository commit has not been independently reverified through an authenticated GitHub session."
+  ]
+}

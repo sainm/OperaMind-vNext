@@ -1,0 +1,100 @@
+{
+  "manifest_id": "operamind-vnext-mvp-readiness",
+  "manifest_version": "0.4.59",
+  "status": "pending",
+  "gates": [
+    {
+      "gate_id": "golden_dataset",
+      "policy_version": "v1",
+      "status": "passed",
+      "evidence_refs": [
+        {
+          "evidence_id": "operamind-vnext-golden-dataset-1.0.0-reviewed-20260717T151945Z",
+          "evidence_type": "golden_manifest",
+          "path": "readiness/evidence/golden-dataset-1.0.0.json",
+          "sha256": "82935eba129d650a84d07250c984b14289728df0b6bd813cdad0fcb5a2e7574c",
+          "observed_at": "2026-07-17T15:19:45Z"
+        }
+      ],
+      "reviewers": [
+        "conversation:user"
+      ]
+    },
+    {
+      "gate_id": "embedding_provider_live",
+      "policy_version": "v1",
+      "status": "passed",
+      "evidence_refs": [
+        {
+          "evidence_id": "readiness-embedding_provider_live-d0461b5edc7f73498948b585",
+          "evidence_type": "provider_probe",
+          "path": "readiness/evidence/auto-embedding-provider-live-11d0de1b4a2661c4.json",
+          "sha256": "11d0de1b4a2661c409d1ce0f88c8306a07310a9538d9df23b24df3452627058c",
+          "observed_at": "2026-07-18T21:36:07.848003+08:00"
+        }
+      ],
+      "reviewers": [
+        "automation:operamind-readiness"
+      ]
+    },
+    {
+      "gate_id": "human_approval_e2e",
+      "policy_version": "v1",
+      "status": "passed",
+      "evidence_refs": [
+        {
+          "evidence_id": "canonical-human-visiondemo-expense-impact-confirmation-p6-v3-visiondemo-expense-approval-grant-p6-v3",
+          "evidence_type": "human_review",
+          "path": "readiness/evidence/auto-human-approval-e2e-63a84192b3f5dec9.json",
+          "sha256": "63a84192b3f5dec9a8e39022e04e49fc15c84345c319180250343a56dd8f071c",
+          "observed_at": "2026-07-18T20:17:16.839069+08:00"
+        }
+      ],
+      "reviewers": [
+        "conversation:user"
+      ]
+    },
+    {
+      "gate_id": "github_copilot_live",
+      "policy_version": "v1",
+      "status": "pending",
+      "blocking_reason": "No reviewed VS Code GitHub Copilot receipt matches a committed, in-scope, command-verified Canonical Edit Result.",
+      "evidence_refs": [],
+      "reviewers": []
+    },
+    {
+      "gate_id": "target_deployment_e2e",
+      "policy_version": "v1",
+      "status": "passed",
+      "evidence_refs": [
+        {
+          "evidence_id": "canonical-deployment-visiondemo-ui-verification-target-e2e-v2-20260719",
+          "evidence_type": "deployment_run",
+          "path": "readiness/evidence/auto-target-deployment-e2e-2aaab63f18b7045e.json",
+          "sha256": "2aaab63f18b7045e4d523c5f0c90e69699ca3750a81a577f73c5dd70badc01c6",
+          "observed_at": "2026-07-19T14:05:05.665958+08:00"
+        }
+      ],
+      "reviewers": [
+        "automation:operamind-readiness"
+      ]
+    },
+    {
+      "gate_id": "full_local_regression",
+      "policy_version": "v1",
+      "status": "passed",
+      "evidence_refs": [
+        {
+          "evidence_id": "readiness-full_local_regression-d6b18721b0cbbaabb6a9a983",
+          "evidence_type": "test_report",
+          "path": "readiness/evidence/auto-full-local-regression-c8ce135124d4dd14.json",
+          "sha256": "3029595d212565befb00846c7bb0beb7a87c4b4960a84dc98f60f96597eef01e",
+          "observed_at": "2026-07-20T13:13:06.786359+08:00"
+        }
+      ],
+      "reviewers": [
+        "automation:operamind-readiness"
+      ]
+    }
+  ]
+}

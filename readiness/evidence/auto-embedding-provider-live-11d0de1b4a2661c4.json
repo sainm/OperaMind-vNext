@@ -1,0 +1,28 @@
+{
+  "evidence_format_version": "v1",
+  "evidence_id": "readiness-embedding_provider_live-d0461b5edc7f73498948b585",
+  "gate_id": "embedding_provider_live",
+  "evidence_type": "provider_probe",
+  "outcome": "passed",
+  "observed_at": "2026-07-18T21:36:07.848003+08:00",
+  "review_status": "verified",
+  "reviewed_by": [
+    "automation:operamind-readiness"
+  ],
+  "subject": {
+    "model": "text-embedding-nomic-embed-text-v1.5",
+    "exit_code": 0,
+    "dimensions": 768,
+    "test_command": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/integration/test_live_embedding_provider.py",
+      "tests/infrastructure/test_embedding_provider.py",
+      "tests/profiles"
+    ],
+    "endpoint_origin": "http://127.0.0.1:1234",
+    "profile_version_id": "local-openai-compatible-v1@1.0.0"
+  }
+}

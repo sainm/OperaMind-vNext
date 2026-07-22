@@ -1,0 +1,6 @@
+{
+  "observed": {
+    "expense_count": 1
+  },
+  "query_ref": "visiondemo.expense-by-id"
+}

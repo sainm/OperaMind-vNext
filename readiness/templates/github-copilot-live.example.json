@@ -1,0 +1,33 @@
+{
+  "evidence_format_version": "v1",
+  "evidence_id": "replace-with-copilot-session-evidence-id",
+  "gate_id": "github_copilot_live",
+  "evidence_type": "copilot_session",
+  "outcome": "passed",
+  "observed_at": "2026-07-17T00:00:00Z",
+  "review_status": "pending",
+  "reviewed_by": [],
+  "subject": {
+    "project_id": "replace-with-project-id",
+    "analysis_case_id": "replace-with-analysis-case-id",
+    "coding_task_id": "replace-with-coding-task-id",
+    "edit_packet_id": "replace-with-edit-packet-id",
+    "approval_grant_id": "replace-with-approval-grant-id",
+    "base_repository_revision": "replace-with-base-repository-revision",
+    "result_repository_revision": "replace-with-result-repository-revision",
+    "mcp_protocol_version": "2025-11-25",
+    "tool_approval_status": "confirmed",
+    "vscode_session_id": "replace-with-vscode-session-id",
+    "vscode_request_id": "replace-with-vscode-request-id",
+    "vscode_response_id": "replace-with-vscode-response-id",
+    "copilot_extension_version": "replace-with-copilot-extension-version",
+    "copilot_model_id": "replace-with-copilot-model-id",
+    "session_transcript_sha256": "replace-with-64-character-sha256",
+    "completed_mcp_tools": [
+      "copilot_get_coding_task",
+      "copilot_run_task_command",
+      "copilot_validate_task_diff",
+      "copilot_record_task_result"
+    ]
+  }
+}

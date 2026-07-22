@@ -1,0 +1,14 @@
+{
+  "actions": [
+    {
+      "action_id": "select-approved",
+      "kind": "select_option",
+      "status": "passed"
+    },
+    {
+      "action_id": "search-approved",
+      "kind": "click",
+      "status": "passed"
+    }
+  ]
+}

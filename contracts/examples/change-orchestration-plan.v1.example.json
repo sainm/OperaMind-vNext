@@ -1,0 +1,39 @@
+{
+  "artifact_type": "ChangeOrchestrationPlan",
+  "schema_version": "v1",
+  "orchestration_id": "orchestration-expense-status",
+  "change_request_id": "change-expense-status",
+  "project_id": "visiondemo",
+  "analysis_case_id": "case-expense-status",
+  "status": "ready",
+  "structured_change_refs": ["change-expense-status-filter"],
+  "impact_report_id": "impact-expense-status",
+  "reviewed_case_id": "visiondemo-expense-status-filter-golden",
+  "reviewed_case_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "repository_revision": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6",
+  "code_scope": [
+    {
+      "impact_item_id": "impact-expense-service",
+      "target_path": "VisionDemo/src/main/java/com/visiondemo/service/ExpenseService.java",
+      "target_symbols": ["ExpenseService#search"],
+      "recommended_action": "modify",
+      "test_file_refs": []
+    }
+  ],
+  "artifact_refs": {
+    "acceptance_criteria_id": "acceptance-expense-status",
+    "test_plan_id": "test-plan-expense-status",
+    "test_data_plan_id": "test-data-expense-status",
+    "coverage_report_id": "coverage-expense-status"
+  },
+  "ui_scenarios": [
+    {
+      "scenario_id": "expense-filter-default-all",
+      "title": "経費一覧の初期表示ですべてを表示する",
+      "test_data_refs": ["test-data-default-seed"],
+      "steps": ["経費一覧画面を開く", "初期表示を確認する"],
+      "expected_results": ["すべての経費が表示される"]
+    }
+  ],
+  "blocking_reasons": []
+}

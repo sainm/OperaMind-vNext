@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/test-case-change-proposal.schema.json",
+  "title": "TestCaseChangeProposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_type",
+    "schema_version",
+    "proposal_id",
+    "change_request_id",
+    "project_id",
+    "source_orchestration_id",
+    "source_test_plan_id",
+    "instruction",
+    "analysis_status",
+    "operations",
+    "ambiguities",
+    "blocking_reasons"
+  ],
+  "properties": {
+    "artifact_type": {"const": "TestCaseChangeProposal"},
+    "schema_version": {"const": "v1"},
+    "proposal_kind": {"enum": ["modification", "undo"]},
+    "undo_of_revision_id": {"$ref": "#/$defs/nonBlank"},
+    "proposal_id": {"$ref": "#/$defs/nonBlank"},
+    "change_request_id": {"$ref": "#/$defs/nonBlank"},
+    "project_id": {"$ref": "#/$defs/nonBlank"},
+    "source_orchestration_id": {"$ref": "#/$defs/nonBlank"},
+    "source_test_plan_id": {"$ref": "#/$defs/nonBlank"},
+    "instruction": {"type": "string", "minLength": 1, "maxLength": 20000},
+    "analysis_status": {"enum": ["deterministic", "needs_confirmation", "blocked"]},
+    "operations": {"type": "array", "items": {"$ref": "#/$defs/operation"}},
+    "ambiguities": {"type": "array", "items": {"$ref": "#/$defs/ambiguity"}},
+    "blocking_reasons": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/nonBlank"}
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"analysis_status": {"const": "deterministic"}}},
+      "then": {
+        "properties": {
+          "operations": {"minItems": 1},
+          "ambiguities": {"maxItems": 0},
+          "blocking_reasons": {"maxItems": 0}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"analysis_status": {"const": "needs_confirmation"}}},
+      "then": {
+        "properties": {
+          "ambiguities": {"minItems": 1},
+          "blocking_reasons": {"maxItems": 0}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"analysis_status": {"const": "blocked"}}},
+      "then": {
+        "properties": {
+          "operations": {"maxItems": 0},
+          "ambiguities": {"maxItems": 0},
+          "blocking_reasons": {"minItems": 1}
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["proposal_kind"],
+        "properties": {"proposal_kind": {"const": "undo"}}
+      },
+      "then": {"required": ["undo_of_revision_id"]}
+    }
+  ],
+  "$defs": {
+    "nonBlank": {"type": "string", "minLength": 1},
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "test_case_id",
+        "case_title",
+        "field",
+        "action",
+        "summary_before",
+        "summary_after"
+      ],
+      "properties": {
+        "operation_id": {"$ref": "#/$defs/nonBlank"},
+        "test_case_id": {"$ref": "#/$defs/nonBlank"},
+        "case_title": {"$ref": "#/$defs/nonBlank"},
+        "field": {
+          "enum": [
+            "steps",
+            "test_data_refs",
+            "test_data_values",
+            "expected_results",
+            "business_assertions"
+          ]
+        },
+        "action": {"enum": ["replace", "append", "insert_after", "remove", "restore"]},
+        "before": {},
+        "after": {},
+        "anchor": {},
+        "index": {"type": "integer", "minimum": 0},
+        "data_set_id": {"$ref": "#/$defs/nonBlank"},
+        "json_path": {
+          "type": "array",
+          "items": {"anyOf": [{"type": "string"}, {"type": "integer", "minimum": 0}]}
+        },
+        "criterion_id": {"$ref": "#/$defs/nonBlank"},
+        "flow_id": {"$ref": "#/$defs/nonBlank"},
+        "assertion_id": {"$ref": "#/$defs/nonBlank"},
+        "summary_before": {"$ref": "#/$defs/nonBlank"},
+        "summary_after": {"$ref": "#/$defs/nonBlank"}
+      }
+    },
+    "ambiguity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ambiguity_id", "question", "options"],
+      "properties": {
+        "ambiguity_id": {"$ref": "#/$defs/nonBlank"},
+        "question": {"$ref": "#/$defs/nonBlank"},
+        "options": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["option_id", "label", "operations"],
+            "properties": {
+              "option_id": {"$ref": "#/$defs/nonBlank"},
+              "label": {"$ref": "#/$defs/nonBlank"},
+              "operations": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"$ref": "#/$defs/operation"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
