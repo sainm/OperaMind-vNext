@@ -105,9 +105,7 @@ class TestCaseRevisionService:
                 "state": "applied",
                 "proposal": proposal,
                 "revision": existing,
-                "bundle": self._orchestrations.bundle(
-                    str(existing["target_orchestration_id"])
-                ),
+                "bundle": self._orchestrations.bundle(str(existing["target_orchestration_id"])),
             }
         current_bundle = self._orchestrations.latest_bundle(change_request_id)
         if current_bundle is None:
@@ -122,9 +120,7 @@ class TestCaseRevisionService:
             proposal=proposal,
             created_by=actor,
         )
-        restore_bundle = self._orchestrations.bundle(
-            str(revision["source_orchestration_id"])
-        )
+        restore_bundle = self._orchestrations.bundle(str(revision["source_orchestration_id"]))
         stale = self._revisions.stale_scope(
             source_orchestration_id=str(revision["target_orchestration_id"]),
             source_bundle=current_bundle,

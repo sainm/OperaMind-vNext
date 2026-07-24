@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -37,8 +38,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if bridge_token is not None and not bridge_token.strip():
         print("error: OPERAMIND_BRIDGE_TOKEN must not be blank", file=sys.stderr)
         return 2
-    if bridge_token and args.host not in {"127.0.0.1", "::1", "localhost"}:
-        print("error: local Bridge requires a loopback Web host", file=sys.stderr)
+    if args.host not in {"127.0.0.1", "::1", "localhost"}:
+        print("error: OperaMind Web requires a loopback host", file=sys.stderr)
+        return 2
+    web_token = os.getenv("OPERAMIND_WEB_TOKEN")
+    if web_token is None or not web_token.strip():
+        print("error: OPERAMIND_WEB_TOKEN is required", file=sys.stderr)
+        return 2
+    if not re.fullmatch(r"[A-Za-z0-9._~+\-]{32,256}", web_token):
+        print(
+            "error: OPERAMIND_WEB_TOKEN must be a 32-256 character opaque token",
+            file=sys.stderr,
+        )
         return 2
     try:
         scheduling_policy = parse_orchestration_scheduling_policy(
@@ -58,6 +69,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         repository_root=root,
         database_url=database_url,
         bridge_token=bridge_token,
+        web_token=web_token,
         orchestration_scheduling_policy=scheduling_policy,
     )
     uvicorn.run(app, host=args.host, port=args.port, access_log=False)

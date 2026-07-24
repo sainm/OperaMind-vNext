@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/profiles/ui-locator-profile.schema.json",
+  "title": "UiLocatorProfile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "profile_type",
+    "profile_id",
+    "profile_version",
+    "environment_id",
+    "deployment_revision",
+    "ui_knowledge_snapshot_id",
+    "locator_policy_version",
+    "minimum_reliability",
+    "target_refs"
+  ],
+  "properties": {
+    "profile_type": {"const": "UiLocatorProfile"},
+    "profile_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "profile_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "environment_id": {"type": "string", "minLength": 1},
+    "deployment_revision": {"type": "string", "minLength": 1},
+    "ui_knowledge_snapshot_id": {"type": "string", "minLength": 1},
+    "locator_policy_version": {"type": "string", "minLength": 1},
+    "minimum_reliability": {"type": "number", "minimum": 0, "maximum": 1},
+    "target_refs": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  }
+}

@@ -325,7 +325,7 @@ def test_source_tree_digest_includes_web_static_assets(tmp_path: Path) -> None:
     page = static_root / "index.html"
     script.write_text("const state = 'ready';\n", encoding="utf-8")
     stylesheet.write_text("body { color: green; }\n", encoding="utf-8")
-    page.write_text("<html lang=\"ja\"></html>\n", encoding="utf-8")
+    page.write_text('<html lang="ja"></html>\n', encoding="utf-8")
     original = MvpReadinessValidator.source_tree_digest(tmp_path)
 
     script.write_text("const state = 'blocked';\n", encoding="utf-8")
@@ -334,7 +334,7 @@ def test_source_tree_digest_includes_web_static_assets(tmp_path: Path) -> None:
     stylesheet.write_text("body { color: red; }\n", encoding="utf-8")
     stylesheet_changed = MvpReadinessValidator.source_tree_digest(tmp_path)
     stylesheet.write_text("body { color: green; }\n", encoding="utf-8")
-    page.write_text("<html lang=\"en\"></html>\n", encoding="utf-8")
+    page.write_text('<html lang="en"></html>\n', encoding="utf-8")
     page_changed = MvpReadinessValidator.source_tree_digest(tmp_path)
 
     assert len({original, script_changed, stylesheet_changed, page_changed}) == 4
@@ -428,9 +428,7 @@ def test_historical_full_regression_evidence_is_stale_after_source_change() -> N
 
     report = MvpReadinessValidator(ROOT).validate_reviewed_evidence(path)
 
-    assert {issue.code for issue in report.issues} == {
-        "readiness.source_tree_digest_mismatch"
-    }
+    assert {issue.code for issue in report.issues} == {"readiness.source_tree_digest_mismatch"}
     assert payload["review_status"] == "verified"
     assert payload["reviewed_by"] == ["automation:operamind-baseline"]
 
@@ -1043,8 +1041,7 @@ def test_baseline_prints_readiness_status_for_selected_manifest(
     assert "Readiness stage: golden_ready_partial" in output
     assert (
         "Passed gates: golden_dataset, embedding_provider_live, human_approval_e2e, "
-        "target_deployment_e2e"
-        in output
+        "target_deployment_e2e" in output
     )
     assert "golden_dataset" in output
     assert "embedding_provider_live" in output

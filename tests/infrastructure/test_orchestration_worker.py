@@ -11,6 +11,7 @@ import pytest
 from operamind.application.orchestration_worker import (
     OrchestrationTaskExecutionCancelled,
     OrchestrationTaskExecutionContext,
+    OrchestrationTaskExecutionError,
 )
 from operamind.infrastructure.orchestration_worker import (
     FixedCommandHandlerConfiguration,
@@ -111,4 +112,29 @@ def test_fixed_command_handler_terminates_after_lease_loss(tmp_path: Path) -> No
     finally:
         timer.cancel()
 
+    assert time.monotonic() - started < 3
+
+
+def test_fixed_command_handler_terminates_when_output_limit_is_crossed(tmp_path: Path) -> None:
+    code = (
+        "import sys,time; sys.stdout.buffer.write(b'x' * 2048); sys.stdout.flush(); time.sleep(30)"
+    )
+    handler = FixedCommandOrchestrationTaskHandler(
+        FixedCommandHandlerConfiguration(
+            action="generate_plan",
+            argv=(sys.executable, "-c", code),
+            working_directory=tmp_path,
+            timeout_seconds=60,
+            max_output_bytes=1024,
+        )
+    )
+
+    started = time.monotonic()
+    with pytest.raises(OrchestrationTaskExecutionError) as raised:
+        handler.execute(
+            task={"orchestration_task_id": "task-output-limit"},
+            context=OrchestrationTaskExecutionContext(threading.Event(), threading.Event()),
+        )
+
+    assert raised.value.error_kind == "handler_output_too_large"
     assert time.monotonic() - started < 3

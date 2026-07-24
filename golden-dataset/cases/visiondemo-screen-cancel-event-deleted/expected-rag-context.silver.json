@@ -1,0 +1,20 @@
+{
+  "case_id": "visiondemo-screen-cancel-event-deleted",
+  "project_id": "visiondemo",
+  "dataset_stage": "silver",
+  "required_contexts": [
+    {
+      "document": "02_画面設計書_経費申請一覧_before.xlsx",
+      "locations": ["イベント一覧!A1:E3", "画面概要!A1:B2"],
+      "reason": "削除対象イベントと所属画面を特定するため"
+    }
+  ],
+  "expected_query_concepts": [
+    "経費申請 取消イベント 削除",
+    "expense-cancel-btn",
+    "SCREEN_EXPENSE_LIST"
+  ],
+  "must_exclude_as_primary_context": ["検索イベント", "API totalCount"],
+  "canonical_id_status": "to_be_filled_after_vnext_ingestion",
+  "review_status": "needs_review"
+}

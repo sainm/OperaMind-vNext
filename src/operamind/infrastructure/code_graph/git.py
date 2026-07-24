@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -137,6 +138,7 @@ class GitDiffEvidence:
     result_sha: str | None
     remote_url: str
     changes: tuple[GitPathChange, ...]
+    changed_lines: tuple[tuple[str, tuple[int, ...]], ...] = ()
 
     @property
     def changed_paths(self) -> tuple[str, ...]:
@@ -157,7 +159,10 @@ class GitWorktreeDiffInspector(GitWorkspaceInspector):
                 self._run_bytes(root, "ls-files", "--others", "--exclude-standard", "-z")
             )
         )
-        return GitDiffEvidence(root, base_sha, None, remote_url, (*tracked, *untracked))
+        changes = (*tracked, *untracked)
+        paths = tuple(sorted({path for change in changes for path in change.paths}))
+        changed_lines = self._changed_lines(root, "HEAD", None, paths)
+        return GitDiffEvidence(root, base_sha, None, remote_url, changes, changed_lines)
 
     def inspect_committed(self, workspace_root: Path, *, base_sha: str) -> GitDiffEvidence:
         root, head_sha, remote_url = self._identity(workspace_root)
@@ -177,7 +182,41 @@ class GitWorktreeDiffInspector(GitWorkspaceInspector):
                 head_sha,
             )
         )
-        return GitDiffEvidence(root, base_sha, head_sha, remote_url, changes)
+        paths = tuple(sorted({path for change in changes for path in change.paths}))
+        changed_lines = self._changed_lines(root, base_sha, head_sha, paths)
+        return GitDiffEvidence(root, base_sha, head_sha, remote_url, changes, changed_lines)
+
+    def _changed_lines(
+        self,
+        root: Path,
+        base: str,
+        result: str | None,
+        paths: tuple[str, ...],
+    ) -> tuple[tuple[str, tuple[int, ...]], ...]:
+        collected: list[tuple[str, tuple[int, ...]]] = []
+        for path in paths:
+            arguments = [
+                "diff",
+                "--unified=0",
+                "--no-color",
+                "--no-ext-diff",
+                base,
+            ]
+            if result is not None:
+                arguments.append(result)
+            arguments.extend(("--", path))
+            patch = self._run_bytes(root, *arguments).decode("utf-8", errors="replace")
+            lines: set[int] = set()
+            for match in re.finditer(
+                r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@",
+                patch,
+                re.MULTILINE,
+            ):
+                start = int(match.group(1))
+                count = int(match.group(2) or "1")
+                lines.update(range(start, start + count))
+            collected.append((path, tuple(sorted(lines))))
+        return tuple(collected)
 
     def _identity(self, workspace_root: Path) -> tuple[Path, str, str]:
         root = self._repository_root(workspace_root)

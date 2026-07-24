@@ -137,9 +137,9 @@ def test_runtime_route_evidence_and_enriched_graph_round_trip() -> None:
         assert runtime_report["report_status"] == "clear"
         assert runtime_report["open_count"] == 0
         assert runtime_report["closed_count"] == 1
-        assert runtime_report["predecessor_report_id"] == base_report[
-            "unresolved_evidence_report_id"
-        ]
+        assert (
+            runtime_report["predecessor_report_id"] == base_report["unresolved_evidence_report_id"]
+        )
         closed = runtime_report["items"][0]
         assert closed["status"] == "closed"
         assert closed["closure"]["resolved_target_ref"] == f"endpoint-{suffix}"

@@ -33,6 +33,16 @@ def load_convention() -> DocumentConvention:
     return DocumentConvention.from_validated_profile(profile)
 
 
+def load_screen_convention() -> DocumentConvention:
+    profile: dict[str, Any] = json.loads(
+        (ROOT / "profiles/screen-design-convention-profile.example.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    ProfileCatalog.load(ROOT / "profiles").validate_profile(profile)
+    return DocumentConvention.from_validated_profile(profile)
+
+
 def test_xlsx_extraction_feeds_variant_matcher(tmp_path: Path) -> None:
     path = tmp_path / "顧客_API_設計書.xlsx"
     workbook = Workbook()
@@ -168,6 +178,56 @@ def test_xlsx_layout_and_alias_changes_preserve_canonical_fact(tmp_path: Path) -
     assert after_result.fact is not None
     assert before_result.fact.stable_key == after_result.fact.stable_key
     assert before_result.fact.values == after_result.fact.values
+
+
+def test_xlsx_extraction_keeps_per_sheet_signals_and_cross_sheet_context(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "画面設計書_multi.xlsx"
+    workbook = Workbook()
+    overview = workbook.active
+    overview.title = "画面概要"
+    overview.append([None, "画面名", "経費一覧"])
+    overview.append([None, "画面ID", "SCREEN_EXPENSE_LIST"])
+    items = workbook.create_sheet("画面項目一覧")
+    items.append(["項目名", "種別", "初期値", "備考"])
+    items.append(["expense-search-status", "セレクト", "申請中", "ステータス"])
+    events = workbook.create_sheet("イベント一覧")
+    events.append(["No", "イベント名", "発生源", "トリガー", "処理内容"])
+    events.append([1, "検索", "expense-search-btn", "クリック", "一覧を更新"])
+    workbook.save(path)
+    workbook.close()
+
+    registry = DocumentSignalExtractorRegistry.default()
+    convention = load_screen_convention()
+    sheet_signals = dict(registry.extract_sheet_signals(path))
+    event_variant = next(
+        variant for variant in convention.variants if variant.variant_id == "screen-event-table-ja"
+    )
+    event_records = registry.extract_records_for_sheet(
+        path,
+        event_variant,
+        sheet_name="イベント一覧",
+    )
+    item_variant = next(
+        variant for variant in convention.variants if variant.variant_id == "screen-item-table-ja"
+    )
+    item_records = registry.extract_records_for_sheet(
+        path,
+        item_variant,
+        sheet_name="画面項目一覧",
+    )
+
+    assert {"画面概要", "画面項目一覧", "イベント一覧"} <= set(sheet_signals)
+    assert "イベント名" in sheet_signals["イベント一覧"].headers
+    assert len(event_records) == 1
+    assert len(item_records) == 1
+    assert {field.name for field in item_records[0].fields} >= {
+        "画面ID",
+        "項目名",
+        "種別",
+        "初期値",
+    }
 
 
 @pytest.mark.parametrize("suffix", [".xls", ".doc", ".xlsm", ""])

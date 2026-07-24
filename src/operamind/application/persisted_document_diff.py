@@ -178,6 +178,8 @@ class PersistedDocumentDiffService:
                     selected_variant_id=diff.source_variant_id,
                     status=SnapshotStatus.COMMITTED,
                     snapshot=diff.source_snapshot,
+                    selected_variant_ids=diff.source_snapshot_variant_ids,
+                    fact_variant_ids=diff.source_fact_variant_ids,
                 )
             )
             self._canonical_repository.store_snapshot(
@@ -193,6 +195,8 @@ class PersistedDocumentDiffService:
                     selected_variant_id=diff.target_variant_id,
                     status=SnapshotStatus.COMMITTED,
                     snapshot=diff.target_snapshot,
+                    selected_variant_ids=diff.target_snapshot_variant_ids,
+                    fact_variant_ids=diff.target_fact_variant_ids,
                 )
             )
             self._node_repository.store_nodes(
@@ -284,6 +288,12 @@ class PersistedDocumentDiffService:
             "target_content_digest": diff.target_content_digest,
             "source_extractor_ref": diff.source_extractor_ref,
             "target_extractor_ref": diff.target_extractor_ref,
+            "source_variant_ids": list(diff.source_snapshot_variant_ids),
+            "target_variant_ids": list(diff.target_snapshot_variant_ids),
+            "source_fact_variant_ids": dict(diff.source_fact_variant_ids),
+            "target_fact_variant_ids": dict(diff.target_fact_variant_ids),
+            "source_ignored_sections": list(diff.source_ignored_sections),
+            "target_ignored_sections": list(diff.target_ignored_sections),
             # A before/after pair represents one logical document update.
             "uploaded_document_count": 1,
             "changed_document_count": 1 if diff.changes else 0,

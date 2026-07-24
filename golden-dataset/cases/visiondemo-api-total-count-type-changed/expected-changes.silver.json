@@ -1,0 +1,29 @@
+{
+  "case_id": "visiondemo-api-total-count-type-changed",
+  "dataset_stage": "silver",
+  "expected_structured_change_count": 1,
+  "changes": [
+    {
+      "stable_key": "api:GET%20%2FEXPENSE%2FAPI%2FSEARCH/%E3%80%90%E3%83%AC%E3%82%B9%E3%83%9D%E3%83%B3%E3%82%B9%E3%80%91/totalcount",
+      "fact_type": "api",
+      "domain": "api",
+      "change_type": "modified",
+      "business_summary": "経費検索 API の totalCount 型を Integer から Long に変更する。",
+      "field_deltas": [
+        {
+          "field": "data_type",
+          "before": "Integer",
+          "after": "Long",
+          "source_ref": "04_API詳細設計書_経費検索_after.xlsx#searchExpense!C7"
+        }
+      ],
+      "confidence": "high",
+      "review_status": "needs_review"
+    }
+  ],
+  "must_not_report_as_changes": [
+    "GET /expense/api/search のパス",
+    "expenses レスポンス項目",
+    "API 一覧"
+  ]
+}

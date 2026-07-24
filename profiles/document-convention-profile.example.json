@@ -48,6 +48,28 @@
       },
       "stable_key_fields": ["method", "path"],
       "stable_key_normalizers": {"method": "uppercase", "path": "preserve"}
+    },
+    {
+      "variant_id": "api-object-table",
+      "signals": [
+        {"type": "sheet_name", "values": ["Object", "Object1", "Object2", "Objects"], "weight": 0.2},
+        {"type": "headers", "values": ["項目名", "データ型"], "weight": 0.6},
+        {"type": "filename_token", "values": ["API", "IF"], "weight": 0.2}
+      ],
+      "field_aliases": {
+        "operation": ["API Operation", "Operation"],
+        "object_section": ["【リクエストパラメータ】", "【レスポンス】"],
+        "field_name": ["項目名", "Field", "Field Name"],
+        "data_type": ["型", "データ型", "Type"],
+        "required": ["必須", "Required"],
+        "description": ["説明", "備考", "Description"]
+      },
+      "stable_key_fields": ["operation", "object_section", "field_name"],
+      "stable_key_normalizers": {
+        "operation": "uppercase",
+        "object_section": "preserve",
+        "field_name": "casefold"
+      }
     }
   ],
   "unmatched_policy": "canonical_text_needs_review"

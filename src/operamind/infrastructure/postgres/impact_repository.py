@@ -15,6 +15,9 @@ from operamind.infrastructure.postgres.code_graph_repository import (
     CodeGraphSnapshotRepository,
 )
 from operamind.infrastructure.postgres.errors import PersistenceConflictError
+from operamind.infrastructure.postgres.rag_quality_repository import (
+    GoldenRagQualityRepository,
+)
 
 type ImpactItemLedgerRow = tuple[
     str,
@@ -76,6 +79,7 @@ class ImpactRepository:
         self._contracts = contracts
         self._artifacts = ArtifactRepository(connection, contracts)
         self._graphs = CodeGraphSnapshotRepository(connection, contracts)
+        self._rag_quality = GoldenRagQualityRepository(connection, contracts)
 
     def publish_report(
         self,
@@ -349,6 +353,36 @@ class ImpactRepository:
                 return ImpactConfirmationResult(False, confirmation_id, report_id, str(report[3]))
             if str(report[3]) != "awaiting_confirmation":
                 raise ValueError("Impact Report is not awaiting confirmation")
+            context_artifact = self._artifacts.get(str(report_artifact["context_package_id"]))
+            if (
+                context_artifact is None
+                or context_artifact.get("artifact_type") != "ContextPackage"
+            ):
+                raise PersistenceConflictError(
+                    f"Impact Report Context Package is unavailable: {report_id}"
+                )
+            retrieval_policy = cast(dict[str, object], context_artifact["retrieval_policy"])
+            self._rag_quality.require_passed_gate(
+                project_id=project_id,
+                document_snapshot_id=str(context_artifact["document_snapshot_id"]),
+                embedding_profile_version_id=str(retrieval_policy["embedding_profile_version_id"]),
+                search_index_build_id=str(context_artifact["search_index_build_id"]),
+            )
+            cursor.execute(
+                """
+                SELECT reason FROM profile_drift_impacts
+                WHERE project_id = %s
+                  AND artifact_type = 'ImpactReport'
+                  AND artifact_id = %s
+                  AND resolved_at IS NULL
+                ORDER BY profile_drift_event_id
+                LIMIT 1
+                """,
+                (project_id, report_id),
+            )
+            drift = cursor.fetchone()
+            if drift is not None:
+                raise ValueError(f"Impact Report is blocked by Profile drift: {drift[0]}")
             cursor.execute(
                 """
                 SELECT is_current, status, %s <= now()
@@ -751,6 +785,30 @@ class ImpactRepository:
             raise ValueError("Impact Report Code Graph is not current and queryable")
         if str(artifact["status"]) == "awaiting_confirmation" and str(graph[4]) != "complete":
             raise ValueError("Only a complete Code Graph can produce a confirmable report")
+        cursor.execute(
+            """
+            SELECT artifact_type, artifact_id, reason
+            FROM profile_drift_impacts
+            WHERE project_id = %s
+              AND resolved_at IS NULL
+              AND (
+                  (artifact_type = 'DocumentSnapshot' AND artifact_id = %s)
+                  OR (artifact_type = 'CodeGraphSnapshot' AND artifact_id = %s)
+              )
+            ORDER BY artifact_type, artifact_id
+            LIMIT 1
+            """,
+            (
+                project_id,
+                artifact["document_snapshot_id"],
+                artifact["code_graph_snapshot_id"],
+            ),
+        )
+        drift = cursor.fetchone()
+        if drift is not None:
+            raise ValueError(
+                f"Impact Report source is stale by Profile drift: {drift[0]} {drift[1]}"
+            )
 
     @staticmethod
     def _insert_item(

@@ -5,6 +5,7 @@ import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import psycopg
@@ -20,6 +21,7 @@ from operamind.application import (
     BrowserExecutionService,
     BrowserPreflightRequest,
     BrowserPreflightService,
+    ChangedLineCoverageEvidence,
     CodeScopeRequest,
     CodeScopeResolverService,
     CommandExecutionRecoveryRequest,
@@ -339,6 +341,7 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
             contracts=contracts,
             profiles=profiles,
         )
+        impact_service._rag_quality = MagicMock()
         impact_request = ImpactReportRequest(
             impact_report_id=f"impact-report-{suffix}",
             scope=request,
@@ -349,6 +352,7 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
         impact = impact_service.run(impact_request)
         replay = impact_service.run(impact_request)
         impact_repository = ImpactRepository(connection, contracts)
+        impact_repository._rag_quality = MagicMock()
 
         assert impact.publication.created
         assert not replay.publication.created
@@ -362,9 +366,7 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
         assert impact.artifact["blocking_unknowns"] == []
         assert len(impact.artifact["items"]) == 2
         impact_item = next(
-            item
-            for item in impact.artifact["items"]
-            if item["recommended_action"] == "modify"
+            item for item in impact.artifact["items"] if item["recommended_action"] == "modify"
         )
         assert impact_item["target_path"] == "src/main/java/example/ExpenseService.java"
         assert impact_item["recommended_action"] == "modify"
@@ -806,6 +808,18 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
                 "edit_result_id": task_committed_result_id,
                 "test_result_refs": [task_command_id],
                 "tests_passed": True,
+                "changed_line_coverage": {
+                    "evidence_refs": [task_command_id],
+                    "executable_lines": {
+                        "src/main/java/example/ExpenseService.java": [1],
+                        "src/test/java/example/ExpenseServiceTest.java": [1],
+                    },
+                    "covered_lines": {
+                        "src/main/java/example/ExpenseService.java": [1],
+                        "src/test/java/example/ExpenseServiceTest.java": [1],
+                    },
+                    "minimum_coverage_percent": 80,
+                },
             },
         )
         assert task_result["status"] == "in_scope"
@@ -1288,6 +1302,17 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
                 mode=EditValidationMode.COMMITTED,
                 test_result_refs=(command_execution_id,),
                 tests_passed=True,
+                changed_line_coverage=ChangedLineCoverageEvidence(
+                    evidence_refs=(command_execution_id,),
+                    executable_lines=(
+                        ("src/main/java/example/ExpenseService.java", (1,)),
+                        ("src/test/java/example/ExpenseServiceTest.java", (1,)),
+                    ),
+                    covered_lines=(
+                        ("src/main/java/example/ExpenseService.java", (1,)),
+                        ("src/test/java/example/ExpenseServiceTest.java", (1,)),
+                    ),
+                ),
             )
         )
         assert committed.record.status == "in_scope"
@@ -2219,9 +2244,7 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
         revalidation_manifest_id = f"browser-manifest-revalidation-{suffix}"
         revalidation_manifest_payload["manifest_id"] = revalidation_manifest_id
         revalidation_manifest_payload["plan_id"] = revalidation_plan_id
-        revalidation_manifest = BrowserExecutionManifest.from_dict(
-            revalidation_manifest_payload
-        )
+        revalidation_manifest = BrowserExecutionManifest.from_dict(revalidation_manifest_payload)
         assert browser_registration.register_manifest(revalidation_manifest).created
         revalidation_preflight = BrowserPreflightService(
             connection=connection,

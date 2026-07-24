@@ -45,18 +45,14 @@ class ChangeOrchestrationService:
             repository_root=self._root,
             project_id=str(evidence.change_request["project_id"]),
             repository_revision=str(evidence.impact_report["repository_revision"]),
-            stable_keys={
-                str(value["stable_key"]) for value in evidence.structured_changes
-            },
+            stable_keys={str(value["stable_key"]) for value in evidence.structured_changes},
         )
         result = self._planner.plan(
             ChangeOrchestrationInput(
                 change_request=evidence.change_request,
                 analysis_case_id=evidence.analysis_case_id,
                 structured_changes=evidence.structured_changes,
-                accepted_structured_change_refs=(
-                    evidence.accepted_structured_change_refs
-                ),
+                accepted_structured_change_refs=(evidence.accepted_structured_change_refs),
                 impact_report=evidence.impact_report,
                 impact_report_state=evidence.impact_report_state,
                 impact_confirmation=evidence.impact_confirmation,
@@ -104,12 +100,9 @@ def _select_reviewed_case(
         expected_path = (dataset_root / str(entry["expected_changes"])).resolve()
         if not expected_path.is_relative_to(dataset_root.resolve()):
             raise ChangeOrchestrationBlockedError("Golden case path escapes dataset root")
-        expected = cast(
-            dict[str, Any], json.loads(expected_path.read_text(encoding="utf-8"))
-        )
+        expected = cast(dict[str, Any], json.loads(expected_path.read_text(encoding="utf-8")))
         expected_keys = {
-            str(value["stable_key"])
-            for value in cast(list[dict[str, Any]], expected["changes"])
+            str(value["stable_key"]) for value in cast(list[dict[str, Any]], expected["changes"])
         }
         if expected_keys != stable_keys:
             continue

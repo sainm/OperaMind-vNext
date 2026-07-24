@@ -1,0 +1,134 @@
+{
+  "artifact_type": "GoldenRagQualityReport",
+  "schema_version": "v1",
+  "report_id": "golden-rag-quality-visiondemo-001",
+  "case_id": "visiondemo-expense-status-filter-golden",
+  "dataset_id": "operamind-vnext-golden",
+  "dataset_version": "1.0.0",
+  "project_id": "visiondemo",
+  "document_snapshot_id": "snapshot-visiondemo-001",
+  "embedding_profile_version_id": "embedding-local-v1",
+  "embedding_profile_binding_key": "embedding:document_search",
+  "search_index_build_id": "search-index-visiondemo-001",
+  "ranking_policy_version": "hybrid-rrf-v1",
+  "query_plan_version": "golden-cross-document-query-v2",
+  "expectation_digest": "40d1f6b8dd815d77515ffce73a76aef55df36e5b01cf83e7716fb832734b687f",
+  "status": "passed",
+  "semantic_binding_version": "golden-semantic-binding-v1",
+  "quality_thresholds": {
+    "min_recall_at_5": 1.0,
+    "min_recall_at_10": 1.0,
+    "min_mrr": 0.9,
+    "max_irrelevant_rate": 0.0,
+    "max_cross_project_leaks": 0
+  },
+  "semantic_bindings": [
+    {
+      "semantic_ref": "visiondemo:screen-expense-list:status-filter",
+      "canonical_node_id": "node-5e9c283bd5050015d4a736e3",
+      "document": "02_画面設計書_経費精算申請一覧.xlsx",
+      "business_keys": ["screen_element:screen_expense_list/expense-search-status"],
+      "matched_locations": ["画面項目一覧!A5:I5"],
+      "unmatched_locations": ["イベント一覧!A5:G6", "画面概要!A2"],
+      "matched_source_refs": ["02_画面設計書_経費精算申請一覧.xlsx#画面項目一覧!B5"],
+      "resolution_method": "reviewed_source_location"
+    },
+    {
+      "semantic_ref": "visiondemo:expense-search:empty-status-contract",
+      "canonical_node_id": "node-121971cd157374e8f878023b",
+      "document": "03_プログラム設計書_経費精算申請.xlsx",
+      "business_keys": ["method_contract:search"],
+      "matched_locations": ["メソッド一覧!A5:F5"],
+      "unmatched_locations": [],
+      "matched_source_refs": ["03_プログラム設計書_経費精算申請.xlsx#メソッド一覧!B5"],
+      "resolution_method": "reviewed_source_location"
+    },
+    {
+      "semantic_ref": "visiondemo:expense-api:search-endpoint",
+      "canonical_node_id": "node-532118ee24a5d4babcaf5499",
+      "document": "04_API詳細設計書_経費精算申請.xlsx",
+      "business_keys": ["api_endpoint:GET/%2Fexpense%2Fapi%2Fsearch"],
+      "matched_locations": ["API一覧!A6:G6"],
+      "unmatched_locations": ["Object!A1:G8"],
+      "matched_source_refs": ["04_API詳細設計書_経費精算申請.xlsx#API一覧!B6"],
+      "resolution_method": "reviewed_source_location"
+    }
+  ],
+  "query_results": [
+    {
+      "query_purpose": "business_behavior",
+      "query_text": "Business query",
+      "query_text_digest": "c276249838303e63db424b1c52199cdb4750177a86118f2d11a1db6bfe7fd1d2",
+      "candidates": [
+        {
+          "rank": 1,
+          "target_type": "document_node",
+          "target_id": "node-5e9c283bd5050015d4a736e3",
+          "semantic_refs": ["visiondemo:screen-expense-list:status-filter"],
+          "project_id": "visiondemo",
+          "score": 0.03278688524590164,
+          "channels": ["vector", "keyword"]
+        }
+      ],
+      "required_hits_at_5": ["visiondemo:screen-expense-list:status-filter"],
+      "required_hits_at_10": ["visiondemo:screen-expense-list:status-filter"],
+      "missing_required_refs": [],
+      "irrelevant_hits": [],
+      "cross_project_leaks": [],
+      "failure_reasons": []
+    },
+    {
+      "query_purpose": "precise_anchor",
+      "query_text": "Anchor query",
+      "query_text_digest": "ceb601f8f04270f8847a3008bdd7b701846935b4aa93370cc5772c808fdfd5c5",
+      "candidates": [
+        {
+          "rank": 1,
+          "target_type": "document_node",
+          "target_id": "node-121971cd157374e8f878023b",
+          "semantic_refs": ["visiondemo:expense-search:empty-status-contract"],
+          "project_id": "visiondemo",
+          "score": 0.03278688524590164,
+          "channels": ["vector", "keyword"]
+        }
+      ],
+      "required_hits_at_5": ["visiondemo:expense-search:empty-status-contract"],
+      "required_hits_at_10": ["visiondemo:expense-search:empty-status-contract"],
+      "missing_required_refs": [],
+      "irrelevant_hits": [],
+      "cross_project_leaks": [],
+      "failure_reasons": []
+    },
+    {
+      "query_purpose": "acceptance_criteria",
+      "query_text": "Acceptance query",
+      "query_text_digest": "9c3ec94a0fbf42115106bc4262a8fdf09360d1b871c5007c806244a0aa8c6f7d",
+      "candidates": [
+        {
+          "rank": 1,
+          "target_type": "document_node",
+          "target_id": "node-532118ee24a5d4babcaf5499",
+          "semantic_refs": ["visiondemo:expense-api:search-endpoint"],
+          "project_id": "visiondemo",
+          "score": 0.03278688524590164,
+          "channels": ["vector", "keyword"]
+        }
+      ],
+      "required_hits_at_5": ["visiondemo:expense-api:search-endpoint"],
+      "required_hits_at_10": ["visiondemo:expense-api:search-endpoint"],
+      "missing_required_refs": [],
+      "irrelevant_hits": [],
+      "cross_project_leaks": [],
+      "failure_reasons": []
+    }
+  ],
+  "metrics": {
+    "recall_at_5": 1.0,
+    "recall_at_10": 1.0,
+    "mrr": 1.0,
+    "irrelevant_rate": 0.0,
+    "cross_project_leaks": 0
+  },
+  "threshold_failures": [],
+  "failure_reasons": []
+}

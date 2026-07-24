@@ -7,7 +7,7 @@
 ## 2. 组件
 
 ```text
-React Operations Web
+Browser Operations Web (HTML/CSS/JavaScript)
         |
 FastAPI Control Plane -- local Bridge --> VS Code Extension --> GitHub Copilot
         |                                                    |
@@ -70,10 +70,12 @@ ingesting
 - Local Bridge：Web 只向匹配当前 Workspace 的 VS Code 扩展发布任务 ID 和通知；Bearer Token 只保存在 VS Code SecretStorage，入口只允许 loopback。Task claim 使用 60 秒 lease，heartbeat 续租；断线后可按持久化 Task ID resume，lease 失效后由同 Workspace 新 consumer 追加 `claim_recovered` 并接管。用户在 VS Code 确认后 MCP 才能取得任务上下文。取消保留终端 Event，重试创建带 retry lineage 和 attempt number 的新 Task，不改写旧 Task。
 - MCP：当前通过 stdio 提供十三个有界工具。九个兼容细粒度工具处理 ready case、Report、Packet、Grant、命令、Diff、UI Plan 和 Validation Result；四个 Coding Task 工具从任务身份推导全部范围，并把测试摘要、path-only Diff 和 committed 结果自动回传 Web。分析启动、人类确认、UI 原始结果写入仍不开放给模型。
 - VS Code Copilot：按 `copilot_coding_plan` 读取本地批准文件并修改代码，不负责定义影响范围和最终验收。
-- Provider Boundary：`CopilotCodingTask` 的 `coding_task_provider_v1` 在 POC 使用 `local_bridge`；生产 `api_provider` 复用同一契约，当前不实现远程调用。
+- Provider Boundary：`CopilotCodingTask` 的 `coding_task_provider_v1` 使用 `local_bridge`；当前产品路线固定为 VS Code 上的 GitHub Copilot，不计划实现远程生产 `api_provider`。
 - Playwright Runner：在绑定的 Build/Deployment 上执行 OperaMind 生成或复用的 UI 场景。
 
 Change Automation 的每个当前 Action 会同步为 Agent-neutral `OrchestrationTask`。Task Definition 只声明 Capability、输入输出、依赖和验收条件；Agent、Subagent、人工使用同一 Claim／Lease／Result 协议，具体执行者不进入业务状态机。当前 Scheduler 对每个 Automation Run 只允许一个活动 Claim。未来启用多 Subagent 时只调整 Capability 匹配和并发策略。人工判断仍由 Canonical 人工确认 Artifact 验收，领取 Task 本身不等于批准。CopilotCodingTask 是代码修改 Action 的 local Bridge 配送适配器，不替代通用任务协议。
+
+Profile Drift 再构筑使用独立 `ProfileRebuildBatch`，但复用相同的 Worker 身份、短期 Claim、Lease、Heartbeat 和固定命令 Handler。一个 Batch 为所有未解决影响创建 Request，并用数据库依赖屏障固定 `Snapshot → Impact → TestPlan → Evidence → Closure`。Worker 只能申报替代 Artifact 的类型与 ID；服务端从 Canonical 表重新验证同项目、同类型、业务状态、当前 Profile Binding 和未受新 Drift 影响后，才追加 old→new 替代关系并解除对应 `stale`／`blocked`。任一阶段失败或验收不通过都会保持原影响未解决、阻断后续阶段，并要求带操作者和理由的显式 Requeue。
 
 ## 6. 可复现性
 

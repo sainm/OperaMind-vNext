@@ -6,6 +6,9 @@ if TYPE_CHECKING:
     from operamind.infrastructure.postgres.orchestration_task_repository import (
         OrchestrationTaskRepository,
     )
+    from operamind.infrastructure.postgres.profile_rebuild_repository import (
+        ProfileRebuildTaskQueue,
+    )
 
 from operamind.infrastructure.postgres.analysis_repository import (
     AnalysisRegistration,
@@ -86,6 +89,11 @@ from operamind.infrastructure.postgres.edit_result_repository import (
     EditResultWrite,
 )
 from operamind.infrastructure.postgres.errors import PersistenceConflictError
+from operamind.infrastructure.postgres.golden_binding_repository import (
+    GOLDEN_SEMANTIC_BINDING_VERSION,
+    GoldenSemanticBinding,
+    GoldenSemanticBindingRepository,
+)
 from operamind.infrastructure.postgres.impact_repository import (
     ImpactConfirmationResult,
     ImpactReportPublishResult,
@@ -99,9 +107,22 @@ from operamind.infrastructure.postgres.ingestion_result_repository import (
     initial_ingestion_event_id,
 )
 from operamind.infrastructure.postgres.migrations import MigrationCatalog, MigrationRunner
+from operamind.infrastructure.postgres.profile_drift_repository import (
+    ProfileDriftDetectionResult,
+    ProfileDriftRepository,
+    ProfileRebuildScheduleResult,
+)
+from operamind.infrastructure.postgres.profile_rebuild_validation import (
+    ProfileReplacementValidator,
+)
 from operamind.infrastructure.postgres.profile_repository import (
     ActiveProfileBinding,
     ProfileRepository,
+)
+from operamind.infrastructure.postgres.rag_quality_repository import (
+    GoldenRagQualityGateBlockedError,
+    GoldenRagQualityRepository,
+    GoldenRagQualityState,
 )
 from operamind.infrastructure.postgres.readiness_repository import (
     ReadinessEvidenceInput,
@@ -193,6 +214,7 @@ from operamind.infrastructure.postgres.unresolved_evidence_repository import (
     UnresolvedEvidencePublishResult,
     UnresolvedEvidenceRepository,
 )
+from operamind.infrastructure.postgres.web_command_repository import WebCommandRepository
 from operamind.infrastructure.postgres.web_control_plane_repository import (
     ChangeRequestRecord,
     DocumentReviewRecord,
@@ -208,9 +230,17 @@ def __getattr__(name: str) -> object:
         )
 
         return OrchestrationTaskRepository
+    if name == "ProfileRebuildTaskQueue":
+        from operamind.infrastructure.postgres.profile_rebuild_repository import (
+            ProfileRebuildTaskQueue,
+        )
+
+        return ProfileRebuildTaskQueue
     raise AttributeError(name)
 
+
 __all__ = [
+    "GOLDEN_SEMANTIC_BINDING_VERSION",
     "PREFLIGHT_TYPES",
     "UI_EVIDENCE_TYPES",
     "ActiveProfileBinding",
@@ -275,6 +305,11 @@ __all__ = [
     "EditResultRecord",
     "EditResultRepository",
     "EditResultWrite",
+    "GoldenRagQualityGateBlockedError",
+    "GoldenRagQualityRepository",
+    "GoldenRagQualityState",
+    "GoldenSemanticBinding",
+    "GoldenSemanticBindingRepository",
     "ImpactConfirmationResult",
     "ImpactReportPublishResult",
     "ImpactReportState",
@@ -283,6 +318,11 @@ __all__ = [
     "MigrationRunner",
     "OrchestrationTaskRepository",
     "PersistenceConflictError",
+    "ProfileDriftDetectionResult",
+    "ProfileDriftRepository",
+    "ProfileRebuildScheduleResult",
+    "ProfileRebuildTaskQueue",
+    "ProfileReplacementValidator",
     "ProfileRepository",
     "RankedSearchHit",
     "ReadinessEvidenceInput",
@@ -334,6 +374,7 @@ __all__ = [
     "UnresolvedEvidencePublishResult",
     "UnresolvedEvidenceRepository",
     "VerificationScenarioWrite",
+    "WebCommandRepository",
     "WebControlPlaneRepository",
     "document_relation_id",
     "initial_ingestion_event_id",

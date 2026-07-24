@@ -90,9 +90,7 @@ def _active_executor(task: dict[str, Any]) -> str:
     if not isinstance(claims, list):
         raise ValueError("worker task does not contain claim history")
     active = [
-        value
-        for value in claims
-        if isinstance(value, dict) and value.get("status") == "active"
+        value for value in claims if isinstance(value, dict) and value.get("status") == "active"
     ]
     if len(active) != 1:
         raise ValueError("worker task requires exactly one active claim")

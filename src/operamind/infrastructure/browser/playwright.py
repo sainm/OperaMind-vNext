@@ -8,6 +8,7 @@ import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, Protocol, cast
 from urllib.parse import urljoin, urlsplit
@@ -43,11 +44,26 @@ from operamind.domain import (
 
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SENSITIVE_ASSIGNMENT = re.compile(
-    r"(?i)\b(authorization|password|passwd|token|secret|cookie|set-cookie)\b"
+    r"(?i)\b(authorization|password|passwd|"
+    r"(?:access|refresh|id|auth|session|csrf)?[_-]?token|"
+    r"(?:client|api)?[_-]?secret|(?:api|private|signing)[_-]?key|"
+    r"cookie|set-cookie|credentials?)\b"
     r"(\s*[:=]\s*)([^\s,;]+)"
 )
-_SENSITIVE_KEY = re.compile(r"(?i)^(authorization|password|passwd|token|secret|cookie|set-cookie)$")
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]+=*")
+_CAMEL_CASE_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_SENSITIVE_KEY_PARTS = frozenset(
+    {
+        "authorization",
+        "credential",
+        "credentials",
+        "cookie",
+        "passwd",
+        "password",
+        "secret",
+        "token",
+    }
+)
 _ROUTE_RESOURCE_TYPES = frozenset({"document", "fetch", "xhr"})
 _FORM_ROUTE_INIT_SCRIPT = """
 document.addEventListener("submit", event => {
@@ -218,10 +234,15 @@ class PlaywrightBrowserPreflightProbe:
             storage_state=storage_state,
         )
         context.set_default_timeout(self._timeout_ms)
+        context.route(
+            "**/*",
+            lambda route: _enforce_approved_navigation(route, origin),
+        )
         try:
             origin_page = context.new_page()
             origin_page.set_default_navigation_timeout(self._navigation_timeout_ms)
             response = origin_page.goto(origin, wait_until="domcontentloaded")
+            _require_approved_page_origin(origin_page.url, origin)
             if response is not None and response.status >= 500:
                 raise PlaywrightError("Target origin returned a server error")
             origin_page.close()
@@ -231,6 +252,7 @@ class PlaywrightBrowserPreflightProbe:
                 target = urljoin(f"{origin}/", scenario.trigger_path.lstrip("/"))
                 try:
                     response = page.goto(target, wait_until="domcontentloaded")
+                    _require_approved_page_origin(page.url, origin)
                     if response is not None and response.status >= 400:
                         raise PlaywrightError("Trigger Path returned an error response")
                 except (PlaywrightTimeoutError, PlaywrightError):
@@ -491,9 +513,20 @@ class PlaywrightBrowserExecutor:
                 storage_state=storage_state,
             )
             context.set_default_timeout(self._timeout_ms)
+            context.route(
+                "**/*",
+                lambda route: _enforce_approved_navigation(route, origin),
+            )
             page = context.new_page()
             page.set_default_navigation_timeout(self._navigation_timeout_ms)
-            page.on("response", lambda response: network.append(_response_summary(response)))
+            page.on(
+                "response",
+                lambda response: _capture_response_summary(
+                    response=response,
+                    approved_origin=origin,
+                    summaries=network,
+                ),
+            )
             page.on(
                 "request",
                 lambda request: _capture_request_routes(
@@ -502,6 +535,7 @@ class PlaywrightBrowserExecutor:
                     scenario_id=scenario.scenario_id,
                     active_action=active_action,
                     observations=route_observations,
+                    approved_origin=origin,
                 ),
             )
             page.expose_binding(
@@ -520,6 +554,7 @@ class PlaywrightBrowserExecutor:
                 raise ValueError("Browser trigger_path escaped the approved origin")
             try:
                 page.goto(target, wait_until="domcontentloaded")
+                _require_approved_page_origin(page.url, origin)
             except (PlaywrightTimeoutError, PlaywrightError):
                 failure_category = BrowserFailureCategory.ENVIRONMENT
                 failure_summary = "The approved Trigger Path was unavailable."
@@ -529,6 +564,7 @@ class PlaywrightBrowserExecutor:
                         active_action["action_id"] = action.action_id
                         active_action["route_source_ref"] = action.route_source_ref
                         self._perform_action(page, action)
+                        _require_approved_page_origin(page.url, origin)
                         steps.append(
                             {
                                 "action_id": action.action_id,
@@ -579,6 +615,7 @@ class PlaywrightBrowserExecutor:
                             failure_category = assertion.failure_category
                             failure_summary = f"Assertion failed: {assertion.assertion_id}"
             try:
+                _require_approved_page_origin(page.url, origin)
                 redactions = list(scenario.redaction_locators)
                 redactions.extend(
                     action.locator
@@ -786,6 +823,19 @@ def _origin(value: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def _require_approved_page_origin(actual_url: str, approved_origin: str) -> None:
+    if _origin(actual_url) != approved_origin:
+        raise PlaywrightError("Browser navigation escaped the approved origin")
+
+
+def _enforce_approved_navigation(route: Any, approved_origin: str) -> None:
+    request = route.request
+    if bool(request.is_navigation_request()) and _origin(str(request.url)) != approved_origin:
+        route.abort("blockedbyclient")
+        return
+    route.continue_()
+
+
 def _storage_state(path: Path | None) -> str | None:
     if path is None:
         return None
@@ -804,6 +854,16 @@ def _response_summary(response: Any) -> dict[str, object]:
     }
 
 
+def _capture_response_summary(
+    *,
+    response: Any,
+    approved_origin: str,
+    summaries: list[dict[str, object]],
+) -> None:
+    if _origin(str(response.url)) == approved_origin:
+        summaries.append(_response_summary(response))
+
+
 def _capture_request_routes(
     *,
     request: Any,
@@ -811,10 +871,13 @@ def _capture_request_routes(
     scenario_id: str,
     active_action: Mapping[str, str | None],
     observations: list[dict[str, object]],
+    approved_origin: str | None = None,
 ) -> None:
     if str(request.resource_type) not in _ROUTE_RESOURCE_TYPES:
         return
     parsed = urlsplit(str(request.url))
+    if approved_origin is not None and _origin(str(request.url)) != approved_origin:
+        return
     if parsed.scheme not in {"http", "https"} or not parsed.path.startswith("/"):
         return
     _append_route_observation(
@@ -910,14 +973,20 @@ def _sanitize_json(value: object) -> object:
         return [_sanitize_json(item) for item in value]
     if isinstance(value, dict):
         return {
-            str(key): (
-                "[REDACTED]"
-                if _SENSITIVE_KEY.fullmatch(str(key)) is not None
-                else _sanitize_json(item)
-            )
+            str(key): ("[REDACTED]" if _is_sensitive_key(str(key)) else _sanitize_json(item))
             for key, item in value.items()
         }
     return value
+
+
+def _is_sensitive_key(value: str) -> bool:
+    normalized = _CAMEL_CASE_BOUNDARY.sub("_", value).casefold()
+    parts = tuple(part for part in re.split(r"[^a-z0-9]+", normalized) if part)
+    if any(part in _SENSITIVE_KEY_PARTS for part in parts):
+        return True
+    return any(
+        pair in {("api", "key"), ("private", "key"), ("signing", "key")} for pair in pairwise(parts)
+    )
 
 
 def _sanitize_text(value: str) -> str:

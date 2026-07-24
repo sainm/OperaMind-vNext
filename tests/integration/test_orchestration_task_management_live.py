@@ -110,9 +110,7 @@ def test_real_postgres_task_management_browser_e2e() -> None:
     listener.bind(("127.0.0.1", 0))
     listener.listen()
     port = listener.getsockname()[1]
-    server = uvicorn.Server(
-        uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
-    )
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
     thread = threading.Thread(
         target=server.run,
         kwargs={"sockets": [listener]},
@@ -126,14 +124,16 @@ def test_real_postgres_task_management_browser_e2e() -> None:
     errors: list[str] = []
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True, channel="chrome")
+            browser = playwright.chromium.launch(headless=True, channel="msedge")
             page = browser.new_page(viewport={"width": 1440, "height": 1100})
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.on(
                 "response",
-                lambda response: errors.append(f"HTTP {response.status}: {response.url}")
-                if response.status >= 400 and not response.url.endswith("/favicon.ico")
-                else None,
+                lambda response: (
+                    errors.append(f"HTTP {response.status}: {response.url}")
+                    if response.status >= 400 and not response.url.endswith("/favicon.ico")
+                    else None
+                ),
             )
             page.goto(f"http://127.0.0.1:{port}", wait_until="networkidle")
             page.locator("#projectSelect").select_option(project_id)
@@ -165,9 +165,7 @@ def test_real_postgres_task_management_browser_e2e() -> None:
             )
             expect(expired_worker_card.locator(".task-worker-concurrency")).to_have_value("2")
             expired_worker_card.get_by_role("button", name="ドレイン開始").click()
-            expect(page.locator("#notice")).to_contain_text(
-                "Worker のドレインを開始しました"
-            )
+            expect(page.locator("#notice")).to_contain_text("Worker のドレインを開始しました")
             expired_worker_card = page.locator(
                 '#taskWorkerStatus [data-executor-id="expired-worker"]'
             )
@@ -209,9 +207,7 @@ def test_real_postgres_task_management_browser_e2e() -> None:
             expect(page.locator("#taskManagementDetail")).to_contain_text("owner unavailable")
             requeue = page.get_by_role("button", name="Task を Requeue")
             expect(requeue).to_be_visible()
-            requeue_reason = page.locator(
-                "#taskManagementDetail #taskManagementActionReason"
-            )
+            requeue_reason = page.locator("#taskManagementDetail #taskManagementActionReason")
             requeue_reason.fill("Owner が確認可能になった")
             expect(requeue_reason).to_have_value("Owner が確認可能になった")
             requeue.click()

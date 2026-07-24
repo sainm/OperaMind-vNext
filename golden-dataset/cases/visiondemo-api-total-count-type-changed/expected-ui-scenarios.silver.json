@@ -1,0 +1,9 @@
+{
+  "case_id": "visiondemo-api-total-count-type-changed",
+  "project_id": "visiondemo",
+  "dataset_stage": "silver",
+  "ui_impact_status": "not_impacted",
+  "scenarios": [],
+  "expected_current_base_outcome": {},
+  "review_status": "needs_business_and_qa_review"
+}

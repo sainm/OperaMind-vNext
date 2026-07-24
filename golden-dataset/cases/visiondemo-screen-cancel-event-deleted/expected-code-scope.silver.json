@@ -1,0 +1,28 @@
+{
+  "case_id": "visiondemo-screen-cancel-event-deleted",
+  "dataset_stage": "silver",
+  "base_repository_revision": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6",
+  "must_include_candidates": [
+    {
+      "path": "VisionDemo/src/main/webapp/WEB-INF/jsp/fragments/expense-list.jsp",
+      "symbols": ["expense-cancel-btn"],
+      "expected_action": "delete_candidate",
+      "reason": "削除対象イベントの画面アンカー"
+    },
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/controller/ExpenseController.java",
+      "symbols": ["cancel"],
+      "expected_action": "review_only",
+      "reason": "画面イベント削除後も API 利用者が存在する可能性を確認する"
+    }
+  ],
+  "required_test_scope": [
+    {
+      "target": "取消操作の非表示",
+      "expected": "経費精算申請一覧から取消操作が消えている",
+      "acceptable_test_layers": ["browser"]
+    }
+  ],
+  "must_not_modify_paths": ["VisionDemo/pom.xml"],
+  "review_status": "needs_developer_review"
+}

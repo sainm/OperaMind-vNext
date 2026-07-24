@@ -80,9 +80,7 @@ class PostgresCanonicalExecutionAuthorizer:
             if packet.get("base_repository_revision") != grant.base_repository_revision:
                 raise ValueError("Canonical Edit Packet revision differs from the Grant")
         except (KeyError, RuntimeError, ValueError) as error:
-            raise ChangeLoopBlockedError(
-                f"Canonical plan hydration failed: {error}"
-            ) from error
+            raise ChangeLoopBlockedError(f"Canonical plan hydration failed: {error}") from error
 
         canonical_by_type = {
             value["artifact_type"]: value for value in (packet, impact, confirmation, graph)
@@ -115,10 +113,7 @@ class PostgresCanonicalExecutionAuthorizer:
         packet_record = self._packets.get(grant.edit_packet_id)
         if packet_record is None:
             raise ValueError("Canonical Edit Packet does not exist")
-        if (
-            packet_record.status != "active"
-            or packet_record.impact_report_status != "confirmed"
-        ):
+        if packet_record.status != "active" or packet_record.impact_report_status != "confirmed":
             raise ValueError("Canonical Edit Packet is no longer active and confirmed")
         impact_state = self._impacts.get_state(grant.impact_report_id)
         if impact_state is None or impact_state.status != "confirmed":
@@ -128,9 +123,7 @@ class PostgresCanonicalExecutionAuthorizer:
         impact = self._require_artifact(grant.impact_report_id, "ImpactReport")
         confirmation = self._require_artifact(grant.confirmation_id, "ImpactConfirmation")
         context = self._require_artifact(str(impact["context_package_id"]), "ContextPackage")
-        graph = self._require_artifact(
-            str(impact["code_graph_snapshot_id"]), "CodeGraphSnapshot"
-        )
+        graph = self._require_artifact(str(impact["code_graph_snapshot_id"]), "CodeGraphSnapshot")
         self._require_real_rag_context(
             context,
             project_id=grant.project_id,

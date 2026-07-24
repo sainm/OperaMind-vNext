@@ -30,9 +30,7 @@ def test_web_test_data_authorization_queries_fail_closed_for_missing_scope() -> 
     assert DATABASE_URL is not None
     with psycopg.connect(DATABASE_URL) as connection:
         MigrationRunner(connection, MigrationCatalog.load(ROOT / "migrations")).apply()
-        repository = DataExecutionRepository(
-            connection, ContractCatalog.load(ROOT / "contracts")
-        )
+        repository = DataExecutionRepository(connection, ContractCatalog.load(ROOT / "contracts"))
 
         with pytest.raises(ValueError, match="No active Approval Grant"):
             repository.latest_active_scope(

@@ -21,7 +21,7 @@ def test_core_contract_catalog_is_complete_and_valid() -> None:
     assert frozenset(catalog.schema_paths) == EXPECTED_ARTIFACT_TYPES
 
 
-def test_every_core_contract_has_a_valid_v1_example() -> None:
+def test_every_core_contract_has_valid_versioned_examples() -> None:
     catalog = ContractCatalog.load(ROOT / "contracts")
 
     report = catalog.validate_examples()
@@ -58,6 +58,24 @@ def test_ready_ingestion_artifact_requires_exact_build_and_profile_identity() ->
     artifact["embedding_index_status"] = "stale"
     with pytest.raises(ArtifactValidationError):
         catalog.validate_artifact(artifact)
+
+
+def test_legacy_ingestion_artifact_without_variant_provenance_remains_valid() -> None:
+    catalog = ContractCatalog.load(ROOT / "contracts")
+    artifact = json.loads(
+        (ROOT / "contracts/examples/document-ingestion-result.v1.example.json").read_text()
+    )
+    for field in (
+        "source_variant_ids",
+        "target_variant_ids",
+        "source_fact_variant_ids",
+        "target_fact_variant_ids",
+        "source_ignored_sections",
+        "target_ignored_sections",
+    ):
+        artifact.pop(field, None)
+
+    catalog.validate_artifact(artifact)
 
 
 def test_code_graph_edge_requires_extraction_provenance() -> None:
@@ -136,3 +154,36 @@ def test_copilot_coding_task_contract_reserves_future_api_provider_route() -> No
     }
 
     catalog.validate_artifact(artifact)
+
+
+def test_changed_line_coverage_contract_cannot_lower_system_threshold() -> None:
+    catalog = ContractCatalog.load(ROOT / "contracts")
+    artifact = json.loads(
+        (ROOT / "contracts/examples/changed-line-coverage-report.v1.example.json").read_text()
+    )
+    artifact["minimum_coverage_percent"] = 79
+
+    with pytest.raises(ArtifactValidationError):
+        catalog.validate_artifact(artifact)
+
+
+def test_change_closure_contract_keeps_v1_immutable_and_requires_v2_coverage() -> None:
+    catalog = ContractCatalog.load(ROOT / "contracts")
+    legacy = json.loads(
+        (ROOT / "contracts/examples/change-closure-result.v1.example.json").read_text()
+    )
+    current = json.loads(
+        (ROOT / "contracts/examples/change-closure-result.v2.example.json").read_text()
+    )
+
+    catalog.validate_artifact(legacy)
+    catalog.validate_artifact(current)
+
+    legacy["changed_line_coverage_percent"] = 100
+    legacy["changed_line_coverage_status"] = "passed"
+    with pytest.raises(ArtifactValidationError):
+        catalog.validate_artifact(legacy)
+
+    current.pop("changed_line_coverage_status")
+    with pytest.raises(ArtifactValidationError):
+        catalog.validate_artifact(current)

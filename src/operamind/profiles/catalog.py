@@ -22,6 +22,7 @@ EXPECTED_PROFILE_TYPES = frozenset(
         "DocumentConventionProfile",
         "DocumentRelationProfile",
         "EmbeddingProfile",
+        "UiLocatorProfile",
     }
 )
 WHITESPACE = re.compile(r"\s+")
@@ -32,8 +33,13 @@ EXAMPLE_NAMES = {
         "screen-design-convention-profile.example.json",
     ),
     "DocumentRelationProfile": ("document-relation-profile.example.json",),
-    "CodeFrameworkProfile": ("code-framework-profile.example.json",),
+    "CodeFrameworkProfile": (
+        "code-framework-profile.example.json",
+        "polyglot-code-framework-profile.example.json",
+        "struts1-code-framework-profile.example.json",
+    ),
     "CommandExecutionProfile": ("command-execution-profile.example.json",),
+    "UiLocatorProfile": ("ui-locator-profile.example.json",),
 }
 
 
@@ -301,11 +307,15 @@ class ProfileCatalog:
             "config_key": "properties",
             "java_field_access": "java",
             "java_symbol": "java",
+            "javascript_symbol": "javascript",
             "junit_test": "java",
+            "kotlin_symbol": "kotlin",
+            "python_symbol": "python",
             "spring_config_binding": "java",
             "spring_data_access": "java",
             "spring_endpoint": "java",
             "sql_table": "sql",
+            "typescript_symbol": "typescript",
         }
         for extractor, language in extractor_languages.items():
             if extractor in extractors and language not in languages:
@@ -322,6 +332,7 @@ class ProfileCatalog:
             "spring_endpoint": {"java_symbol"},
             "spring_config_binding": {"config_key", "java_symbol"},
             "spring_data_access": {"java_symbol", "sql_table"},
+            "struts1_mvc": {"java_symbol"},
         }
         for dependent, required in dependencies.items():
             missing = sorted(required - extractors)
@@ -341,6 +352,16 @@ class ProfileCatalog:
                     location="anchor_extractors",
                 )
             )
+        if "struts1_mvc" in extractors:
+            for language in ("java", "xml"):
+                if language not in languages:
+                    issues.append(
+                        ValidationIssue(
+                            code="profile.extractor_language_missing",
+                            message=f"struts1_mvc requires language {language}",
+                            location="anchor_extractors",
+                        )
+                    )
         return issues
 
     @staticmethod

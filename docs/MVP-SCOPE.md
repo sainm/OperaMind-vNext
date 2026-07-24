@@ -2,7 +2,7 @@
 
 ## 1. MVP 目标
 
-用两个设计书写法不同的真实项目证明以下链路可重复执行：
+用一个真实项目中的 1-5 个可复核案例证明以下链路可重复执行；需要验证跨项目泛化时再增加设计书写法不同的第二个项目：
 
 ```text
 设计书 before/after
@@ -51,7 +51,7 @@ Golden Dataset 必选代码文件 Recall = 100%
 
 范围准确率和 RAG Recall@K 的目标阈值由 Golden Dataset 固化，不能通过修改期待值迁就当前实现。
 
-`operamind-baseline --require-ready` 只证明 Golden Dataset 本身完成冻结；整个 MVP 还必须通过 `operamind-baseline --require-mvp-ready`。后者要求真实 Provider、人工批准、GitHub Copilot、绑定 Deployment E2E 和完整本地回归均有 digest 固定的最终证据。需要语义判断的证据记录人工确认，确定性回归记录机器验证；当前 readiness manifest 仍因外部 gate 保持 `pending`。
+`operamind-baseline --require-ready` 只证明 Golden Dataset 本身完成冻结；整个 MVP 还必须通过 `operamind-baseline --require-mvp-ready`。后者要求真实 Provider、人工批准、GitHub Copilot、绑定 Deployment E2E 和完整本地回归均有 digest 固定的最终证据。需要语义判断的证据记录人工确认，确定性回归记录机器验证；当前 source tree 的旧全回归 digest 已失效，且 `github_copilot_live` 外部 gate 仍为 `pending`。
 
 ## 5. 预计工作量
 

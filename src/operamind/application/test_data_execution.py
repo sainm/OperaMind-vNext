@@ -107,8 +107,7 @@ class TestDataExecutionRequest:
 
     def __post_init__(self) -> None:
         if any(
-            not value.strip()
-            for value in (self.execution_result_id, self.run_id, self.project_id)
+            not value.strip() for value in (self.execution_result_id, self.run_id, self.project_id)
         ):
             raise ValueError("Test data execution identity must not be blank")
         if self.started_at is not None and self.started_at.utcoffset() is None:
@@ -230,9 +229,7 @@ class TestDataExecutionEngine:
                             "setup",
                             "failed",
                             reason,
-                            evidence_refs=tuple(
-                                value.evidence_ref for value in error.evidence
-                            ),
+                            evidence_refs=tuple(value.evidence_ref for value in error.evidence),
                         )
                     )
                     failure_reasons.append(reason)
@@ -295,9 +292,7 @@ class TestDataExecutionEngine:
             flow["cleanup_policy"] == "delete_after_run" for flow, _ in executed_flows
         )
         if cleanup_required:
-            results_by_flow = {
-                str(value["flow_id"]): value for value in flow_results
-            }
+            results_by_flow = {str(value["flow_id"]): value for value in flow_results}
             for flow, variables in reversed(executed_flows):
                 if not stopped and flow["cleanup_policy"] != "delete_after_run":
                     continue
@@ -340,9 +335,7 @@ class TestDataExecutionEngine:
                                 "cleanup",
                                 "failed",
                                 reason,
-                                evidence_refs=tuple(
-                                    value.evidence_ref for value in error.evidence
-                                ),
+                                evidence_refs=tuple(value.evidence_ref for value in error.evidence),
                             )
                         )
                         failure_reasons.append(reason)
@@ -357,9 +350,7 @@ class TestDataExecutionEngine:
                         )
                     except (AssertionError, OSError, RuntimeError, ValueError) as error:
                         reason = f"{flow['flow_id']}/{step['step_id']} cleanup: {error}"
-                        cleanup_results.append(
-                            _failed_step(step, "cleanup", "failed", reason)
-                        )
+                        cleanup_results.append(_failed_step(step, "cleanup", "failed", reason))
                         failure_reasons.append(reason)
                         cleanup_failed = True
                         self._emit(
@@ -392,11 +383,7 @@ class TestDataExecutionEngine:
             "evidence": [value.to_artifact() for value in all_evidence],
             "failure_reasons": sorted(set(failure_reasons)),
             "cleanup_status": (
-                "failed"
-                if cleanup_failed
-                else "passed"
-                if cleanup_required
-                else "not_required"
+                "failed" if cleanup_failed else "passed" if cleanup_required else "not_required"
             ),
         }
         _validate_evidence_identity(all_evidence)
@@ -426,12 +413,42 @@ class TestDataExecutionEngine:
             "started_at": self._iso(request.started_at or self._clock()),
             "completed_at": self._iso(self._clock()),
             "flow_results": [
-                _not_run_flow(flow)
-                for flow in cast(list[dict[str, Any]], plan["generation_flows"])
+                _not_run_flow(flow) for flow in cast(list[dict[str, Any]], plan["generation_flows"])
             ],
             "evidence": [],
             "failure_reasons": [reason],
             "cleanup_status": "interrupted",
+        }
+        self._contracts.validate_artifact(artifact)
+        return artifact
+
+    def failed_result(
+        self,
+        *,
+        plan: dict[str, Any],
+        request: TestDataExecutionRequest,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Create a persisted failure when a worker crashes outside the engine loop."""
+        if not reason.strip():
+            raise ValueError("Test data failure reason must not be blank")
+        self._contracts.validate_artifact(plan)
+        artifact: dict[str, Any] = {
+            "artifact_type": "TestDataExecutionResult",
+            "schema_version": "v1",
+            "execution_result_id": request.execution_result_id,
+            "run_id": request.run_id,
+            "test_data_plan_id": plan["test_data_plan_id"],
+            "project_id": request.project_id,
+            "status": "failed",
+            "started_at": self._iso(request.started_at or self._clock()),
+            "completed_at": self._iso(self._clock()),
+            "flow_results": [
+                _not_run_flow(flow) for flow in cast(list[dict[str, Any]], plan["generation_flows"])
+            ],
+            "evidence": [],
+            "failure_reasons": [reason],
+            "cleanup_status": "failed",
         }
         self._contracts.validate_artifact(artifact)
         return artifact
@@ -478,9 +495,7 @@ class TestDataExecutionEngine:
         resolved = cast(dict[str, object], _resolve_variables(step["inputs"], variables))
         resolved_step = dict(step)
         if "target" in resolved_step:
-            resolved_step["target"] = _resolve_variables(
-                resolved_step["target"], variables
-            )
+            resolved_step["target"] = _resolve_variables(resolved_step["target"], variables)
         execution = executor.execute(
             request=request,
             flow_id=str(flow["flow_id"]),
@@ -596,9 +611,7 @@ def _assert_postcondition(
                 f"{assertion['assertion_id']} observed value does not have a count"
             ) from error
         if actual_count != expected:
-            raise AssertionError(
-                f"{assertion['assertion_id']} count did not equal {expected!r}"
-            )
+            raise AssertionError(f"{assertion['assertion_id']} count did not equal {expected!r}")
     elif operator == "satisfies" and actual != expected:
         raise AssertionError(f"{assertion['assertion_id']} did not satisfy {expected!r}")
 
@@ -673,8 +686,7 @@ def _not_run_flow(flow: Mapping[str, object]) -> dict[str, object]:
         "flow_id": flow["flow_id"],
         "status": "not_run",
         "step_results": [
-            _not_run_step(step)
-            for step in cast(list[dict[str, object]], flow["steps"])
+            _not_run_step(step) for step in cast(list[dict[str, object]], flow["steps"])
         ],
         "cleanup_results": [],
         "deferred_assertion_ids": [

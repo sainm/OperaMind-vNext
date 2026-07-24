@@ -229,12 +229,8 @@ def test_runtime_route_reconciliation_keeps_missing_or_ambiguous_evidence_unreso
         capture={"route_observations": [_observation("/api/customers/42")]},
     )
 
-    assert missing.evidence_artifact["resolutions"][0]["reason"] == (
-        "missing_source_route_ref"
-    )
-    assert ambiguous.evidence_artifact["resolutions"][0]["reason"] == (
-        "endpoint_ambiguous"
-    )
+    assert missing.evidence_artifact["resolutions"][0]["reason"] == ("missing_source_route_ref")
+    assert ambiguous.evidence_artifact["resolutions"][0]["reason"] == ("endpoint_ambiguous")
     assert missing.graph_artifact["edges"] == [
         *sorted(missing.graph_artifact["edges"], key=lambda item: str(item["edge_id"]))
     ]
@@ -286,9 +282,7 @@ def test_dynamic_source_with_multiple_unresolved_edges_is_not_guessed() -> None:
     )
 
     assert result.resolved_count == 0
-    assert result.evidence_artifact["resolutions"][0]["reason"] == (
-        "source_route_ambiguous"
-    )
+    assert result.evidence_artifact["resolutions"][0]["reason"] == ("source_route_ambiguous")
     assert (
         sum(
             edge["resolution_status"] == "unresolved"

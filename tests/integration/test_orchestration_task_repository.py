@@ -157,9 +157,7 @@ def test_task_claim_lease_result_and_single_agent_policy() -> None:
             evidence={"human_confirmation": True},
         )["task"]
         assert len(replayed["results"]) == 1
-        assert [event["event_type"] for event in replayed["events"]].count(
-            "result_submitted"
-        ) == 1
+        assert [event["event_type"] for event in replayed["events"]].count("result_submitted") == 1
         with pytest.raises(PersistenceConflictError, match="different content"):
             service.complete_orchestration_task(
                 task_id=task_id,
@@ -228,9 +226,7 @@ def test_task_claim_lease_result_and_single_agent_policy() -> None:
             blocking_reason=None,
             limit=50,
         )["tasks"]
-        assert expiring_task_id in {
-            value["orchestration_task_id"] for value in management_ready
-        }
+        assert expiring_task_id in {value["orchestration_task_id"] for value in management_ready}
 
         reclaimed = service.claim_orchestration_task(
             executor_kind="agent",
@@ -320,9 +316,7 @@ def test_task_claim_lease_result_and_single_agent_policy() -> None:
             limit=50,
         )
         graph_task = next(
-            value
-            for value in graph["tasks"]
-            if value["orchestration_task_id"] == expiring_task_id
+            value for value in graph["tasks"] if value["orchestration_task_id"] == expiring_task_id
         )
         assert graph_task["dependencies"] == [task["orchestration_task_id"]]
         assert graph_task["blocking_reason"] == "human confirmation is still required"
@@ -506,12 +500,15 @@ def test_registered_capabilities_schedule_multiple_workers_and_report_runtime_me
             actor="operator-1",
         )
         assert disabled["live"] is False
-        assert repository.heartbeat_worker(
-            executor_kind="agent",
-            executor_id=str(first_worker["executor_id"]),
-            worker_token=str(first_worker["worker_token"]),
-            lease_seconds=30,
-        )["status"] == "offline"
+        assert (
+            repository.heartbeat_worker(
+                executor_kind="agent",
+                executor_id=str(first_worker["executor_id"]),
+                worker_token=str(first_worker["worker_token"]),
+                lease_seconds=30,
+            )["status"]
+            == "offline"
+        )
         with pytest.raises(ValueError, match="not accepting new Tasks"):
             repository.claim(
                 task_id=first_task["orchestration_task_id"],
@@ -563,11 +560,14 @@ def test_registered_capabilities_schedule_multiple_workers_and_report_runtime_me
             "enabled",
             "disabled",
         }.issubset({event["event_type"] for event in first_worker_view["events"]})
-        assert repository.unregister_worker(
-            executor_kind="agent",
-            executor_id=first_worker["executor_id"],
-            worker_token=str(first_worker["worker_token"]),
-        )["live"] is False
+        assert (
+            repository.unregister_worker(
+                executor_kind="agent",
+                executor_id=first_worker["executor_id"],
+                worker_token=str(first_worker["worker_token"]),
+            )["live"]
+            is False
+        )
 
 
 def _create_confirmation_task(

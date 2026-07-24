@@ -129,12 +129,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
 
-def _add_catalog_arguments(
-    parser: argparse.ArgumentParser, *, require_after_root: bool
-) -> None:
-    parser.add_argument(
-        "--cases-root", type=Path, default=Path("golden-dataset/cases")
-    )
+def _add_catalog_arguments(parser: argparse.ArgumentParser, *, require_after_root: bool) -> None:
+    parser.add_argument("--cases-root", type=Path, default=Path("golden-dataset/cases"))
     parser.add_argument("--target-repository", type=Path, required=True)
     parser.add_argument("--before-root", type=Path, action="append", required=True)
     parser.add_argument(

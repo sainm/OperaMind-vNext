@@ -56,6 +56,9 @@ from operamind.infrastructure.postgres import (
 from operamind.infrastructure.postgres import (
     TestDataExecutionRepository as DataExecutionRepository,
 )
+from operamind.infrastructure.postgres import (
+    TestDataExecutionRunWrite as DataExecutionRunWrite,
+)
 
 ROOT = Path(__file__).parents[2]
 DATABASE_URL = os.getenv("OPERAMIND_TEST_DATABASE_URL")
@@ -88,6 +91,58 @@ class FixtureExecutor:
                 ),
             ),
         )
+
+
+@pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
+def test_outer_worker_failure_is_persisted_as_canonical_failed_result() -> None:
+    assert DATABASE_URL is not None
+    schema_name = f"test_data_background_failure_{uuid4().hex}"
+    with psycopg.connect(DATABASE_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema_name)))
+            cursor.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(schema_name)))
+        MigrationRunner(connection, MigrationCatalog.load(ROOT / "migrations")).apply()
+        contracts = ContractCatalog.load(ROOT / "contracts")
+        bundle = _source_bundle()
+        _seed_scope(connection, contracts, bundle)
+        plan = bundle["test_data_plan"]
+        started_at = datetime.now(UTC)
+        repository = DataExecutionRepository(connection, contracts)
+        repository.reserve(
+            DataExecutionRunWrite(
+                run_id="background-failed-run",
+                execution_result_id="background-failed-result",
+                orchestration_id=str(bundle["orchestration"]["orchestration_id"]),
+                test_data_plan_id=str(plan["test_data_plan_id"]),
+                approval_grant_id="grant-1",
+                project_id="visiondemo",
+                created_by="web-test-data-worker",
+                started_at=started_at,
+            )
+        )
+        service = DataExecutionService(
+            connection=connection,
+            contracts=contracts,
+            executors={},
+        )
+        result = service.fail_reserved(
+            DataExecutionServiceRequest(
+                execution_result_id="background-failed-result",
+                run_id="background-failed-run",
+                orchestration_id=str(bundle["orchestration"]["orchestration_id"]),
+                test_data_plan_id=str(plan["test_data_plan_id"]),
+                approval_grant_id="grant-1",
+                project_id="visiondemo",
+                actor="web-test-data-worker",
+                started_at=started_at,
+            ),
+            reason="Background TestDataPlan worker failed before completion (TimeoutError)",
+        )
+
+        stored = repository.get_result("background-failed-run")
+        assert result.artifact["status"] == "failed"
+        assert result.artifact["cleanup_status"] == "failed"
+        assert stored == result.artifact
 
 
 @pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
@@ -174,17 +229,18 @@ def test_natural_language_revision_supersedes_case_and_stales_old_evidence() -> 
         confirmed = authorizations.confirm(
             target_orchestration_id=target_id,
             approval_grant_id="grant-1",
-            target_scope_digest=str(
-                authorization["scope_comparison"]["target_scope_digest"]
-            ),
+            target_scope_digest=str(authorization["scope_comparison"]["target_scope_digest"]),
             actor="qa-user",
             at=datetime.now(UTC),
         )
         assert confirmed.decision == "reconfirmed"
-        assert authorizations.state(
-            target_orchestration_id=target_id,
-            at=datetime.now(UTC),
-        )["authorized"] is True
+        assert (
+            authorizations.state(
+                target_orchestration_id=target_id,
+                at=datetime.now(UTC),
+            )["authorized"]
+            is True
+        )
 
         target_bundle = orchestrations.bundle(target_id)
         target_plan = target_bundle["test_data_plan"]
@@ -214,8 +270,9 @@ def test_natural_language_revision_supersedes_case_and_stales_old_evidence() -> 
         )
         assert new_closure.artifact["closure_result_id"] != "closure-v1"
         assert "execution-result-v2" in new_closure.artifact["artifact_refs"]
-        assert closures.latest_for_orchestration(target_id)["closure_result_id"] == (
-            new_closure.artifact["closure_result_id"]
+        assert (
+            closures.latest_for_orchestration(target_id)["closure_result_id"]
+            == (new_closure.artifact["closure_result_id"])
         )
 
         undone = service.undo(
@@ -229,13 +286,11 @@ def test_natural_language_revision_supersedes_case_and_stales_old_evidence() -> 
         assert undone["state"] == "applied"
         assert undo_revision["revision_kind"] == "undo"
         assert undo_revision["undo_of_revision_id"] == revision["revision_id"]
-        assert undone["bundle"]["test_plan"]["test_cases"][0]["steps"][0] == (
-            "一覧を開く"
-        )
+        assert undone["bundle"]["test_plan"]["test_cases"][0]["steps"][0] == ("一覧を開く")
         assert undo_revision["stale_run_ids"] == ["run-v2"]
-        assert new_closure.artifact["closure_result_id"] in undo_revision[
-            "stale_closure_result_ids"
-        ]
+        assert (
+            new_closure.artifact["closure_result_id"] in undo_revision["stale_closure_result_ids"]
+        )
         replayed_undo = service.undo(
             change_request_id="change-request-1",
             revision_id=str(revision["revision_id"]),
@@ -252,9 +307,7 @@ def test_natural_language_revision_supersedes_case_and_stales_old_evidence() -> 
         assert history[1]["status"] == "undone"
         assert history[1]["can_undo"] is False
         assert (
-            orchestrations.latest_bundle("change-request-1")["orchestration"][
-                "orchestration_id"
-            ]
+            orchestrations.latest_bundle("change-request-1")["orchestration"]["orchestration_id"]
             == undo_target_id
         )
 
@@ -319,8 +372,7 @@ def test_unchanged_execution_scope_reuses_completed_grant_for_new_run() -> None:
         preview = service.propose(
             change_request_id="change-request-1",
             instruction=(
-                "ケース「経費一覧を確認」の期待結果「4 件を表示する」を"
-                "「5 件を表示する」に変更"
+                "ケース「経費一覧を確認」のステップ「一覧を開く」を「対象一覧を開く」に変更"
             ),
             actor="qa-user",
         )
@@ -349,9 +401,9 @@ def test_unchanged_execution_scope_reuses_completed_grant_for_new_run() -> None:
         assert active_scope["authorization_status"] == "reusable"
         assert active_scope["authorization_id"] is None
 
-        target_plan = ChangeOrchestrationRepository(connection, contracts).bundle(
-            target_id
-        )["test_data_plan"]
+        target_plan = ChangeOrchestrationRepository(connection, contracts).bundle(target_id)[
+            "test_data_plan"
+        ]
         executed = DataExecutionService(
             connection=connection,
             contracts=contracts,
@@ -427,12 +479,14 @@ def test_one_preview_persists_multiple_case_changes_as_one_version() -> None:
 
         assert preview["state"] == "ready_for_confirmation"
         assert preview["revision"] is None
-        assert {
-            operation["test_case_id"] for operation in preview["proposal"]["operations"]
-        } == {"expense-case", "employee-case"}
+        assert {operation["test_case_id"] for operation in preview["proposal"]["operations"]} == {
+            "expense-case",
+            "employee-case",
+        }
         assert (
-            ChangeOrchestrationRepository(connection, contracts)
-            .latest_bundle("change-request-1")["orchestration"]["orchestration_id"]
+            ChangeOrchestrationRepository(connection, contracts).latest_bundle("change-request-1")[
+                "orchestration"
+            ]["orchestration_id"]
             == "orchestration-v1"
         )
 
@@ -443,12 +497,10 @@ def test_one_preview_persists_multiple_case_changes_as_one_version() -> None:
             actor="qa-user",
         )
         cases = {
-            case["test_case_id"]: case
-            for case in applied["bundle"]["test_plan"]["test_cases"]
+            case["test_case_id"]: case for case in applied["bundle"]["test_plan"]["test_cases"]
         }
         data_sets = {
-            item["test_data_id"]: item
-            for item in applied["bundle"]["test_data_plan"]["data_sets"]
+            item["test_data_id"]: item for item in applied["bundle"]["test_data_plan"]["data_sets"]
         }
         flows = {
             item["flow_id"]: item
@@ -456,12 +508,8 @@ def test_one_preview_persists_multiple_case_changes_as_one_version() -> None:
         }
         assert cases["expense-case"]["steps"][0] == "経費一覧画面を開く"
         assert cases["employee-case"]["steps"][0] == "社員一覧画面を開く"
-        assert data_sets["expense-data"]["setup_actions"][0]["payload"][
-            "expected_count"
-        ] == 5
-        assert flows["employee-flow"]["final_assertions"][0]["expected"] == (
-            "5 件を表示する"
-        )
+        assert data_sets["expense-data"]["setup_actions"][0]["payload"]["expected_count"] == 5
+        assert flows["employee-flow"]["final_assertions"][0]["expected"] == ("5 件を表示する")
         with connection.cursor() as cursor:
             cursor.execute("SELECT count(*) FROM test_case_revisions")
             assert cursor.fetchone() == (1,)
@@ -504,7 +552,7 @@ def _seed_scope(
             """
             INSERT INTO analysis_cases (
                 analysis_case_id, project_id, repository_revision_id, status
-            ) VALUES ('analysis-case-1', 'visiondemo', 'revision-1', 'ready_for_impact')
+            ) VALUES ('analysis-case-1', 'visiondemo', 'revision-1', 'verifying_ui')
             """
         )
         cursor.execute(
@@ -760,7 +808,7 @@ def _seed_old_execution_and_closure(
         )
     closure = {
         "artifact_type": "ChangeClosureResult",
-        "schema_version": "v1",
+        "schema_version": "v2",
         "closure_result_id": "closure-v1",
         "change_request_id": "change-request-1",
         "project_id": "visiondemo",
@@ -783,8 +831,10 @@ def _seed_old_execution_and_closure(
         ],
         "ui_status": "not_impacted",
         "business_coverage_percent": 100,
-        "status": "passed",
-        "unresolved_items": [],
+        "changed_line_coverage_percent": 0,
+        "changed_line_coverage_status": "missing",
+        "status": "blocked",
+        "unresolved_items": ["Changed-line coverage evidence is missing"],
     }
     repository = ChangeClosureRepository(connection, contracts)
     repository.persist(
@@ -884,7 +934,7 @@ def _source_bundle(*, ui: bool = True) -> dict[str, Any]:
     criterion = {
         "criterion_id": "expense-criterion",
         "business_rule_refs": ["rule-list"],
-            "assertion_type": "ui" if ui else "source",
+        "assertion_type": "ui" if ui else "source",
         "subject": "一覧件数",
         "operator": "equals",
         "expected": "4 件を表示する",
@@ -927,7 +977,9 @@ def _source_bundle(*, ui: bool = True) -> dict[str, Any]:
                     "steps": ["一覧を開く", "ステータスを確認する"],
                     "expected_results": ["4 件を表示する"],
                 }
-            ] if ui else [],
+            ]
+            if ui
+            else [],
             "blocking_reasons": [],
         },
         "acceptance_criteria": {

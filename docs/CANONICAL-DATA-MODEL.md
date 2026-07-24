@@ -28,6 +28,10 @@ profile_activation_events
 
 Profile Version 全局不可变；每次按版本或当前 Binding 回读都会重新验证 Profile Schema，并比对类型、业务 ID、语义版本、规范化 payload 与 `payload_digest`，防止合法 Schema 的内容漂移静默改变运行行为。Project Binding 保存当前指针，Activation Event 追加保存 previous/next version、操作者和原因。重复 event ID 只有内容完全一致时才视作幂等重放。
 
+`0053` 将 UI Knowledge 的已审核 Locator 集合纳入 `UiLocatorProfile`，并增加 Profile Drift Event、受影响 Artifact 和再构筑请求台账。Binding 从旧 Version 切换到新 Version 时，系统按现有 Canonical 外键关系向 Snapshot、Impact、Test Plan、Evidence 和 Closure 传播 `stale`／`blocked`；历史 Artifact 保持不可变，状态通过独立 Drift 台账和 fail-closed 读取投影表达。
+
+`0054` 把一次再构筑扩展为 Batch、五阶段 Request 依赖、短期 Claim、追加式 Event 和不可变 Artifact Replacement 台账。升级时，同一 Drift 下可能并存的多个旧活动 Request 会合并到一个 fail-closed Batch，不会因活动 Batch 唯一约束而使迁移回滚。登记入口只排队，不伪造 Artifact；Worker 生成结果后，服务端从 Canonical 表独立验证替代 ID、项目、类型、通过状态、激活 Profile Version 和新的 Drift 状态。单个 Impact 只有在替代关系写入后才设置 `resolved_at`，全部 Impact 都通过后 Drift Event 才变为 `resolved`。失败、Lease 耗尽或 Canonical 验收不通过会保持原 Drift，后续阶段改为 `blocked`；显式 Requeue 保留历史 Claim／Event 并重新开放未完成 Request。
+
 ### Document
 
 ```text
@@ -36,6 +40,7 @@ document_versions
 document_facts
 document_snapshots
 snapshot_memberships
+document_fact_variants
 document_nodes
 document_relations
 document_relation_builds
@@ -43,7 +48,7 @@ document_relation_entries
 document_relation_unresolved
 ```
 
-P1 实现身份、版本、Snapshot Membership 和 Canonical Fact。`0024` 为每个 Document Version 增加 extractor ref，新记录固定 OperaMind adapter 与 Office parser library 版本；升级前记录显式回填为 `legacy-unversioned@0`。DocumentIngestionResult 同时固定状态事件、before/after 内容摘要、extractor ref，以及 Document Profile 的数据库版本、binding 和 activation event；解析期间文件变化会在入库前阻断。Canonical Snapshot 回读将 Fact 与 digest-validated Slice 做一一交叉校验；StructuredChange 回读将规范化 Change/Fact 行与不可变 Artifact 对账，因此任一副本缺失或漂移都不能进入正式分析。P2 索引状态 Artifact 还固定 Search Index Build 和 Embedding Profile 数据库版本/binding，并在读取时与规范化行交叉核对。P2 已增加 `document_nodes`、版本化 Relation Build、Build Entry 与 unresolved 台账。关系只能由已校验的 DocumentRelationProfile 对 Canonical 字段做确定性等值连接；无目标、多目标、自指或缺字段都记录原因，不猜测边。Context 和 embedding 只消费相同 Snapshot 的 current/ready Relation Build。当前从规范化 Fact 生成 Section/Slice，后续格式提取器可扩展 paragraph、table、row 和 cell，但检索 entry 必须始终引用 Canonical node ID。
+P1 实现身份、版本、Snapshot Membership 和 Canonical Fact。`0024` 为每个 Document Version 增加 extractor ref，新记录固定 OperaMind adapter 与 Office parser library 版本；升级前记录显式回填为 `legacy-unversioned@0`。`0056` 在 Membership 保存同一多 Sheet Snapshot 使用的完整 Variant 集合，并用 `document_fact_variants` 固定每个 Fact 的具体 Variant。DocumentIngestionResult 同时固定状态事件、before/after 内容摘要、extractor ref、Snapshot／Fact Variant Provenance，以及 Document Profile 的数据库版本、binding 和 activation event；解析期间文件变化会在入库前阻断。Canonical Snapshot 回读将 Fact、Variant Provenance 与 digest-validated Slice 做一一交叉校验；StructuredChange 回读将规范化 Change/Fact 行与不可变 Artifact 对账，因此任一副本缺失或漂移都不能进入正式分析。P2 索引状态 Artifact 还固定 Search Index Build 和 Embedding Profile 数据库版本/binding，并在读取时与规范化行交叉核对。P2 已增加 `document_nodes`、版本化 Relation Build、Build Entry 与 unresolved 台账。关系只能由已校验的 DocumentRelationProfile 对 Canonical 字段做确定性等值连接；无目标、多目标、自指或缺字段都记录原因，不猜测边。Context 和 embedding 只消费相同 Snapshot 的 current/ready Relation Build。当前从规范化 Fact 生成 Section/Slice，后续格式提取器可扩展 paragraph、table、row 和 cell，但检索 entry 必须始终引用 Canonical node ID。
 
 ### Search Index
 

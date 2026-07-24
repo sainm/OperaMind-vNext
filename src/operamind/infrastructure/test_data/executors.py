@@ -6,10 +6,11 @@ import hashlib
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Protocol
+from http.client import HTTPMessage
+from typing import IO, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from operamind.application.test_data_execution import (
     TestDataExecutionEvidence,
@@ -27,6 +28,7 @@ class HttpResponse:
     status_code: int
     headers: Mapping[str, str]
     body: bytes
+    final_url: str
 
 
 class HttpTransport(Protocol):
@@ -55,20 +57,40 @@ class UrllibHttpTransport:
     ) -> HttpResponse:
         request = Request(url=url, data=body, headers=dict(headers), method=method)
         try:
-            with urlopen(request, timeout=timeout_seconds) as response:
+            opener = build_opener(_SameOriginRedirectHandler())
+            with opener.open(request, timeout=timeout_seconds) as response:
                 return HttpResponse(
                     status_code=response.status,
                     headers=dict(response.headers.items()),
                     body=response.read(_RESPONSE_LIMIT + 1),
+                    final_url=response.geturl(),
                 )
         except HTTPError as error:
             return HttpResponse(
                 status_code=error.code,
                 headers=dict(error.headers.items()),
                 body=error.read(_RESPONSE_LIMIT + 1),
+                final_url=error.geturl(),
             )
         except URLError as error:
             raise OSError(f"HTTP test data request failed: {error.reason}") from error
+
+
+class _SameOriginRedirectHandler(HTTPRedirectHandler):
+    """Follow redirects only while the request remains on its approved origin."""
+
+    def redirect_request(
+        self,
+        req: Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> Request | None:
+        if _http_origin(req.full_url) != _http_origin(newurl):
+            raise URLError("HTTP Test data redirect escaped the approved origin")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 class SafeHttpTestDataExecutor:
@@ -118,6 +140,8 @@ class SafeHttpTestDataExecutor:
             headers={"Accept": "application/json", "Content-Type": "application/json"},
             timeout_seconds=self._timeout_seconds,
         )
+        if _http_origin(response.final_url) != _http_origin(url):
+            raise OSError("HTTP Test data redirect escaped the approved origin")
         if len(response.body) > _RESPONSE_LIMIT:
             raise OSError("HTTP Test data response exceeded the Evidence size limit")
         decoded = _decode_response(response.body)
@@ -221,9 +245,7 @@ class BoundFixtureTestDataExecutor:
             evidence_type="fixture",
             payload={"target": target, "observed": observed},
         )
-        return TestDataStepExecution(
-            source_values={"fixture": observed}, evidence=(evidence,)
-        )
+        return TestDataStepExecution(source_values={"fixture": observed}, evidence=(evidence,))
 
 
 class BoundSqlTestDataExecutor:
@@ -263,9 +285,7 @@ class BoundSqlTestDataExecutor:
             evidence_type="sql",
             payload={"query_ref": target, "observed": observed},
         )
-        return TestDataStepExecution(
-            source_values={"database": observed}, evidence=(evidence,)
-        )
+        return TestDataStepExecution(source_values={"database": observed}, evidence=(evidence,))
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,9 +327,7 @@ class BoundUiTestDataExecutor:
         action_ref = str(step.get("ui_action_ref", ""))
         binding = self._bindings.get((screen_ref, action_ref))
         if binding is None:
-            raise ValueError(
-                f"UI screen/action has no approved binding: {screen_ref}/{action_ref}"
-            )
+            raise ValueError(f"UI screen/action has no approved binding: {screen_ref}/{action_ref}")
         result = binding(request, resolved_inputs, variables)
         step_id = str(step["step_id"])
         evidence: list[TestDataExecutionEvidence] = [
@@ -351,9 +369,7 @@ class BoundUiTestDataExecutor:
         )
 
 
-def _http_target(
-    step: Mapping[str, object], inputs: Mapping[str, object]
-) -> tuple[str, str]:
+def _http_target(step: Mapping[str, object], inputs: Mapping[str, object]) -> tuple[str, str]:
     target_parts = str(step.get("target", "")).split(maxsplit=1)
     target_method = target_parts[0].upper() if len(target_parts) == 2 else None
     target_path = target_parts[1] if len(target_parts) == 2 else None
@@ -392,6 +408,23 @@ def _target_url(base_url: str, path: str, query: Mapping[object, object]) -> str
         elif value is not None:
             query_values.append((str(key), str(value)))
     return urlunsplit((base.scheme, base.netloc, path, urlencode(query_values), ""))
+
+
+def _http_origin(value: str) -> tuple[str, str, int] | None:
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
+        return None
+    if parsed.username is not None or parsed.password is not None:
+        return None
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    return (
+        parsed.scheme.casefold(),
+        parsed.hostname.casefold(),
+        port if port is not None else (443 if parsed.scheme == "https" else 80),
+    )
 
 
 def _decode_response(body: bytes) -> object:

@@ -19,9 +19,7 @@ def test_canonical_orchestration_generates_scope_tests_data_coverage_and_ui() ->
     result = ChangeOrchestrationPlanner(repository_root=ROOT).plan(_input())
 
     assert result.orchestration["status"] == "ready"
-    assert result.orchestration["reviewed_case_id"] == (
-        "visiondemo-expense-status-filter-golden"
-    )
+    assert result.orchestration["reviewed_case_id"] == ("visiondemo-expense-status-filter-golden")
     assert result.orchestration["code_scope"] == [
         {
             "impact_item_id": "impact-expense-service",

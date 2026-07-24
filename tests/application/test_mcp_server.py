@@ -85,6 +85,10 @@ def test_mcp_lists_bounded_annotated_copilot_tools_after_initialization() -> Non
         "minimum": 1,
         "maximum": 50,
     }
+    threshold = by_name["copilot_record_edit_result"]["inputSchema"]["properties"][
+        "changed_line_coverage"
+    ]["properties"]["minimum_coverage_percent"]
+    assert threshold == {"type": "number", "minimum": 80, "maximum": 100}
     assert {
         name for name, tool in by_name.items() if tool["annotations"]["readOnlyHint"] is True
     } == {

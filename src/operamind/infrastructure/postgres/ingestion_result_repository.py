@@ -382,6 +382,53 @@ class DocumentIngestionResultRepository:
             raise PersistenceConflictError(
                 "DocumentIngestionResult document Profiles drifted from Snapshot membership"
             )
+        provenance_fields = {
+            f"{prefix}_{suffix}"
+            for prefix in ("source", "target")
+            for suffix in ("variant_ids", "fact_variant_ids")
+        }
+        present_provenance_fields = provenance_fields.intersection(artifact)
+        if present_provenance_fields and present_provenance_fields != provenance_fields:
+            raise PersistenceConflictError(
+                "DocumentIngestionResult Variant provenance is incomplete"
+            )
+        for prefix in ("source", "target") if present_provenance_fields else ():
+            snapshot_id = artifact.get(f"{prefix}_snapshot_id")
+            if not isinstance(snapshot_id, str) or not snapshot_id:
+                continue
+            cursor.execute(
+                """
+                SELECT selected_variant_ids
+                FROM snapshot_memberships
+                WHERE project_id = %s AND document_snapshot_id = %s
+                """,
+                (event_project_id, snapshot_id),
+            )
+            membership_rows = cursor.fetchall()
+            expected_variant_ids = cast(list[str], artifact[f"{prefix}_variant_ids"])
+            if len(membership_rows) != 1 or membership_rows[0][0] != expected_variant_ids:
+                raise PersistenceConflictError(
+                    "DocumentIngestionResult Snapshot Variant provenance differs"
+                )
+            cursor.execute(
+                """
+                SELECT document_fact_id, selected_variant_id
+                FROM document_fact_variants
+                WHERE project_id = %s AND document_snapshot_id = %s
+                """,
+                (event_project_id, snapshot_id),
+            )
+            actual_fact_variants = {
+                str(fact_id): str(variant_id) for fact_id, variant_id in cursor.fetchall()
+            }
+            expected_fact_variants = cast(
+                dict[str, str],
+                artifact[f"{prefix}_fact_variant_ids"],
+            )
+            if actual_fact_variants != expected_fact_variants:
+                raise PersistenceConflictError(
+                    "DocumentIngestionResult Fact Variant provenance differs"
+                )
         expected_activations = {
             (
                 str(profile["activation_event_id"]),

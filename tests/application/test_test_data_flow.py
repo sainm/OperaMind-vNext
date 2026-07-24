@@ -24,9 +24,7 @@ def test_legacy_data_sets_become_verified_generation_flows() -> None:
         "test-data-default-seed",
         "test-data-returned-expense",
     }
-    returned = next(
-        flow for flow in flows if flow["flow_id"] == "flow-test-data-returned-expense"
-    )
+    returned = next(flow for flow in flows if flow["flow_id"] == "flow-test-data-returned-expense")
     assert returned["steps"][0]["channel"] == "http"
     assert returned["steps"][0]["inputs"] == {
         "method": "POST",
@@ -87,9 +85,7 @@ def test_cross_screen_flow_requires_reviewed_ui_screen_and_action_refs() -> None
 
 def test_artifact_semantics_require_cleanup_and_resolved_cleanup_variables() -> None:
     plan = {
-        "data_sets": [
-            {"test_data_id": "data-1", "test_case_refs": ["case-1"]}
-        ],
+        "data_sets": [{"test_data_id": "data-1", "test_case_refs": ["case-1"]}],
         "generation_flows": [
             {
                 "flow_id": "flow-1",

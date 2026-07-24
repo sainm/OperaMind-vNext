@@ -73,6 +73,14 @@ class _ManagementUiService:
             ],
         }
 
+    def execute_web_command(
+        self,
+        *,
+        operation: Any,
+        **_values: object,
+    ) -> dict[str, object]:
+        return operation()
+
     def readiness(self) -> dict[str, object]:
         return {
             "readiness_stage": "partial_ready",
@@ -92,13 +100,145 @@ class _ManagementUiService:
             "count": 1,
         }
 
+    def code_graph_view(self, **values: object) -> dict[str, object]:
+        assert values["project_id"] == "visiondemo"
+        assert values["snapshot_id"] == "graph-web-demo"
+        return {
+            "code_graph_snapshot_id": "graph-web-demo",
+            "project_id": "visiondemo",
+            "repository_id": "repository-web-demo",
+            "repository_revision": "revision-web-demo",
+            "scan_status": "complete",
+            "nodes": [
+                {
+                    "id": "file-expense",
+                    "kind": "file",
+                    "title": "src/ExpenseService.java",
+                    "path": "src/ExpenseService.java",
+                    "language": "java",
+                    "role": "production",
+                },
+                {
+                    "id": "symbol-search",
+                    "kind": "symbol",
+                    "title": "search(String status)",
+                    "path": "src/ExpenseService.java",
+                    "symbol_type": "method",
+                    "start_line": 20,
+                    "end_line": 34,
+                },
+            ],
+            "edges": [
+                {
+                    "id": "contains-search",
+                    "type": "contains",
+                    "from": "file-expense",
+                    "to": "symbol-search",
+                    "resolution": "resolved",
+                    "confidence": "high",
+                    "source_location": None,
+                }
+            ],
+            "summary": {
+                "node_count": 2,
+                "edge_count": 1,
+                "unresolved_edge_count": 0,
+                "total_node_count": 2,
+                "total_edge_count": 1,
+                "truncated": False,
+            },
+        }
+
+    def profile_registry(self, *, project_id: str) -> dict[str, object]:
+        assert project_id == "visiondemo"
+        return {
+            "project_id": project_id,
+            "profile_versions": [],
+            "bindings": [],
+            "drift_events": [],
+            "rebuild_requests": [],
+            "rebuild_batches": [],
+            "open_drift_count": 0,
+            "open_impact_count": 0,
+        }
+
+    def _orchestration_tasks(self) -> list[dict[str, object]]:
+        common = {
+            "project_id": "visiondemo",
+            "change_request_id": "change-cross-screen",
+            "automation_run_id": "automation-cross-screen",
+            "task_kind": "human",
+            "protocol_version": "v1",
+            "priority": 100,
+            "attempt_count": 0,
+            "max_attempts": 3,
+            "required_capabilities": ["impact_review"],
+            "claims": [],
+            "results": [],
+            "events": [],
+            "lease_expired": False,
+        }
+        return [
+            {
+                **common,
+                "orchestration_task_id": "task-requirement",
+                "sequence": 1,
+                "title": "変更要件を確認",
+                "instruction": "変更要件と業務ルールを確認する",
+                "action": "confirm_requirement",
+                "state": "completed",
+                "effective_state": "completed",
+                "dependencies": [],
+                "blocking_reason": None,
+            },
+            {
+                **common,
+                "orchestration_task_id": "task-impact",
+                "sequence": 2,
+                "title": "影響範囲を確認",
+                "instruction": "影響範囲と阻断理由を確認する",
+                "action": "confirm_impact",
+                "state": "blocked",
+                "effective_state": "blocked",
+                "dependencies": ["task-requirement"],
+                "blocking_reason": "業務担当者の確認待ち",
+            },
+            {
+                **common,
+                "orchestration_task_id": "task-code",
+                "sequence": 3,
+                "title": "コード変更を準備",
+                "instruction": "確認済みの影響範囲からコード変更を準備する",
+                "action": "apply_code_change",
+                "state": "ready",
+                "effective_state": "ready",
+                "dependencies": ["task-impact"],
+                "blocking_reason": None,
+            },
+        ]
+
     def orchestration_task_management(self, **values: object) -> dict[str, object]:
         assert values["project_id"] == "visiondemo"
-        return {"tasks": [], "count": 0}
+        tasks = self._orchestration_tasks()
+        return {"tasks": tasks, "count": len(tasks)}
 
     def orchestration_task_dependency_graph(self, **values: object) -> dict[str, object]:
         assert values["project_id"] == "visiondemo"
-        return {"tasks": [], "count": 0, "total_count": 0, "truncated": False}
+        tasks = self._orchestration_tasks()
+        return {
+            "tasks": tasks,
+            "count": len(tasks),
+            "total_count": len(tasks),
+            "truncated": False,
+        }
+
+    def orchestration_task(self, task_id: str) -> dict[str, object]:
+        task = next(
+            value
+            for value in self._orchestration_tasks()
+            if value["orchestration_task_id"] == task_id
+        )
+        return {"task": task}
 
     def orchestration_task_runtime_monitoring(self, **values: object) -> dict[str, object]:
         assert values == {"project_id": "visiondemo", "window_hours": 24}
@@ -352,7 +492,11 @@ class _ManagementUiService:
                     {"label": "変更クローズ", "status": "blocked"},
                 ],
             },
-            "impact_report": None,
+            "impact_report": {
+                "impact_report_id": "impact-web-demo",
+                "code_graph_snapshot_id": "graph-web-demo",
+                "items": [],
+            },
             "evidence": {"command_results": [], "ui_evidence": []},
         }
 
@@ -369,6 +513,54 @@ class _ManagementUiService:
                 "test_plan": self._test_plan,
                 "coverage_report": self._coverage,
             }
+        }
+
+    def change_traceability(self, request_id: str) -> dict[str, object]:
+        assert request_id == "cross-screen-change"
+        return {
+            "change_request_id": request_id,
+            "nodes": [
+                {
+                    "id": "request",
+                    "kind": "変更要件",
+                    "title": "社員画面と経費画面を関連データで検証する",
+                    "status": "confirmed",
+                    "refs": ["cross-screen-change"],
+                },
+                {
+                    "id": "code:expense",
+                    "kind": "影響コード",
+                    "title": "ExpenseService.java",
+                    "status": "modified",
+                    "refs": ["src/ExpenseService.java"],
+                },
+                {
+                    "id": "case:cross-screen",
+                    "kind": "Test Case",
+                    "title": "社員と経費の関連を画面横断で確認する",
+                    "status": "blocked",
+                    "refs": ["cross-screen-ui-case"],
+                },
+            ],
+            "edges": [
+                {"from": "request", "to": "code:expense", "relation": "影響"},
+                {"from": "code:expense", "to": "case:cross-screen", "relation": "検証"},
+            ],
+            "gaps": [
+                {
+                    "code": "ui_result",
+                    "severity": "critical",
+                    "message": "UI テスト結果がありません。",
+                    "node_id": "case:cross-screen",
+                }
+            ],
+            "summary": {
+                "node_count": 3,
+                "edge_count": 2,
+                "gap_count": 1,
+                "critical_gap_count": 1,
+                "stage_order": ["変更要件", "影響コード", "Test Case"],
+            },
         }
 
     def change_automation(self, request_id: str) -> dict[str, object]:
@@ -940,42 +1132,81 @@ def test_japanese_management_ui_renders_cross_screen_closure_e2e() -> None:
 
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True, channel="chrome")
+            browser = playwright.chromium.launch(
+                headless=True,
+                channel=os.getenv("OPERAMIND_PLAYWRIGHT_CHANNEL", "msedge"),
+            )
             page = browser.new_page(viewport={"width": 1440, "height": 1000})
             page.on("console", capture_console)
             page.on("response", capture_response)
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(f"http://127.0.0.1:{port}", wait_until="networkidle")
+            page.locator('[data-view="operations"]').click()
+            expect(page.locator("#orchestrationTaskManagementPanel")).to_be_visible()
+            expect(page.locator("#taskDependencyGraph .task-graph-node")).to_have_count(3)
+            expect(page.locator("#taskDependencyGraph .task-graph-node.critical")).to_have_count(3)
+            expect(
+                page.locator("#taskDependencyGraph .task-graph-node.propagated")
+            ).to_have_count(1)
+            expect(page.locator("#taskDependencyGraph .task-graph-edge.blocking")).to_have_count(1)
+            task_scale_before = page.locator(
+                "#taskGraphControls [data-graph-scale]"
+            ).inner_text()
+            page.locator("#taskGraphControls [data-graph-action='zoom-in']").click()
+            expect(page.locator("#taskGraphControls [data-graph-scale]")).not_to_have_text(
+                task_scale_before
+            )
+            task_stage = page.locator("#taskDependencyGraph .graph-stage")
+            task_transform_before = task_stage.get_attribute("transform")
+            graph_bounds = page.locator("#taskGraphViewport").bounding_box()
+            assert graph_bounds is not None
+            page.mouse.move(
+                graph_bounds["x"] + graph_bounds["width"] - 20,
+                graph_bounds["y"] + graph_bounds["height"] - 20,
+            )
+            page.mouse.down()
+            page.mouse.move(
+                graph_bounds["x"] + graph_bounds["width"] - 60,
+                graph_bounds["y"] + graph_bounds["height"] - 60,
+            )
+            page.mouse.up()
+            assert task_stage.get_attribute("transform") != task_transform_before
+            page.locator(
+                '#taskDependencyGraph [data-graph-node="task-impact"]'
+            ).click()
+            expect(page.locator("#detailDrawer")).to_have_attribute("aria-hidden", "false")
+            expect(page.locator("#taskManagementDetail")).to_contain_text("作業定義")
+            expect(page.locator("#taskManagementDetail")).to_contain_text(
+                "業務担当者の確認待ち"
+            )
+            page.locator("#detailDrawerClose").click()
+            page.locator('[data-view="evidence"]').click()
             expect(page.locator("#uiKnowledgePanel")).to_be_visible()
             expect(page.locator("#unresolvedEvidencePanel")).to_be_visible()
             expect(page.locator("#taskMonitoringMetrics")).to_contain_text("成功率")
             expect(page.locator("#taskMonitoringMetrics")).to_contain_text("83%")
             expect(page.locator("#taskWorkerStatus")).to_contain_text("worker-web-1")
             expect(page.locator("#taskWorkerStatus")).to_contain_text("オンライン")
-            expect(page.locator("#taskBlockerRanking")).to_contain_text(
-                "業務担当者の確認待ち"
-            )
+            expect(page.locator("#taskBlockerRanking")).to_contain_text("業務担当者の確認待ち")
             expect(page.locator("#unresolvedEvidenceSummary")).to_contain_text("未解決 1 件")
             expect(page.locator("#unresolvedEvidenceReports")).to_contain_text(
-                "実行時 Route 観測がありません"
+                "実行時の経路観測がありません"
             )
             expect(page.locator("#unresolvedEvidenceReports")).to_contain_text(
                 "src/web/customer.js:18-18"
             )
             expect(page.locator("#unresolvedEvidenceReports")).to_contain_text(
-                "ブラウザの Route 観測"
+                "ブラウザの経路観測"
             )
             expect(page.locator("#unresolvedEvidenceReports")).to_contain_text(
-                "対象画面を実行して Route Evidence を採取する"
+                "対象画面を実行して経路証跡を採取する"
             )
-            expect(page.locator("#unresolvedEvidenceHistory")).to_contain_text(
-                "graph-web-demo"
-            )
+            expect(page.locator("#unresolvedEvidenceHistory")).to_contain_text("graph-web-demo")
             expect(page.locator("#uiKnowledgeSummary")).to_contain_text("レビュー待ち 2 件")
             approved_draft = page.locator('[data-snapshot-id="knowledge-draft-approved"]')
             expect(approved_draft).to_contain_text("ステータス絞り込み")
             expect(approved_draft).to_contain_text("経費一覧")
-            expect(approved_draft).to_contain_text("Test ID · status-filter")
+            expect(approved_draft).to_contain_text("テスト ID · status-filter")
             expect(approved_draft).to_contain_text("一致 1 · 表示 1")
             expect(approved_draft).to_contain_text("信頼度 98%")
             knowledge_image = approved_draft.locator("img")
@@ -1008,6 +1239,38 @@ def test_japanese_management_ui_renders_cross_screen_closure_e2e() -> None:
             page.locator(".request-item").click()
 
             expect(page.locator("html")).to_have_attribute("lang", "ja")
+            expect(page.locator("#workbenchCurrentDetail")).to_contain_text(
+                "変更番号 cross-screen-change"
+            )
+            expect(page.locator("#workbenchBlockerState")).to_have_text("あり")
+            expect(page.locator("#workbenchNextAction")).to_have_text("ブロック理由を確認")
+            expect(page.locator("#workflowNavigator .workflow-step")).to_have_count(8)
+            page.locator('[data-view="evidence"]').click()
+            expect(page.locator("#traceabilityPanel")).to_be_visible()
+            expect(page.locator("#codeGraphPanel")).to_be_visible()
+            expect(page.locator("#traceabilityGraph .relation-graph-node")).to_have_count(3)
+            expect(page.locator("#codeGraph .relation-graph-node")).to_have_count(2)
+            expect(page.locator("#traceabilitySummary")).to_contain_text("重要経路 3")
+            expect(page.locator("#traceabilitySummary")).to_contain_text("ブロック経路 1")
+            scale_before = page.locator(
+                "#traceabilityGraphControls [data-graph-scale]"
+            ).inner_text()
+            page.locator(
+                "#traceabilityGraphControls [data-graph-action='zoom-in']"
+            ).click()
+            expect(
+                page.locator("#traceabilityGraphControls [data-graph-scale]")
+            ).not_to_have_text(scale_before)
+            page.locator(
+                '#traceabilityGraph [data-graph-node="case:cross-screen"]'
+            ).click()
+            expect(page.locator("#traceabilityNodeDetail")).to_contain_text(
+                "工程：テストケース"  # noqa: RUF001
+            )
+            expect(page.locator("#traceabilityNodeDetail")).to_contain_text(
+                "状態：ブロック"  # noqa: RUF001
+            )
+            page.locator('[data-view="change"]').click()
             expect(page.locator("#automationPanel")).to_be_visible()
             expect(page.locator("#automationSummary")).to_contain_text("UI テスト・結果検証")
             expect(page.locator("#automationTimeline")).to_contain_text("コード・テスト編成")
@@ -1016,12 +1279,19 @@ def test_japanese_management_ui_renders_cross_screen_closure_e2e() -> None:
             page.locator("#actor").fill("qa-user")
             page.locator("#resumeAutomation").click()
             expect(page.locator("#notice")).to_contain_text("一括編成を再開しました")
+            page.locator('[data-view="tests"]').click()
             expect(page.locator("#testDataManagementPanel")).to_be_visible()
             expect(page.locator("#failureManagementPanel")).to_be_visible()
             expect(page.locator("#failureManagementSummary")).to_contain_text(
                 "5 件の失敗またはブロック理由"
             )
-            for category in ("TestData", "UI", "Cleanup", "Coverage", "Closure"):
+            for category in (
+                "テストデータ",
+                "UI",
+                "クリーンアップ",
+                "カバレッジ",
+                "完了判定",
+            ):
                 expect(page.locator("#failureManagementList")).to_contain_text(category)
             expect(page.locator("#failureManagementList")).to_contain_text(
                 "期待する経費行が表示されません"
@@ -1030,7 +1300,7 @@ def test_japanese_management_ui_renders_cross_screen_closure_e2e() -> None:
             expect(page.locator("#failureRecoveryReason")).to_be_visible()
             expect(page.locator("#failureRecoveryReason")).to_have_attribute(
                 "placeholder",
-                "例：Worker 停止後、30 秒以上進捗が更新されていない",  # noqa: RUF001
+                "例：実行担当の停止後、30 秒以上進捗が更新されていない",  # noqa: RUF001
             )
             page.locator("#failureRecover").click()
             expect(page.locator("#notice")).to_contain_text("中断理由を入力してください")
@@ -1040,12 +1310,18 @@ def test_japanese_management_ui_renders_cross_screen_closure_e2e() -> None:
             expect(page.locator("#generatedTestCases")).to_contain_text(
                 "社員と経費の関連を画面横断で確認する"
             )
-            expect(page.locator("#testDataBadges")).to_contain_text("計画: 準備完了")
-            expect(page.locator("#testDataBadges")).to_contain_text("実行: 合格")
+            expect(page.locator("#testDataBadges")).to_contain_text(
+                "計画：準備完了"  # noqa: RUF001
+            )
+            expect(page.locator("#testDataBadges")).to_contain_text(
+                "実行：合格"  # noqa: RUF001
+            )
             expect(page.locator("#testDataSummary")).to_contain_text("再利用データテンプレート")
-            expect(page.locator("#testDataSummary")).to_contain_text("生成順序: employee → expense")
             expect(page.locator("#testDataSummary")).to_contain_text(
-                "逆順クリーンアップ: expense → employee"
+                "生成順序：employee → expense"  # noqa: RUF001
+            )
+            expect(page.locator("#testDataSummary")).to_contain_text(
+                "逆順クリーンアップ：expense → employee"  # noqa: RUF001
             )
             expect(page.locator("#testDataSummary")).to_contain_text("経費金額が 0 より大きい")
             expect(page.locator("#testDataFlows")).to_contain_text(
@@ -1065,7 +1341,7 @@ def test_japanese_management_ui_renders_cross_screen_closure_e2e() -> None:
             expect(page.locator("#testDataFlows")).to_contain_text("事後条件")
             expect(page.locator("#testDataFlows")).to_contain_text("最終業務アサーション")
             expect(page.locator("#testDataFlows")).to_contain_text(
-                "クリーンアップ（Run 終了後に作成データを削除）"  # noqa: RUF001
+                "クリーンアップ（実行終了後に作成データを削除）"  # noqa: RUF001
             )
             image = page.locator("#screenshotGallery img")
             image.scroll_into_view_if_needed()
@@ -1093,7 +1369,7 @@ def test_japanese_management_ui_renders_cross_screen_closure_e2e() -> None:
             )
             page.locator("#modifyTestCase").click()
             expect(page.locator("#testCaseProposal")).to_contain_text(
-                "全体差分: 2 Case · 確定変更 3 件 · 確認事項 1 件"
+                "全体差分：2 ケース · 確定変更 3 件 · 確認事項 1 件"  # noqa: RUF001
             )
             expect(page.locator("#testCaseProposal")).to_contain_text("社員検索結果を開く")
             expect(page.locator("#testCaseProposal")).to_contain_text("テストデータ項目")
@@ -1104,38 +1380,48 @@ def test_japanese_management_ui_renders_cross_screen_closure_e2e() -> None:
                 "全体適用前に確認が必要な選択"
             )
             page.locator('input[name="ambiguity-ambiguity-case"][value="option-change"]').check()
-            page.get_by_role("button", name="全体差分を確認して新 Version を一度生成").click()
+            page.get_by_role("button", name="全体差分を確認して新版を一度生成").click()
             expect(page.locator("#generatedTestCases")).to_contain_text("社員検索結果を開く")
             expect(page.locator("#generatedTestCases")).to_contain_text("合計 5 件を表示する")
-            expect(page.locator("#testCaseRevisionHistory")).to_contain_text("一括修正 Version")
+            expect(page.locator("#testCaseRevisionHistory")).to_contain_text("一括修正版")
             expect(page.locator("#testCaseRevisionHistory")).to_contain_text(
-                "失効 Run 1 件 · Evidence 1 件 · Closure 1 件"
+                "失効した実行 1 件 · 証跡 1 件 · 完了判定 1 件"
             )
             expect(page.locator("#testCaseExecutionAuthorization")).to_contain_text(
-                "Case 改訂後の実行承認"
+                "ケース改訂後の実行承認"
             )
-            expect(page.locator("#testCaseExecutionAuthorization")).to_contain_text("UI Scenario")
+            expect(page.locator("#testCaseExecutionAuthorization")).to_contain_text("UI シナリオ")
             expect(page.locator("#testCaseExecutionAuthorization")).to_contain_text("再確認が必要")
             expect(page.locator("#startTestData")).to_be_disabled()
             page.get_by_role("button", name="変更後の実行範囲を確認").click()
             expect(page.locator("#testCaseExecutionAuthorization")).to_contain_text("再確認済み")
             expect(page.locator("#startTestData")).to_be_enabled()
             expect(page.locator("#startTestData")).to_have_text(
-                "この Case Version を新しい Run で再実行"
+                "このケース版を新しい実行として再試行"
             )
             page.locator("#startTestData").click()
             expect(page.locator("#versionResultComparison")).to_contain_text("改訂前後の実行結果")
             expect(page.locator("#versionResultComparison")).to_contain_text("改訂前")
-            expect(page.locator("#versionResultComparison")).to_contain_text("Evidence 1 件")
-            page.get_by_role("button", name="この Version を取り消す").click()
+            expect(page.locator("#versionResultComparison")).to_contain_text("証跡 1 件")
+            dialog_messages: list[str] = []
+
+            def accept_undo_dialog(dialog: Any) -> None:
+                dialog_messages.append(dialog.message)
+                dialog.accept()
+
+            page.once("dialog", accept_undo_dialog)
+            page.get_by_role("button", name="この版を取り消す").click()
+            assert dialog_messages == [
+                "このテストケース版を取り消します。旧版は削除せず、取り消し内容を新しい版として生成します。続行しますか？"  # noqa: RUF001
+            ]
             expect(page.locator("#generatedTestCases")).to_contain_text("社員一覧を開く")
             expect(page.locator("#generatedTestCases")).to_contain_text("合計 4 件を表示する")
-            expect(page.locator("#testCaseRevisionHistory")).to_contain_text("取り消し Version")
+            expect(page.locator("#testCaseRevisionHistory")).to_contain_text("取り消し版")
             expect(page.locator("#testCaseRevisionHistory")).to_contain_text("取り消し済み")
             page.get_by_role("button", name="変更後の実行範囲を確認").click()
             expect(page.locator("#startTestData")).to_be_enabled()
             expect(page.locator("#startTestData")).to_have_text(
-                "この Case Version を新しい Run で再実行"
+                "このケース版を新しい実行として再試行"
             )
             page.locator("#startTestData").click()
             expect(page.locator("#versionResultComparison")).to_contain_text("改訂後")

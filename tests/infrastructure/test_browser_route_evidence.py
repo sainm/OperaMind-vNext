@@ -4,6 +4,7 @@ from operamind.domain import BrowserExecutionManifest
 from operamind.infrastructure.browser.playwright import (
     _capture_form_route,
     _capture_request_routes,
+    _capture_response_summary,
 )
 
 
@@ -47,6 +48,41 @@ def test_browser_capture_distinguishes_network_navigation_and_form_without_query
         "/customers/search",
     ]
     assert all(item["source_route_ref"] == "route-dynamic" for item in observations)
+
+
+class _ResponseRequest:
+    method = "GET"
+
+
+class _Response:
+    request = _ResponseRequest()
+    status = 200
+
+    def __init__(self, url: str) -> None:
+        self.url = url
+
+
+def test_browser_evidence_ignores_cross_origin_network_metadata() -> None:
+    observations: list[dict[str, object]] = []
+    summaries: list[dict[str, object]] = []
+    approved = "https://approved.example"
+
+    _capture_request_routes(
+        request=_Request(),
+        run_id="run-1",
+        scenario_id="customer-detail",
+        active_action={},
+        observations=observations,
+        approved_origin=approved,
+    )
+    _capture_response_summary(
+        response=_Response("https://outside.example/private?token=secret"),
+        approved_origin=approved,
+        summaries=summaries,
+    )
+
+    assert observations == []
+    assert summaries == []
 
 
 def test_browser_manifest_round_trips_internal_static_route_binding() -> None:

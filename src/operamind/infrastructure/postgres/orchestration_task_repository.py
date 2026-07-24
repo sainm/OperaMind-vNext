@@ -108,9 +108,7 @@ class OrchestrationTaskRepository:
                     "max_concurrent_tasks": max_concurrent_tasks,
                 },
             )
-        result = self.worker_registration(
-            executor_kind=executor_kind, executor_id=executor_id
-        )
+        result = self.worker_registration(executor_kind=executor_kind, executor_id=executor_id)
         result["worker_token"] = worker_token
         return result
 
@@ -257,9 +255,7 @@ class OrchestrationTaskRepository:
             )
         return self.worker_registration(executor_kind=executor_kind, executor_id=executor_id)
 
-    def worker_registration(
-        self, *, executor_kind: str, executor_id: str
-    ) -> dict[str, object]:
+    def worker_registration(self, *, executor_kind: str, executor_id: str) -> dict[str, object]:
         with self._connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
@@ -284,9 +280,7 @@ class OrchestrationTaskRepository:
         if row is None:
             raise ValueError("Orchestration Worker registration does not exist")
         result = _worker_view(row)
-        result["events"] = self.worker_events(
-            executor_kind=executor_kind, executor_id=executor_id
-        )
+        result["events"] = self.worker_events(executor_kind=executor_kind, executor_id=executor_id)
         return result
 
     def list_worker_registrations(
@@ -685,7 +679,8 @@ class OrchestrationTaskRepository:
                     str(task_id)
                     for task_id, step_key, state in previous
                     if str(step_key) != definition.step_key
-                    and str(state) in {
+                    and str(state)
+                    in {
                         "ready",
                         "claimed",
                         "running",
@@ -906,15 +901,12 @@ class OrchestrationTaskRepository:
                 "state": str(row["state"]),
                 "effective_state": (
                     "ready"
-                    if bool(row["lease_expired"])
-                    and str(row["state"]) in {"claimed", "running"}
+                    if bool(row["lease_expired"]) and str(row["state"]) in {"claimed", "running"}
                     else str(row["state"])
                 ),
                 "lease_expired": bool(row["lease_expired"]),
                 "blocking_reason": (
-                    str(row["blocking_reason"])
-                    if row["blocking_reason"] is not None
-                    else None
+                    str(row["blocking_reason"]) if row["blocking_reason"] is not None else None
                 ),
                 "dependencies": [str(value) for value in row["dependencies"]],
             }
@@ -965,9 +957,7 @@ class OrchestrationTaskRepository:
                     payload={"reason": "canonical_workflow_completed"},
                 )
 
-    def update_priority(
-        self, *, task_id: str, priority: int, actor: str
-    ) -> dict[str, object]:
+    def update_priority(self, *, task_id: str, priority: int, actor: str) -> dict[str, object]:
         """Update queue priority while preserving the immutable task definition."""
         _validate_actor(actor)
         if not 1 <= priority <= 1000:
@@ -1545,13 +1535,10 @@ class OrchestrationTaskRepository:
             dependencies = [str(row["depends_on_task_id"]) for row in cursor.fetchall()]
         state = str(task["state"])
         lease_expired = any(
-            str(value["status"]) == "active"
-            and value["lease_expires_at"] <= datetime.now(UTC)
+            str(value["status"]) == "active" and value["lease_expires_at"] <= datetime.now(UTC)
             for value in claims
         )
-        effective_state = (
-            "ready" if lease_expired and state in {"claimed", "running"} else state
-        )
+        effective_state = "ready" if lease_expired and state in {"claimed", "running"} else state
         claim_views = [_claim_view(value) for value in claims]
         result_views = [_result_view(value) for value in results]
         event_views = [_event_view(value) for value in events]
@@ -1620,9 +1607,7 @@ class OrchestrationTaskRepository:
         if registration is None:
             raise ValueError("registered Worker credential is required")
         registered_capabilities = tuple(str(value) for value in registration[0])
-        registered_project = (
-            str(registration[1]) if registration[1] is not None else None
-        )
+        registered_project = str(registration[1]) if registration[1] is not None else None
         if not secrets.compare_digest(str(registration[5]), _digest(worker_token)):
             raise ValueError("Orchestration Worker credential is invalid")
         if str(registration[3]) != "online":

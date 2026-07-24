@@ -1,0 +1,29 @@
+{
+  "case_id": "visiondemo-screen-cancel-event-deleted",
+  "dataset_stage": "silver",
+  "expected_structured_change_count": 1,
+  "changes": [
+    {
+      "stable_key": "screen_element:screen_expense_list/%E5%8F%96%E6%B6%88",
+      "fact_type": "screen_element",
+      "domain": "ui",
+      "change_type": "deleted",
+      "business_summary": "経費精算申請一覧から取消イベントを削除する。",
+      "field_deltas": [
+        {
+          "field": "description",
+          "before": "選択した申請を取り消す",
+          "after": null,
+          "source_ref": "02_画面設計書_経費申請一覧_before.xlsx#イベント一覧!E3"
+        }
+      ],
+      "confidence": "high",
+      "review_status": "needs_review"
+    }
+  ],
+  "must_not_report_as_changes": [
+    "検索イベント",
+    "画面概要",
+    "Workbook metadata"
+  ]
+}

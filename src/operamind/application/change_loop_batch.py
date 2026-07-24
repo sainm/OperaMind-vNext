@@ -132,10 +132,7 @@ class ChangeLoopBatchRunner:
                 "Before document was not resolved",
                 case_output,
             )
-        if (
-            request.input_mode is ChangeInputMode.DOCUMENTS
-            and discovered.after_document is None
-        ):
+        if request.input_mode is ChangeInputMode.DOCUMENTS and discovered.after_document is None:
             return _failure_result(
                 case.case_id,
                 "environment_failed",
@@ -210,9 +207,7 @@ class ChangeLoopBatchRunner:
         if not isinstance(schema, dict):
             raise ValueError(f"Expected JSON Schema object: {schema_path}")
         errors = sorted(
-            Draft202012Validator(
-                schema, format_checker=FormatChecker()
-            ).iter_errors(report),
+            Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(report),
             key=lambda error: list(error.absolute_path),
         )
         if errors:
@@ -224,9 +219,7 @@ class ChangeLoopBatchRunner:
 class IsolatedGitWorktree(AbstractContextManager[Path]):
     """Create and reliably remove one detached worktree for a case."""
 
-    def __init__(
-        self, *, repository: Path, path: Path, revision: str, keep: bool = False
-    ) -> None:
+    def __init__(self, *, repository: Path, path: Path, revision: str, keep: bool = False) -> None:
         self._repository = repository
         self._path = path
         self._revision = revision
@@ -280,17 +273,14 @@ def classify_closure(closure: dict[str, Any]) -> str:
     if closure.get("status") == "reanalysis_required":
         return "reanalysis_required"
     unresolved = [
-        str(value).casefold()
-        for value in cast(list[object], closure.get("unresolved_items", []))
+        str(value).casefold() for value in cast(list[object], closure.get("unresolved_items", []))
     ]
     if any(value.startswith("runtime:") for value in unresolved):
         return "environment_failed"
     return "business_failed"
 
 
-def _failure_result(
-    case_id: str, failure_class: str, message: str, output: Path
-) -> dict[str, Any]:
+def _failure_result(case_id: str, failure_class: str, message: str, output: Path) -> dict[str, Any]:
     return {
         "case_id": case_id,
         "status": failure_class,

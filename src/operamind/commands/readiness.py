@@ -142,12 +142,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             reviewer = str(args.reviewed_by).strip()
             if not reviewer:
                 raise ValueError("--reviewed-by must not be blank")
-            observation_id = "copilot-session:" + hashlib.sha256(
-                (
-                    f"{args.coding_task_id}\0{session['vscode_session_id']}\0"
-                    f"{session['request_id']}\0{session['session_transcript_sha256']}"
-                ).encode()
-            ).hexdigest()
+            observation_id = (
+                "copilot-session:"
+                + hashlib.sha256(
+                    (
+                        f"{args.coding_task_id}\0{session['vscode_session_id']}\0"
+                        f"{session['request_id']}\0{session['session_transcript_sha256']}"
+                    ).encode()
+                ).hexdigest()
+            )
             payload = _observation_payload(
                 gate_id="github_copilot_live",
                 evidence_type="copilot_session",
@@ -293,7 +296,7 @@ def _browser_version() -> str:
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(channel="chrome", headless=True)
+        browser = playwright.chromium.launch(channel="msedge", headless=True)
         try:
             return f"Chromium {browser.version}"
         finally:

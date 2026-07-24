@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import re
 import zipfile
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from importlib.metadata import version as distribution_version
+from itertools import pairwise
 from math import isfinite
 from pathlib import Path, PurePosixPath
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 from xml.etree.ElementTree import ParseError
 
 from docx import Document
@@ -25,6 +27,11 @@ from operamind.domain.canonical_facts import (
     normalize_field_name,
 )
 from operamind.domain.document_conventions import ConventionVariant, DocumentSignals
+
+HTTP_OPERATION = re.compile(
+    r"^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+/\S+$",
+    re.IGNORECASE,
+)
 
 
 class OfficeDocumentError(ValueError):
@@ -86,6 +93,21 @@ class DocumentSignalExtractor(Protocol):
     ) -> tuple[ObservedRecord, ...]: ...
 
 
+@runtime_checkable
+class WorksheetDocumentSignalExtractor(DocumentSignalExtractor, Protocol):
+    """Optional capabilities exposed by worksheet-based document formats."""
+
+    def extract_sheet_signals(self, path: Path) -> tuple[tuple[str, DocumentSignals], ...]: ...
+
+    def extract_records_for_sheet(
+        self,
+        path: Path,
+        variant: ConventionVariant,
+        *,
+        sheet_name: str,
+    ) -> tuple[ObservedRecord, ...]: ...
+
+
 class DocumentSignalExtractorRegistry:
     """Select a format adapter by exact, case-insensitive file suffix."""
 
@@ -123,6 +145,28 @@ class DocumentSignalExtractorRegistry:
 
         extractor = self._extractor_for(path)
         return extractor.extract_records(path, variant)
+
+    def extract_sheet_signals(self, path: Path) -> tuple[tuple[str, DocumentSignals], ...]:
+        """Return bounded per-sheet signals when the format exposes worksheets."""
+
+        extractor = self._extractor_for(path)
+        if not isinstance(extractor, WorksheetDocumentSignalExtractor):
+            return ()
+        return extractor.extract_sheet_signals(path)
+
+    def extract_records_for_sheet(
+        self,
+        path: Path,
+        variant: ConventionVariant,
+        *,
+        sheet_name: str,
+    ) -> tuple[ObservedRecord, ...]:
+        """Extract one Variant only from one named worksheet."""
+
+        extractor = self._extractor_for(path)
+        if not isinstance(extractor, WorksheetDocumentSignalExtractor):
+            return extractor.extract_records(path, variant)
+        return extractor.extract_records_for_sheet(path, variant, sheet_name=sheet_name)
 
     def extractor_ref(self, path: Path) -> str:
         """Return the implementation and parser-library version selected for one path."""
@@ -203,6 +247,62 @@ class XlsxSignalExtractor:
             business_terms=tuple(business_terms),
         )
 
+    def extract_sheet_signals(self, path: Path) -> tuple[tuple[str, DocumentSignals], ...]:
+        """Extract independent structural signals for every bounded worksheet."""
+
+        checked_path = _validate_office_archive(path, self.limits)
+        try:
+            workbook = load_workbook(
+                checked_path,
+                read_only=True,
+                data_only=False,
+                keep_links=False,
+            )
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            SyntaxError,
+            ParseError,
+            InvalidFileException,
+            zipfile.BadZipFile,
+        ) as error:
+            raise OfficeDocumentError(f"Cannot parse XLSX document: {checked_path}") from error
+
+        result: list[tuple[str, DocumentSignals]] = []
+        try:
+            for worksheet in workbook.worksheets:
+                headings: list[str] = []
+                headers: list[str] = []
+                business_terms: list[str] = []
+                for row in worksheet.iter_rows(
+                    min_row=1,
+                    max_row=self.limits.max_scan_rows,
+                    max_col=self.limits.max_scan_columns,
+                    values_only=True,
+                ):
+                    values = _text_values(row)
+                    business_terms.extend(values)
+                    if len(values) == 1:
+                        headings.extend(values)
+                    elif len(values) >= 2:
+                        headers.extend(values)
+                result.append(
+                    (
+                        worksheet.title,
+                        DocumentSignals.from_raw(
+                            filename=checked_path.name,
+                            sheet_names=(worksheet.title,),
+                            headings=tuple(headings),
+                            headers=tuple(headers),
+                            business_terms=tuple(business_terms),
+                        ),
+                    )
+                )
+        finally:
+            workbook.close()
+        return tuple(result)
+
     def extract_records(self, path: Path, variant: ConventionVariant) -> tuple[ObservedRecord, ...]:
         """Find Variant header rows and retain row/cell source locations."""
 
@@ -258,7 +358,11 @@ class XlsxSignalExtractor:
                 )
                 for row_index, row in enumerate(rows, start=1):
                     raw_values = tuple(_text_value(cell.value) for cell in row)
-                    detected_headers = _recognized_headers(raw_values, variant, context_fields)
+                    detected_headers = _recognized_headers(
+                        raw_values,
+                        variant,
+                        context_fields.keys(),
+                    )
                     if detected_headers is not None:
                         active_headers = detected_headers
                         continue
@@ -294,6 +398,171 @@ class XlsxSignalExtractor:
         finally:
             workbook.close()
         return tuple(records)
+
+    def extract_records_for_sheet(
+        self,
+        path: Path,
+        variant: ConventionVariant,
+        *,
+        sheet_name: str,
+    ) -> tuple[ObservedRecord, ...]:
+        """Extract records for one worksheet without mixing table conventions."""
+
+        checked_path = _validate_office_archive(path, self.limits)
+        if not sheet_name.strip():
+            raise ValueError("sheet_name must not be blank")
+        try:
+            workbook = load_workbook(
+                checked_path,
+                read_only=True,
+                data_only=False,
+                keep_links=False,
+            )
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            SyntaxError,
+            ParseError,
+            InvalidFileException,
+            zipfile.BadZipFile,
+        ) as error:
+            raise OfficeDocumentError(f"Cannot parse XLSX document: {checked_path}") from error
+
+        try:
+            worksheet = workbook[sheet_name]
+        except KeyError as error:
+            workbook.close()
+            raise OfficeDocumentError(
+                f"Worksheet does not exist in XLSX document: {sheet_name}"
+            ) from error
+
+        try:
+            all_context_rows = tuple(
+                (
+                    tuple(cell.value for cell in row),
+                    tuple(
+                        f"{checked_path.name}#{context_sheet.title}!"
+                        f"{get_column_letter(column_index)}{row_index}"
+                        for column_index, _cell in enumerate(row, start=1)
+                    ),
+                )
+                for context_sheet in workbook.worksheets
+                for row_index, row in enumerate(
+                    context_sheet.iter_rows(
+                        min_row=1,
+                        max_row=self.limits.max_scan_rows,
+                        max_col=self.limits.max_scan_columns,
+                        values_only=False,
+                    ),
+                    start=1,
+                )
+            )
+            context_fields = _key_value_context_fields(all_context_rows, variant)
+            local_rows = tuple(
+                (
+                    tuple(cell.value for cell in row),
+                    tuple(
+                        f"{checked_path.name}#{worksheet.title}!"
+                        f"{get_column_letter(column_index)}{row_index}"
+                        for column_index, _cell in enumerate(row, start=1)
+                    ),
+                )
+                for row_index, row in enumerate(
+                    worksheet.iter_rows(
+                        min_row=1,
+                        max_row=self.limits.max_scan_rows,
+                        max_col=self.limits.max_scan_columns,
+                        values_only=False,
+                    ),
+                    start=1,
+                )
+            )
+            local_key_value_fields = _key_value_fields(local_rows, variant)
+            effective_context_fields = dict(context_fields)
+            effective_context_fields.update(
+                {
+                    canonical_field: fields
+                    for canonical_field, fields in local_key_value_fields.items()
+                    if canonical_field in variant.stable_key_fields
+                }
+            )
+            active_headers: _DetectedHeaders | None = None
+            active_section_fields: dict[str, ObservedField] = {}
+            records: list[ObservedRecord] = []
+            rows = worksheet.iter_rows(
+                min_row=1,
+                max_row=self.limits.max_scan_rows,
+                max_col=self.limits.max_scan_columns,
+                values_only=False,
+            )
+            for row_index, row in enumerate(rows, start=1):
+                raw_values = tuple(_text_value(cell.value) for cell in row)
+                section_fields = _section_marker_fields(
+                    raw_values,
+                    tuple(
+                        f"{checked_path.name}#{worksheet.title}!"
+                        f"{get_column_letter(column_index)}{row_index}"
+                        for column_index, _cell in enumerate(row, start=1)
+                    ),
+                    variant,
+                    excluded_fields=frozenset(effective_context_fields),
+                )
+                if section_fields:
+                    active_section_fields.update(section_fields)
+                    active_headers = None
+                    continue
+                detected_headers = _recognized_headers(
+                    raw_values,
+                    variant,
+                    effective_context_fields.keys() | active_section_fields.keys(),
+                )
+                if detected_headers is not None:
+                    active_headers = detected_headers
+                    continue
+                if active_headers is None:
+                    continue
+                fields = tuple(
+                    ObservedField(
+                        name=header,
+                        value=value,
+                        source_ref=(
+                            f"{checked_path.name}#{worksheet.title}!{row[column_index].coordinate}"
+                        ),
+                    )
+                    for column_index, header in active_headers.by_column.items()
+                    if (value := _record_value(row[column_index].value)) is not None
+                )
+                inherited_fields = tuple(
+                    field
+                    for canonical_field, fields_for_canonical in effective_context_fields.items()
+                    if canonical_field not in active_headers.canonical_fields
+                    for field in fields_for_canonical
+                ) + tuple(
+                    field
+                    for canonical_field, field in active_section_fields.items()
+                    if canonical_field not in active_headers.canonical_fields
+                )
+                fields = inherited_fields + fields
+                if fields:
+                    records.append(
+                        ObservedRecord(
+                            record_ref=f"{checked_path.name}#{worksheet.title}!row={row_index}",
+                            fields=fields,
+                        )
+                    )
+            if not records and set(variant.stable_key_fields).issubset(local_key_value_fields):
+                records.append(
+                    ObservedRecord(
+                        record_ref=f"{checked_path.name}#{worksheet.title}!key-values",
+                        fields=tuple(
+                            field for fields in local_key_value_fields.values() for field in fields
+                        ),
+                    )
+                )
+            return tuple(records)
+        finally:
+            workbook.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,7 +664,7 @@ class DocxSignalExtractor:
             raw_headers = tuple(
                 _text_value(cell.text) for cell in rows[0].cells[: self.limits.max_scan_columns]
             )
-            headers = _recognized_headers(raw_headers, variant, context_fields)
+            headers = _recognized_headers(raw_headers, variant, context_fields.keys())
             if headers is None:
                 continue
             for row_index, row in enumerate(rows[1:], start=2):
@@ -507,7 +776,7 @@ def _record_value(value: object) -> str | None:
 def _recognized_headers(
     values: Iterable[str | None],
     variant: ConventionVariant,
-    context_fields: Mapping[str, tuple[ObservedField, ...]],
+    context_field_names: Collection[str],
 ) -> _DetectedHeaders | None:
     alias_lookup = _variant_alias_lookup(variant)
 
@@ -525,7 +794,7 @@ def _recognized_headers(
     if (
         len(headers) < 2
         or not represented_fields.intersection(stable_fields)
-        or not stable_fields.issubset(represented_fields | context_fields.keys())
+        or not stable_fields.issubset(represented_fields | set(context_field_names))
     ):
         return None
     return _DetectedHeaders(headers, frozenset(represented_fields))
@@ -547,19 +816,36 @@ def _key_value_context_fields(
     rows: Iterable[tuple[tuple[object, ...], tuple[str, ...]]],
     variant: ConventionVariant,
 ) -> dict[str, tuple[ObservedField, ...]]:
+    return _key_value_fields(
+        rows,
+        variant,
+        allowed_fields=frozenset(variant.stable_key_fields),
+    )
+
+
+def _key_value_fields(
+    rows: Iterable[tuple[tuple[object, ...], tuple[str, ...]]],
+    variant: ConventionVariant,
+    *,
+    allowed_fields: frozenset[str] | None = None,
+) -> dict[str, tuple[ObservedField, ...]]:
     alias_lookup = _variant_alias_lookup(variant)
-    stable_fields = set(variant.stable_key_fields)
     collected: dict[str, list[ObservedField]] = {}
-    for values, source_refs in rows:
+    materialized_rows = tuple(rows)
+    for values, source_refs in materialized_rows:
         for column_index, raw_label in enumerate(values[:-1]):
             label = _text_value(raw_label)
             if label is None:
                 continue
             canonical_field = alias_lookup.get(normalize_field_name(label))
-            if canonical_field not in stable_fields:
+            if canonical_field is None or (
+                allowed_fields is not None and canonical_field not in allowed_fields
+            ):
                 continue
             value = _record_value(values[column_index + 1])
             if value is None:
+                continue
+            if normalize_field_name(value) in alias_lookup:
                 continue
             collected.setdefault(canonical_field, []).append(
                 ObservedField(
@@ -568,8 +854,78 @@ def _key_value_context_fields(
                     source_ref=source_refs[column_index + 1],
                 )
             )
+    for (values, _source_refs), (next_values, next_source_refs) in pairwise(materialized_rows):
+        current = [
+            (index, value)
+            for index, raw in enumerate(values)
+            if (value := _text_value(raw)) is not None
+        ]
+        following = [
+            (index, value)
+            for index, raw in enumerate(next_values)
+            if (value := _record_value(raw)) is not None
+        ]
+        if len(current) != 1 or len(following) != 1:
+            continue
+        label = current[0][1]
+        canonical_field = alias_lookup.get(normalize_field_name(label))
+        if canonical_field is None or (
+            allowed_fields is not None and canonical_field not in allowed_fields
+        ):
+            continue
+        value_index, value = following[0]
+        if normalize_field_name(value) in alias_lookup:
+            continue
+        collected.setdefault(canonical_field, []).append(
+            ObservedField(
+                name=label,
+                value=value,
+                source_ref=next_source_refs[value_index],
+            )
+        )
+    if "operation" in variant.field_aliases and (
+        allowed_fields is None or "operation" in allowed_fields
+    ):
+        operation_alias = variant.field_aliases["operation"][0]
+        for values, source_refs in materialized_rows:
+            for index, raw_value in enumerate(values):
+                value = _text_value(raw_value)
+                if value is None or HTTP_OPERATION.fullmatch(value) is None:
+                    continue
+                collected.setdefault("operation", []).append(
+                    ObservedField(
+                        name=operation_alias,
+                        value=value,
+                        source_ref=source_refs[index],
+                    )
+                )
     return {
         canonical_field: tuple(fields)
         for canonical_field, fields in collected.items()
         if len({normalize_business_value(field.value) for field in fields}) == 1
+    }
+
+
+def _section_marker_fields(
+    values: tuple[str | None, ...],
+    source_refs: tuple[str, ...],
+    variant: ConventionVariant,
+    *,
+    excluded_fields: frozenset[str],
+) -> dict[str, ObservedField]:
+    non_empty = [(index, value) for index, value in enumerate(values) if value is not None]
+    if len(non_empty) != 1:
+        return {}
+    index, value = non_empty[0]
+    canonical_field = _variant_alias_lookup(variant).get(normalize_field_name(value))
+    if canonical_field is None or canonical_field in excluded_fields:
+        return {}
+    if canonical_field not in variant.stable_key_fields:
+        return {}
+    return {
+        canonical_field: ObservedField(
+            name=value,
+            value=value,
+            source_ref=source_refs[index],
+        )
     }

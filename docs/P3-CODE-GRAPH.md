@@ -12,9 +12,11 @@
 - Workspace Scanner 只接受显式确认且存在于 Code Framework Profile 的 scan roots，拒绝绝对路径、`..`、否定 glob 和 symlink scan root，不跟随文件/目录 symlink，并受文件数、单文件大小和总字节数硬上限约束。
 - 发布前验证数据库登记的 workspace root、origin remote 和 commit SHA 与本地 clean Git HEAD 完全一致。扫描集合再与 `git ls-tree HEAD` 交集，因此 ignored 或未跟踪文件不会进入 Revision Graph。
 - Java 由 Tree-sitter 提取 class/interface/record/enum、method/constructor/field 和 contains/imports/implements/calls Edge。Symbol 可保存用于关系解析的 `declared_type`。跨类型 call 只有从 `this`、明确类型、`new Type`、同 owner field type、增强 for 变量或唯一方法返回类型得到唯一目标时才 resolved；显式导入类型、`java.lang` 类型和其调用链标记为 external，其余继续保留 unresolved。
+- JavaScript／TypeScript（含 TSX）、Python 和 Kotlin 由独立 Tree-sitter grammar 经同一 `SemanticAdapterRegistry` 提取 class/interface/object/type、function/method、import、inheritance/implements 和 call。JavaScript／TypeScript 的命名函数与变量绑定 arrow function 都形成稳定 Symbol；测试文件中唯一解析到 production Symbol 的调用生成 `tests` Edge。唯一候选才标记 resolved，已导入或语言内建目标标记 external，多候选或无证明目标继续 unresolved。
 - `java_field_access` 从方法体中已证明的 `this.field` 或未被局部变量遮蔽的 owner field 访问生成 `reads`/`writes` Edge。getter/setter 名称本身不作为证据，因此规则同样适用于非 JavaBean 方法，并且不会按 DTO/Entity 类名猜字段。
 - `spring_endpoint` 提取 class/method Mapping 合并后的 HTTP endpoint；`junit_test` 只从显式 JUnit annotation 且 resolved 到 production Symbol 的 call 派生 `tests` Edge。
 - `spring_config_binding` 将 `@Value("${...}")` 和显式 `Environment.getProperty(...)` 连接到唯一 properties key；`spring_data_access` 将显式 JPA `@Table`、Spring Data Repository 泛型、派生查询和继承 CRUD 调用连接到唯一 SQL table，并按 Spring Data `findById -> Optional<T>` 契约解析 Lambda 参数中的 Entity 调用。`web_ui_route` 从 JSP/HTML form/link、JavaScript `url`、location 赋值、唯一局部常量别名，以及“函数参数流入 URL sink 后由调用实参提供 Route”的跨文件摘要提取 route，再按 HTTP method 与规范化 path 连接到唯一 Spring endpoint。运行时参数、对象属性和多目标仍显式保留 dynamic/unresolved，不按名称相似度猜测。
+- `struts1_mvc` 读取 `struts-config.xml`、ActionServlet 的 `web.xml` mapping、Tiles definition、JSP Struts tag 和 Java `findForward()`。ActionMapping 生成稳定 Symbol 并通过 `exposes` 连接 `*.do` 或 path servlet route，通过 `maps_to` 连接 Action／ActionForm，通过 `calls` 连接唯一 `execute`／`perform`；局部／全局 ActionForward、Action input、ForwardAction、Tiles 继承／模板／body 及 JSP form/link/forward/tiles 标签用 `navigates_to` 或 `calls` 串成完整导航链。缺少 servlet mapping、外部 Action、动态 JSP 表达式、多模块歧义继续显式 unresolved/external；XML 错误、内部实体和同一配置内重复定义使 Graph truncated。
 - Playwright Runner 对 approved Browser DSL 采集 `network_request`、`navigation` 和 `form_submission`。只保存 HTTP method、origin-relative path、Scenario、Action 和可选静态 Route Ref；query、fragment、header、body、cookie、token 均不进入 Route Evidence。`route_source_ref` 是内部 Manifest 绑定，不作为普通用户编辑字段。
 - Runtime Route Reconciler 只在静态来源明确且只有一条待解析 Edge、method 一致、模板路径唯一命中一个本地图 Endpoint，且同一动态来源的全部观测只指向同一 Endpoint 时，把 unresolved `calls` Edge 生成新的 `static_runtime` resolved Edge。缺少来源、来源不存在／已非 unresolved／对应多条 Edge、method 不符、零候选、多候选或同一来源命中多个 Endpoint 都写入 `RuntimeRouteEvidence.resolutions` 并继续 unresolved。
 - Runtime 合并不覆盖静态 Snapshot，而是发布 `scan_mode=runtime_enriched` 的新完整 Snapshot，绑定 base Snapshot 和不可变 RuntimeRouteEvidence。新 Edge 保存原 `static_edge_ref`；旧 Snapshot、原 unresolved Edge 和浏览器证据保持可审计。
@@ -23,7 +25,7 @@
 - 新 Revision 默认从同 Repository、相同 scan roots 和相同 Code Framework Profile 的当前完整 Snapshot 增量刷新。Git rename-aware diff 先读取变更文件；声明、删除或重命名变化再扩散到旧目标的反向依赖、unresolved Edge 来源和可被新类型解析的 import 来源。方法体变化且声明不变时只重新解析变更文件。
 - 三类框架关系需要跨配置、UI、Controller、Entity、Repository 和 SQL 做全局唯一性判断。启用任一专用 extractor 的 Profile 在 Revision 有变化时，会重新扫描已批准且受 Git 约束的 tracked file 集合；无变化 Revision 仍完整复用。后续只有在持久化框架 Fact ledger 能证明跨文件依赖未变化后，才允许缩小这类扫描范围。
 - 增量扫描只按 Git 明确路径读取受影响文件，不遍历其余源码；未受影响的 File、Symbol、Edge 和 Test Binding 从上一不可变 Snapshot 复用，但发布物仍是一个可独立校验和重放的完整新 Snapshot。
-- SQL table read/write 与 properties config key 使用有界确定性词法提取。未知 extractor、缺失语言/extractor 依赖、尚无语义 Adapter 的 production/test 语言、Java 语法错误、空扫描或 Framework marker 缺失都会产生持久化 diagnostic，并把 Snapshot 标为 truncated，不能把仅登记了文件路径误报为完整 Code Graph。
+- SQL table read/write 与 properties config key 使用有界确定性词法提取。未知 extractor、缺失语言/extractor 依赖、未支持的 production/test 语言、任一 Tree-sitter 语法错误、空扫描或 Framework marker 缺失都会产生持久化 diagnostic，并把 Snapshot 标为 truncated，不能把仅登记了文件路径误报为完整 Code Graph。
 - Scope Resolver 接受 `path`、`symbol`、`endpoint`、`table`、`config_key`、`ui_route` 六类显式锚点。每个锚点必须引用当前 ContextPackage 中已有的文档 evidence；不允许从摘要猜测代码名称。
 - 锚点在各自 namespace 中精确匹配并保留多匹配结果。扩展只使用 StructuredChange domain 对应的 Code Framework Profile relation policy，按显式 edge allowlist、深度和 reverse 规则执行有界 BFS。
 - 直接命中的 production File 标为 `editable`，图扩展命中的 production File 标为 `read_only`，测试文件只从 Graph 中显式的 Test Binding 派生。每个候选保留 anchor、文档 evidence、Symbol、完整 Graph Path、距离和分数。
@@ -150,10 +152,12 @@ operamind-resolve-code-scope \
 - Workspace 越界、symlink、glob、资源上限、Git 环境变量污染、dirty/untracked worktree、nested root 和 ignored file 隔离。
 - 真实临时 Git Repository 到 Tree-sitter、Profile 激活、Artifact 和规范化 PostgreSQL Graph 的闭环。
 - 方法体、声明、删除、重命名和新增类型的增量扫描会与同一 Revision 的全量 Graph 逐项比较；无变更 Revision 会复用全部文件，显式路径读取不会调用目录遍历。
+- JavaScript／TypeScript、Python、Kotlin 的真实源码 fixture 覆盖 Symbol、相对／模块 import、resolved/external/unresolved call、inheritance/implements、Test Binding、语法错误和增量／全量一致性。非 Java 语义文件发生变化时，当前实现安全重扫受 Git 与 Profile 约束的非 Java 语义子集，避免复用跨语言陈旧关系。
+- Struts 1 真实结构 fixture 覆盖外部 DTD 的 `struts-config.xml`、ActionMapping、ActionForm、局部／全局 ActionForward、ActionServlet `*.do`、Java `findForward()`、Tiles 继承与 JSP form/link/tiles 标签，并逐条验证 `exposes`、`calls`、`maps_to`、`navigates_to`。配置 Forward 改变后的增量 Graph 与同 Revision 全量 Graph 逐项一致；无 type 的直接 ActionMapping、外部 Action、动态 JSP、缺失 servlet mapping、重复定义、畸形 XML 和内部实体均有 fail-closed 回归。
 - PostgreSQL 闭环验证第二个 Revision 只解析受影响文件，并保留未变化的 Test Binding；非祖先基线会安全回退到全量扫描。
 - accepted StructuredChange、ContextPackage evidence、当前 Graph/Revision/Profile、endpoint 精确匹配、双向 Profile traversal、Test Binding 和缺失锚点阻断的 PostgreSQL 闭环。
 
-## 尚未完成
+## 后续任务与有意边界
 
-- Scope 结果到正式 ImpactReport / Edit Packet 的人工确认与状态机推进；当前 Resolver 只生成 v1 候选台账，不自行批准修改。
-- JavaScript/TypeScript、Python、Kotlin 等语言的通用 Tree-sitter Adapter；当前 Java 使用 AST，SQL/config 及 JSP/JavaScript UI Route 使用受 Profile 控制的确定性框架提取。
+- Scope 结果到正式 ImpactReport、人工确认、Edit Packet 和 Approval Grant 的状态机已经在 P4 实现。Scope Resolver 继续只生成 v1 候选台账且不自行批准修改，这是信任边界，不是未实现功能；具体状态和命令见 [P4 Impact](P4-IMPACT.md)。
+- Struts 1 Adapter 当前只解析静态配置和字面量导航。运行时生成的 Forward、请求参数选择的 DispatchAction 方法、插件自定义 ActionMapping／RequestProcessor 行为和无法唯一确定的多模块前缀继续 unresolved，等待运行时 Route Evidence 或项目专用 Profile 提供证明。

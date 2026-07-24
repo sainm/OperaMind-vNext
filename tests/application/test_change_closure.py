@@ -3,6 +3,8 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 
+import pytest
+
 from operamind.application.change_closure import ChangeClosureEvaluator, ChangeClosureInput
 from operamind.contracts import ContractCatalog
 
@@ -13,6 +15,7 @@ def test_passes_only_when_code_tests_data_coverage_and_ui_pass() -> None:
     result = _evaluator().evaluate(_input())
 
     assert result["status"] == "passed"
+    assert result["schema_version"] == "v2"
     assert result["ui_status"] == "passed"
     assert result["business_coverage_percent"] == 100
     assert result["unresolved_items"] == []
@@ -82,6 +85,7 @@ def _replace(value: ChangeClosureInput, **changes: object) -> ChangeClosureInput
         "edit_result": value.edit_result,
         "test_data_result": value.test_data_result,
         "ui_result": value.ui_result,
+        "changed_line_coverage": value.changed_line_coverage,
         "ui_test_case_refs": value.ui_test_case_refs,
     }
     fields.update(changes)
@@ -154,10 +158,17 @@ def _input() -> ChangeClosureInput:
             "test_plan_id": "test-plan-001",
             "acceptance_criteria_id": "acceptance-001",
             "project_id": "visiondemo",
+            "business_rule_count": 1,
+            "covered_rule_count": 1,
             "coverage_percent": 100,
             "status": "passed",
             "items": [
-                {"business_rule_id": "rule-001", "status": "covered"}
+                {
+                    "business_rule_id": "rule-001",
+                    "test_case_refs": ["source-test"],
+                    "criterion_refs": ["criterion-001"],
+                    "status": "covered",
+                }
             ],
         },
         edit_result={
@@ -166,6 +177,8 @@ def _input() -> ChangeClosureInput:
             "analysis_case_id": "case-001",
             "validation_mode": "committed",
             "status": "in_scope",
+            "base_repository_revision": "base-sha",
+            "result_repository_revision": "result-sha",
             "changed_paths": ["VisionDemo/src/main/java/ExpenseService.java"],
             "out_of_scope_files": [],
             "test_result_refs": ["command-test-001"],
@@ -184,12 +197,8 @@ def _input() -> ChangeClosureInput:
                 {
                     "flow_id": "flow-001",
                     "status": "passed",
-                    "step_results": [
-                        {"evidence_refs": ["data-step-evidence-001"]}
-                    ],
-                    "cleanup_results": [
-                        {"evidence_refs": ["cleanup-evidence-001"]}
-                    ],
+                    "step_results": [{"evidence_refs": ["data-step-evidence-001"]}],
+                    "cleanup_results": [{"evidence_refs": ["cleanup-evidence-001"]}],
                 }
             ],
         },
@@ -211,8 +220,111 @@ def _input() -> ChangeClosureInput:
             "out_of_scope_files": [],
             "failure_reasons": [],
         },
+        changed_line_coverage={
+            "artifact_type": "ChangedLineCoverageReport",
+            "schema_version": "v1",
+            "changed_line_coverage_report_id": "changed-line-coverage-001",
+            "edit_result_id": "edit-result-001",
+            "project_id": "visiondemo",
+            "base_repository_revision": "base-sha",
+            "result_repository_revision": "result-sha",
+            "minimum_coverage_percent": 80,
+            "changed_line_count": 4,
+            "covered_changed_line_count": 4,
+            "coverage_percent": 100,
+            "files": [],
+            "evidence_refs": ["command-test-001"],
+            "status": "passed",
+            "blocking_reasons": [],
+        },
         ui_test_case_refs=(),
     )
+
+
+def test_blocks_when_changed_line_coverage_is_below_threshold() -> None:
+    value = _input()
+    report = copy.deepcopy(value.changed_line_coverage)
+    assert report is not None
+    report.update(
+        {
+            "covered_changed_line_count": 3,
+            "coverage_percent": 75,
+            "status": "failed",
+            "blocking_reasons": ["Changed-line coverage: 75% < 80%"],
+        }
+    )
+
+    result = _evaluator().evaluate(_replace(value, changed_line_coverage=report))
+
+    assert result["status"] == "blocked"
+    assert result["changed_line_coverage_percent"] == 75
+    assert "Changed-line coverage: 75% < 80%" in result["unresolved_items"]
+
+
+def test_blocks_when_business_coverage_is_incomplete() -> None:
+    value = _input()
+    coverage = copy.deepcopy(value.coverage_report)
+    coverage["coverage_percent"] = 0
+    coverage["covered_rule_count"] = 0
+    coverage["status"] = "failed"
+    coverage["items"][0]["status"] = "uncovered"
+
+    result = _evaluator().evaluate(_replace(value, coverage_report=coverage))
+
+    assert result["status"] == "blocked"
+    assert "Uncovered business rule: rule-001" in result["unresolved_items"]
+
+
+def test_recalculates_business_coverage_and_blocks_inconsistent_summary() -> None:
+    value = _input()
+    coverage = copy.deepcopy(value.coverage_report)
+    coverage["items"][0]["status"] = "uncovered"
+
+    result = _evaluator().evaluate(_replace(value, coverage_report=coverage))
+
+    assert result["status"] == "blocked"
+    assert result["business_coverage_percent"] == 0
+    assert "Uncovered business rule: rule-001" in result["unresolved_items"]
+    assert "Business Coverage Report summary is inconsistent" in result["unresolved_items"]
+
+
+def test_rejects_changed_line_coverage_from_another_commit() -> None:
+    value = _input()
+    report = copy.deepcopy(value.changed_line_coverage)
+    assert report is not None
+    report["result_repository_revision"] = "other-result-sha"
+
+    with pytest.raises(ValueError, match="outside Closure scope"):
+        _evaluator().evaluate(_replace(value, changed_line_coverage=report))
+
+
+def test_working_edit_coverage_is_current_but_cannot_close() -> None:
+    value = _input()
+    edit = copy.deepcopy(value.edit_result)
+    report = copy.deepcopy(value.changed_line_coverage)
+    assert edit is not None and report is not None
+    edit.update(
+        {
+            "validation_mode": "working",
+            "result_repository_revision": None,
+            "command_evidence_status": "not_applicable",
+        }
+    )
+    report.update(
+        {
+            "result_repository_revision": "base-sha",
+            "coverage_percent": 0,
+            "covered_changed_line_count": 0,
+            "status": "missing",
+            "blocking_reasons": ["Changed-line coverage evidence is missing"],
+        }
+    )
+
+    result = _evaluator().evaluate(_replace(value, edit_result=edit, changed_line_coverage=report))
+
+    assert result["status"] == "blocked"
+    assert "Edit Result is not committed" in result["unresolved_items"]
+    assert "Changed-line coverage evidence is missing" in result["unresolved_items"]
 
 
 def test_maps_approved_ui_scenario_to_test_plan_case() -> None:

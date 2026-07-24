@@ -16,9 +16,11 @@ from operamind.domain import (
     StructuredChangeBuilder,
 )
 from operamind.domain.document_conventions import (
+    ConventionMatch,
     ConventionMatcher,
     DocumentConvention,
     MatchStatus,
+    SignalType,
 )
 from operamind.infrastructure.documents import DocumentSignalExtractorRegistry
 
@@ -41,6 +43,41 @@ class DocumentDiffRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class DocumentSnapshotBuildResult:
+    """One Canonical Snapshot with complete section and Fact Variant provenance."""
+
+    snapshot: CanonicalSnapshot
+    selected_variant_ids: tuple[str, ...]
+    fact_variant_ids: tuple[tuple[str, str], ...]
+    ignored_sections: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.selected_variant_ids:
+            raise ValueError("Canonical Snapshot must retain at least one selected Variant")
+        if len(self.selected_variant_ids) != len(set(self.selected_variant_ids)):
+            raise ValueError("Canonical Snapshot selected Variant IDs must be unique")
+        expected_refs = {item.fact_ref for item in self.snapshot.facts}
+        actual_refs = [fact_ref for fact_ref, _variant_id in self.fact_variant_ids]
+        if set(actual_refs) != expected_refs or len(actual_refs) != len(set(actual_refs)):
+            raise ValueError(
+                "Canonical Snapshot Fact Variant provenance must be complete and unique"
+            )
+        if any(
+            not variant_id.strip() or variant_id not in self.selected_variant_ids
+            for _fact_ref, variant_id in self.fact_variant_ids
+        ):
+            raise ValueError("Canonical Snapshot Fact Variant provenance is invalid")
+        if len(self.ignored_sections) != len(set(self.ignored_sections)):
+            raise ValueError("Canonical Snapshot ignored sections must be unique")
+
+    @property
+    def selected_variant_id(self) -> str:
+        """Return the primary Variant for compatibility with v1 callers."""
+
+        return self.selected_variant_ids[0]
+
+
+@dataclass(frozen=True, slots=True)
 class DocumentDiffResult:
     """Validated changes and the exact Canonical inputs that produced them."""
 
@@ -48,6 +85,12 @@ class DocumentDiffResult:
     target_snapshot: CanonicalSnapshot
     source_variant_id: str
     target_variant_id: str
+    source_snapshot_variant_ids: tuple[str, ...]
+    target_snapshot_variant_ids: tuple[str, ...]
+    source_fact_variant_ids: tuple[tuple[str, str], ...]
+    target_fact_variant_ids: tuple[tuple[str, str], ...]
+    source_ignored_sections: tuple[str, ...]
+    target_ignored_sections: tuple[str, ...]
     source_extractor_ref: str
     target_extractor_ref: str
     source_content_digest: str
@@ -75,6 +118,12 @@ class DocumentDiffResult:
             "structured_change_count": len(self.changes),
             "source_extractor_ref": self.source_extractor_ref,
             "target_extractor_ref": self.target_extractor_ref,
+            "source_variant_ids": list(self.source_snapshot_variant_ids),
+            "target_variant_ids": list(self.target_snapshot_variant_ids),
+            "source_fact_variant_ids": dict(self.source_fact_variant_ids),
+            "target_fact_variant_ids": dict(self.target_fact_variant_ids),
+            "source_ignored_sections": list(self.source_ignored_sections),
+            "target_ignored_sections": list(self.target_ignored_sections),
             "source_content_digest": self.source_content_digest,
             "target_content_digest": self.target_content_digest,
             "changes": [change.to_artifact() for change in self.changes],
@@ -104,13 +153,13 @@ class DocumentDiffService:
         self._validate_request(request)
         source_digest = _file_digest(request.before_path)
         target_digest = _file_digest(request.after_path)
-        source = self._build_snapshot(
+        source = self.build_snapshot(
             path=request.before_path,
             snapshot_id=request.source_snapshot_id,
             fact_type=request.fact_type,
             convention=convention,
         )
-        target = self._build_snapshot(
+        target = self.build_snapshot(
             path=request.after_path,
             snapshot_id=request.target_snapshot_id,
             fact_type=request.fact_type,
@@ -136,6 +185,12 @@ class DocumentDiffService:
             target_snapshot=target.snapshot,
             source_variant_id=source.selected_variant_id,
             target_variant_id=target.selected_variant_id,
+            source_snapshot_variant_ids=source.selected_variant_ids,
+            target_snapshot_variant_ids=target.selected_variant_ids,
+            source_fact_variant_ids=source.fact_variant_ids,
+            target_fact_variant_ids=target.fact_variant_ids,
+            source_ignored_sections=source.ignored_sections,
+            target_ignored_sections=target.ignored_sections,
             source_extractor_ref=self._extractors.extractor_ref(request.before_path),
             target_extractor_ref=self._extractors.extractor_ref(request.after_path),
             source_content_digest=source_digest,
@@ -143,15 +198,26 @@ class DocumentDiffService:
             changes=changes,
         )
 
-    def _build_snapshot(
+    def build_snapshot(
         self,
         *,
         path: Path,
         snapshot_id: str,
         fact_type: str,
         convention: DocumentConvention,
-    ) -> _BuiltDocumentSnapshot:
+    ) -> DocumentSnapshotBuildResult:
+        """Build a Canonical Snapshot using the same rules as the persisted Diff path."""
+
         signals = self._extractors.extract(path)
+        sheet_signals = self._extractors.extract_sheet_signals(path)
+        if sheet_signals:
+            return self._build_multi_sheet_snapshot(
+                path=path,
+                snapshot_id=snapshot_id,
+                fact_type=fact_type,
+                convention=convention,
+                sheet_signals=sheet_signals,
+            )
         match = self._matcher.match(convention, signals)
         if match.status is not MatchStatus.AUTO_MATCHED or match.selected_variant_id is None:
             raise DocumentDiffBlockedError(
@@ -170,6 +236,7 @@ class DocumentDiffService:
             raise DocumentDiffBlockedError(f"No canonical records extracted from {path}")
 
         facts: list[SnapshotFact] = []
+        fact_variant_ids: list[tuple[str, str]] = []
         blocked_records: list[str] = []
         for record in records:
             result = self._mapper.map_record(
@@ -181,19 +248,100 @@ class DocumentDiffService:
             if result.fact is None:
                 blocked_records.append(f"{record.record_ref}:{result.reason.value}")
                 continue
-            facts.append(
-                SnapshotFact(
-                    fact_ref=_fact_ref(snapshot_id, result.fact.stable_key),
-                    fact=result.fact,
-                )
+            snapshot_fact = SnapshotFact(
+                fact_ref=_fact_ref(snapshot_id, result.fact.stable_key),
+                fact=result.fact,
             )
+            facts.append(snapshot_fact)
+            fact_variant_ids.append((snapshot_fact.fact_ref, match.selected_variant_id))
         if blocked_records:
             raise DocumentDiffBlockedError(
                 "Canonical mapping requires review: " + ", ".join(blocked_records)
             )
-        return _BuiltDocumentSnapshot(
+        return DocumentSnapshotBuildResult(
             snapshot=CanonicalSnapshot(snapshot_id=snapshot_id, facts=tuple(facts)),
-            selected_variant_id=match.selected_variant_id,
+            selected_variant_ids=(match.selected_variant_id,),
+            fact_variant_ids=tuple(fact_variant_ids),
+        )
+
+    def _build_multi_sheet_snapshot(
+        self,
+        *,
+        path: Path,
+        snapshot_id: str,
+        fact_type: str,
+        convention: DocumentConvention,
+        sheet_signals: tuple[tuple[str, Any], ...],
+    ) -> DocumentSnapshotBuildResult:
+        """Match and map each worksheet independently, preserving all source locations."""
+
+        facts: list[SnapshotFact] = []
+        blocked_records: list[str] = []
+        selected_variant_ids: list[str] = []
+        fact_variant_ids: list[tuple[str, str]] = []
+        ignored_sections: list[str] = []
+        for sheet_name, signals in sheet_signals:
+            match = self._matcher.match(convention, signals)
+            if match.status is not MatchStatus.AUTO_MATCHED or match.selected_variant_id is None:
+                if _requires_section_review(match):
+                    raise DocumentDiffBlockedError(
+                        "Document Convention requires review for "
+                        f"{path}#{sheet_name}: {match.reason}"
+                    )
+                ignored_sections.append(f"{sheet_name}:{match.reason}")
+                continue
+            variant = next(
+                (
+                    item
+                    for item in convention.variants
+                    if item.variant_id == match.selected_variant_id
+                ),
+                None,
+            )
+            if variant is None:
+                raise DocumentDiffBlockedError(
+                    f"Selected Variant is not present in the Convention: "
+                    f"{match.selected_variant_id}"
+                )
+            records = self._extractors.extract_records_for_sheet(
+                path,
+                variant,
+                sheet_name=sheet_name,
+            )
+            if not records:
+                raise DocumentDiffBlockedError(
+                    f"No canonical records extracted from {path}#{sheet_name} "
+                    f"with {match.selected_variant_id}"
+                )
+            selected_variant_ids.append(match.selected_variant_id)
+            for record in records:
+                result = self._mapper.map_record(
+                    convention=convention,
+                    match=match,
+                    fact_type=fact_type,
+                    record=record,
+                )
+                if result.fact is None:
+                    blocked_records.append(f"{record.record_ref}:{result.reason.value}")
+                    continue
+                snapshot_fact = SnapshotFact(
+                    fact_ref=_fact_ref(snapshot_id, result.fact.stable_key),
+                    fact=result.fact,
+                )
+                facts.append(snapshot_fact)
+                fact_variant_ids.append((snapshot_fact.fact_ref, match.selected_variant_id))
+        if blocked_records:
+            raise DocumentDiffBlockedError(
+                "Canonical mapping requires review: " + ", ".join(blocked_records)
+            )
+        if not facts:
+            raise DocumentDiffBlockedError(f"No canonical records extracted from {path}")
+        unique_variant_ids = tuple(dict.fromkeys(selected_variant_ids))
+        return DocumentSnapshotBuildResult(
+            snapshot=CanonicalSnapshot(snapshot_id=snapshot_id, facts=tuple(facts)),
+            selected_variant_ids=unique_variant_ids,
+            fact_variant_ids=tuple(fact_variant_ids),
+            ignored_sections=tuple(ignored_sections),
         )
 
     @staticmethod
@@ -226,9 +374,11 @@ def _file_digest(path: Path) -> str:
     return digest.hexdigest()
 
 
-@dataclass(frozen=True, slots=True)
-class _BuiltDocumentSnapshot:
-    """Canonical snapshot together with its matched Convention Variant."""
+def _requires_section_review(match: ConventionMatch) -> bool:
+    """Treat structurally related but incomplete worksheets as review blockers."""
 
-    snapshot: CanonicalSnapshot
-    selected_variant_id: str
+    structural_types = {SignalType.HEADERS, SignalType.HEADING}
+    return any(
+        structural_types.intersection(candidate.matched_signal_types)
+        for candidate in match.candidates
+    )

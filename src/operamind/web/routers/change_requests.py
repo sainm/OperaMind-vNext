@@ -40,7 +40,9 @@ def list_requests(
 
 
 @router.post("", status_code=201)
-def create_request(body: ChangeRequestCreate, service: Service, actor: Actor) -> dict[str, object]:
+def create_request(
+    body: ChangeRequestCreate, service: Service, actor: Actor, key: IdempotencyKey
+) -> dict[str, object]:
     value = ChangeRequestInput(
         change_request_id=body.change_request_id,
         project_id=body.project_id,
@@ -57,7 +59,13 @@ def create_request(body: ChangeRequestCreate, service: Service, actor: Actor) ->
         ambiguities=tuple(body.ambiguities),
         submitted_by=actor,
     )
-    return service.submit_change_request(value)
+    return service.execute_web_command(
+        command_scope=f"change-request:create:{body.change_request_id}",
+        idempotency_key=key,
+        actor=actor,
+        payload=body.model_dump(mode="json"),
+        operation=lambda: service.submit_change_request(value),
+    )
 
 
 @router.get("/{request_id}")
@@ -73,6 +81,11 @@ def get_diff(request_id: str, service: Service) -> dict[str, object]:
 @router.get("/{request_id}/orchestration")
 def get_orchestration(request_id: str, service: Service) -> dict[str, object]:
     return service.change_orchestration(request_id)
+
+
+@router.get("/{request_id}/traceability")
+def get_traceability(request_id: str, service: Service) -> dict[str, object]:
+    return service.change_traceability(request_id)
 
 
 @router.get("/{request_id}/automation")
@@ -169,9 +182,17 @@ def start_automation(
 
 @router.post("/{request_id}/automation/{run_id}/resume")
 def resume_automation(
-    request_id: str, run_id: str, service: Service, actor: Actor
+    request_id: str, run_id: str, service: Service, actor: Actor, key: IdempotencyKey
 ) -> dict[str, object]:
-    return service.resume_change_automation(request_id=request_id, run_id=run_id, actor=actor)
+    return service.execute_web_command(
+        command_scope=f"change-automation:resume:{request_id}:{run_id}",
+        idempotency_key=key,
+        actor=actor,
+        payload={},
+        operation=lambda: service.resume_change_automation(
+            request_id=request_id, run_id=run_id, actor=actor
+        ),
+    )
 
 
 @router.get("/{request_id}/execution-management")
@@ -190,11 +211,18 @@ def create_test_case_modification(
     body: TestCaseModificationCreate,
     service: Service,
     actor: Actor,
+    key: IdempotencyKey,
 ) -> dict[str, object]:
-    return service.modify_test_case(
-        request_id=request_id,
-        instruction=body.instruction,
+    return service.execute_web_command(
+        command_scope=f"test-case:modify:{request_id}",
+        idempotency_key=key,
         actor=actor,
+        payload=body.model_dump(mode="json"),
+        operation=lambda: service.modify_test_case(
+            request_id=request_id,
+            instruction=body.instruction,
+            actor=actor,
+        ),
     )
 
 
@@ -205,12 +233,19 @@ def confirm_test_case_modification(
     body: TestCaseModificationConfirm,
     service: Service,
     actor: Actor,
+    key: IdempotencyKey,
 ) -> dict[str, object]:
-    return service.confirm_test_case_modification(
-        request_id=request_id,
-        proposal_id=proposal_id,
-        selections=body.selections,
+    return service.execute_web_command(
+        command_scope=f"test-case:confirm:{request_id}:{proposal_id}",
+        idempotency_key=key,
         actor=actor,
+        payload=body.model_dump(mode="json"),
+        operation=lambda: service.confirm_test_case_modification(
+            request_id=request_id,
+            proposal_id=proposal_id,
+            selections=body.selections,
+            actor=actor,
+        ),
     )
 
 
@@ -236,12 +271,19 @@ def confirm_test_case_execution_scope(
     body: TestCaseExecutionScopeConfirm,
     service: Service,
     actor: Actor,
+    key: IdempotencyKey,
 ) -> dict[str, object]:
-    return service.confirm_test_case_execution_scope(
-        request_id=request_id,
-        approval_grant_id=body.approval_grant_id,
-        target_scope_digest=body.target_scope_digest,
+    return service.execute_web_command(
+        command_scope=f"test-case:execution-authorization:{request_id}",
+        idempotency_key=key,
         actor=actor,
+        payload=body.model_dump(mode="json"),
+        operation=lambda: service.confirm_test_case_execution_scope(
+            request_id=request_id,
+            approval_grant_id=body.approval_grant_id,
+            target_scope_digest=body.target_scope_digest,
+            actor=actor,
+        ),
     )
 
 
@@ -311,8 +353,16 @@ def get_screenshot(
 
 
 @router.post("/{request_id}/orchestration", status_code=201)
-def orchestrate_request(request_id: str, service: Service, actor: Actor) -> dict[str, object]:
-    return service.orchestrate_change_request(request_id=request_id, actor=actor)
+def orchestrate_request(
+    request_id: str, service: Service, actor: Actor, key: IdempotencyKey
+) -> dict[str, object]:
+    return service.execute_web_command(
+        command_scope=f"change-orchestration:create:{request_id}",
+        idempotency_key=key,
+        actor=actor,
+        payload={},
+        operation=lambda: service.orchestrate_change_request(request_id=request_id, actor=actor),
+    )
 
 
 @router.post("/{request_id}/document-review")

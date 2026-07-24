@@ -4,7 +4,7 @@
   "project_id": "visiondemo",
   "browser": {
     "name": "chromium",
-    "channel": "chrome",
+    "channel": "msedge",
     "headless": true,
     "viewport": {
       "width": 1280,

@@ -102,6 +102,10 @@ def test_git_diff_inspector_covers_untracked_and_committed_rename(tmp_path: Path
         "src/main/java/example/New.java",
         "src/main/java/example/RenamedApp.java",
     )
+    changed_lines = dict(committed.changed_lines)
+    assert changed_lines["src/main/java/example/App.java"] == ()
+    assert changed_lines["src/main/java/example/New.java"] == (1,)
+    assert changed_lines["src/main/java/example/RenamedApp.java"] == (1,)
 
 
 def test_git_common_repository_dir_accepts_only_shared_linked_worktrees(

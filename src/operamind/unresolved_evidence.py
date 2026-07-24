@@ -266,10 +266,17 @@ def _classify_target(target_ref: str, edge_type: str) -> tuple[str, str, str]:
     category = {
         "call": "call_target",
         "endpoint": "endpoint_route",
+        "struts_endpoint": "endpoint_route",
         "table": "data_table",
         "entity": "entity_mapping",
         "config_key": "config_key",
         "route": "navigation_target",
+        "struts_action": "navigation_target",
+        "struts_forward": "navigation_target",
+        "struts_global_forward": "navigation_target",
+        "struts_jsp_route": "navigation_target",
+        "struts_navigation": "navigation_target",
+        "tiles_definition": "navigation_target",
     }.get(namespace, "navigation_target" if edge_type == "navigates_to" else "generic_relation")
     return category, namespace, detail
 

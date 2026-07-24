@@ -183,9 +183,7 @@ class UiKnowledgeReviewQueryRepository:
             candidates: list[dict[str, object]] = []
             for candidate in target.candidates:
                 item = candidate.to_dict()
-                item["observation"] = observations.get(
-                    (target.target_ref, candidate.candidate_id)
-                )
+                item["observation"] = observations.get((target.target_ref, candidate.candidate_id))
                 candidates.append(item)
             targets.append(
                 {

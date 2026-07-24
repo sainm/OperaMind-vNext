@@ -1,6 +1,6 @@
 {
   "dataset_id": "operamind-vnext-silver",
-  "dataset_version": "0.2.0-silver",
+  "dataset_version": "0.3.0-silver",
   "dataset_stage": "silver",
   "status": "needs_review",
   "projects": [
@@ -33,6 +33,39 @@
       "expected_ui_scenarios": "cases/visiondemo-expense-employee-cross-screen/expected-ui-scenarios.silver.json",
       "test_data_plan": "cases/visiondemo-expense-employee-cross-screen/test-data-plan.silver.json",
       "review": "cases/visiondemo-expense-employee-cross-screen/REVIEW.md"
+    },
+    {
+      "case_id": "visiondemo-screen-approval-note-added",
+      "project_id": "visiondemo",
+      "source_manifest": "cases/visiondemo-screen-approval-note-added/source-manifest.json",
+      "source_fixture": "cases/visiondemo-screen-approval-note-added/source-fixture.silver.json",
+      "expected_changes": "cases/visiondemo-screen-approval-note-added/expected-changes.silver.json",
+      "expected_rag_context": "cases/visiondemo-screen-approval-note-added/expected-rag-context.silver.json",
+      "expected_code_scope": "cases/visiondemo-screen-approval-note-added/expected-code-scope.silver.json",
+      "expected_ui_scenarios": "cases/visiondemo-screen-approval-note-added/expected-ui-scenarios.silver.json",
+      "review": "cases/visiondemo-screen-approval-note-added/REVIEW.md"
+    },
+    {
+      "case_id": "visiondemo-screen-cancel-event-deleted",
+      "project_id": "visiondemo",
+      "source_manifest": "cases/visiondemo-screen-cancel-event-deleted/source-manifest.json",
+      "source_fixture": "cases/visiondemo-screen-cancel-event-deleted/source-fixture.silver.json",
+      "expected_changes": "cases/visiondemo-screen-cancel-event-deleted/expected-changes.silver.json",
+      "expected_rag_context": "cases/visiondemo-screen-cancel-event-deleted/expected-rag-context.silver.json",
+      "expected_code_scope": "cases/visiondemo-screen-cancel-event-deleted/expected-code-scope.silver.json",
+      "expected_ui_scenarios": "cases/visiondemo-screen-cancel-event-deleted/expected-ui-scenarios.silver.json",
+      "review": "cases/visiondemo-screen-cancel-event-deleted/REVIEW.md"
+    },
+    {
+      "case_id": "visiondemo-api-total-count-type-changed",
+      "project_id": "visiondemo",
+      "source_manifest": "cases/visiondemo-api-total-count-type-changed/source-manifest.json",
+      "source_fixture": "cases/visiondemo-api-total-count-type-changed/source-fixture.silver.json",
+      "expected_changes": "cases/visiondemo-api-total-count-type-changed/expected-changes.silver.json",
+      "expected_rag_context": "cases/visiondemo-api-total-count-type-changed/expected-rag-context.silver.json",
+      "expected_code_scope": "cases/visiondemo-api-total-count-type-changed/expected-code-scope.silver.json",
+      "expected_ui_scenarios": "cases/visiondemo-api-total-count-type-changed/expected-ui-scenarios.silver.json",
+      "review": "cases/visiondemo-api-total-count-type-changed/REVIEW.md"
     }
   ]
 }

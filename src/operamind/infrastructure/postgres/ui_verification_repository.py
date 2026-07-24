@@ -1187,9 +1187,8 @@ def _validate_scenario(write: VerificationScenarioWrite) -> None:
         raise ValueError("Invalid Verification Scenario review status")
     if write.activate and write.review_status != "approved":
         raise ValueError("Only approved Verification Scenario may become active")
-    if (
-        len(write.test_case_refs) != len(set(write.test_case_refs))
-        or any(not value.strip() for value in write.test_case_refs)
+    if len(write.test_case_refs) != len(set(write.test_case_refs)) or any(
+        not value.strip() for value in write.test_case_refs
     ):
         raise ValueError("Verification Scenario Test case refs must be unique and non-blank")
 

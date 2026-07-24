@@ -16,6 +16,304 @@ def load_profile() -> dict[str, Any]:
     return value
 
 
+def load_polyglot_profile() -> dict[str, Any]:
+    value: object = json.loads(
+        (ROOT / "profiles/polyglot-code-framework-profile.example.json").read_text(encoding="utf-8")
+    )
+    assert isinstance(value, dict)
+    return value
+
+
+def test_polyglot_tree_sitter_adapters_build_symbols_imports_calls_and_tests(
+    tmp_path: Path,
+) -> None:
+    sources = {
+        "src/javascript/repo.js": ("export const loadExpenseJs = (id) => id;\n"),
+        "src/javascript/service.js": (
+            "import { loadExpenseJs } from './repo.js';\n"
+            "export function findExpenseJs(id) { return loadExpenseJs(id); }\n"
+        ),
+        "tests/javascript/service.test.js": (
+            "import { findExpenseJs } from '../../src/javascript/service.js';\n"
+            "export function verifyExpenseJs() { return findExpenseJs(1); }\n"
+        ),
+        "src/typescript/repo.ts": (
+            "export interface OrderPort {}\n"
+            "export const loadOrderTs = (id: number): number => id;\n"
+        ),
+        "src/typescript/service.ts": (
+            "import { OrderPort, loadOrderTs } from './repo';\n"
+            "export class OrderServiceTs implements OrderPort {\n"
+            "  findOrderTs(id: number): number { return loadOrderTs(id); }\n"
+            "}\n"
+        ),
+        "src/typescript/badge.tsx": (
+            "export const ExpenseBadge = (): JSX.Element => <span>ok</span>;\n"
+        ),
+        "tests/typescript/service.spec.ts": (
+            "import { OrderServiceTs } from '../../src/typescript/service';\n"
+            "export function verifyOrderTs() { return new OrderServiceTs().findOrderTs(1); }\n"
+        ),
+        "src/python/app/repo.py": (
+            "class EmployeePort:\n"
+            "    pass\n\n"
+            "def load_employee_py(employee_id: int) -> int:\n"
+            "    return employee_id\n"
+        ),
+        "src/python/app/service.py": (
+            "from app.repo import EmployeePort, load_employee_py\n\n"
+            "class EmployeeServicePy(EmployeePort):\n"
+            "    def find_employee_py(self, employee_id: int) -> int:\n"
+            "        return load_employee_py(employee_id)\n"
+        ),
+        "tests/python/test_service.py": (
+            "from app.service import EmployeeServicePy\n\n"
+            "def verify_employee_py() -> int:\n"
+            "    return EmployeeServicePy().find_employee_py(1)\n"
+        ),
+        "src/kotlin/demo/Repo.kt": (
+            "package demo\ninterface InvoicePort\nfun loadInvoiceKt(id: Long): Long = id\n"
+        ),
+        "src/kotlin/demo/Service.kt": (
+            "package demo\n"
+            "class InvoiceServiceKt : InvoicePort {\n"
+            "    fun findInvoiceKt(id: Long): Long {\n"
+            "        return loadInvoiceKt(id)\n"
+            "    }\n"
+            "}\n"
+        ),
+        "tests/kotlin/ServiceTest.kt": (
+            "package demo\nfun verifyInvoiceKt(): Long = InvoiceServiceKt().findInvoiceKt(1)\n"
+        ),
+    }
+    for relative_path, content in sources.items():
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    profile = load_polyglot_profile()
+    files = WorkspaceScanner().discover(
+        workspace_root=tmp_path,
+        scan_roots=("src", "tests"),
+        excluded_globs=tuple(cast(list[str], profile["excluded_globs"])),
+        languages=tuple(cast(list[str], profile["languages"])),
+    )
+
+    result = CodeGraphScanner().scan(
+        code_graph_snapshot_id="graph-polyglot",
+        project_id="project-1",
+        repository_id="repository-1",
+        repository_revision="abc123",
+        scan_roots=("src", "tests"),
+        profile=profile,
+        files=files,
+    )
+
+    ContractCatalog.load(ROOT / "contracts").validate_artifact(result.artifact)
+    assert result.diagnostics == ()
+    assert result.artifact["scan_status"] == "complete"
+    artifact_files = cast(list[dict[str, Any]], result.artifact["files"])
+    assert {str(value["language"]) for value in artifact_files} == {
+        "javascript",
+        "typescript",
+        "python",
+        "kotlin",
+    }
+    assert all(cast(list[object], value["symbols"]) for value in artifact_files)
+    edges = cast(list[dict[str, Any]], result.artifact["edges"])
+    semantic_edges = [
+        edge
+        for edge in edges
+        if edge["extractor"]
+        in {
+            "javascript_symbol",
+            "typescript_symbol",
+            "python_symbol",
+            "kotlin_symbol",
+        }
+    ]
+    assert {str(edge["extractor"]) for edge in semantic_edges} == {
+        "javascript_symbol",
+        "typescript_symbol",
+        "python_symbol",
+        "kotlin_symbol",
+    }
+    assert (
+        sum(
+            edge["edge_type"] == "imports" and edge["resolution_status"] == "resolved"
+            for edge in semantic_edges
+        )
+        >= 5
+    )
+    assert (
+        sum(
+            edge["edge_type"] == "calls" and edge["resolution_status"] == "resolved"
+            for edge in semantic_edges
+        )
+        >= 4
+    )
+    assert (
+        sum(
+            edge["edge_type"] == "tests" and edge["resolution_status"] == "resolved"
+            for edge in semantic_edges
+        )
+        >= 4
+    )
+    assert (
+        sum(
+            edge["edge_type"] == "implements" and edge["resolution_status"] == "resolved"
+            for edge in semantic_edges
+        )
+        >= 3
+    )
+    assert any(
+        symbol["name"] == "ExpenseBadge"
+        for value in artifact_files
+        if value["path"] == "src/typescript/badge.tsx"
+        for symbol in cast(list[dict[str, Any]], value["symbols"])
+    )
+
+
+def test_polyglot_adapters_keep_external_and_ambiguous_calls_explicit(
+    tmp_path: Path,
+) -> None:
+    sources = {
+        "src/python/first.py": "def normalize(value: int) -> int:\n    return value\n",
+        "src/python/second.py": "def normalize(value: int) -> int:\n    return value\n",
+        "src/python/caller.py": (
+            "from vendor.client import send_external\n\n"
+            "def run(value: int) -> int:\n"
+            "    print(value)\n"
+            "    send_external(value)\n"
+            "    return normalize(value)\n"
+        ),
+    }
+    for relative_path, content in sources.items():
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    profile = load_polyglot_profile()
+    files = WorkspaceScanner().discover(
+        workspace_root=tmp_path,
+        scan_roots=("src",),
+        excluded_globs=(),
+        languages=tuple(cast(list[str], profile["languages"])),
+    )
+
+    result = CodeGraphScanner().scan(
+        code_graph_snapshot_id="graph-polyglot-resolution-status",
+        project_id="project-1",
+        repository_id="repository-1",
+        repository_revision="abc123",
+        scan_roots=("src",),
+        profile=profile,
+        files=files,
+    )
+
+    assert result.artifact["scan_status"] == "complete"
+    calls = [
+        edge
+        for edge in cast(list[dict[str, Any]], result.artifact["edges"])
+        if edge["edge_type"] == "calls" and edge["extractor"] == "python_symbol"
+    ]
+    assert any(
+        edge["to_ref"] == "external:call:print/1" and edge["resolution_status"] == "external"
+        for edge in calls
+    )
+    assert any(
+        edge["to_ref"] == "external:call:send_external/1"
+        and edge["resolution_status"] == "external"
+        for edge in calls
+    )
+    assert any(
+        edge["to_ref"] == "unresolved:call:normalize/1"
+        and edge["resolution_status"] == "unresolved"
+        for edge in calls
+    )
+
+
+def test_polyglot_adapters_do_not_resolve_calls_across_incompatible_languages(
+    tmp_path: Path,
+) -> None:
+    sources = {
+        "src/javascript/caller.js": (
+            "export function runJs(value) { return pythonOnly(value); }\n"
+        ),
+        "src/python/target.py": "def pythonOnly(value: int) -> int:\n    return value\n",
+    }
+    for relative_path, content in sources.items():
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    profile = load_polyglot_profile()
+    files = WorkspaceScanner().discover(
+        workspace_root=tmp_path,
+        scan_roots=("src",),
+        excluded_globs=(),
+        languages=tuple(cast(list[str], profile["languages"])),
+    )
+
+    result = CodeGraphScanner().scan(
+        code_graph_snapshot_id="graph-polyglot-language-boundary",
+        project_id="project-1",
+        repository_id="repository-1",
+        repository_revision="abc123",
+        scan_roots=("src",),
+        profile=profile,
+        files=files,
+    )
+
+    calls = [
+        edge
+        for edge in cast(list[dict[str, Any]], result.artifact["edges"])
+        if edge["edge_type"] == "calls" and edge["extractor"] == "javascript_symbol"
+    ]
+    assert any(
+        edge["to_ref"] == "unresolved:call:pythonOnly/1"
+        and edge["resolution_status"] == "unresolved"
+        for edge in calls
+    )
+
+
+def test_polyglot_adapters_report_each_language_parse_error(
+    tmp_path: Path,
+) -> None:
+    sources = {
+        "src/javascript/broken.js": "export function broken( {\n",
+        "src/typescript/broken.ts": "export function broken(value: number {\n",
+        "src/python/broken.py": "def broken(:\n",
+        "src/kotlin/Broken.kt": "fun broken( {\n",
+    }
+    for relative_path, content in sources.items():
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    profile = load_polyglot_profile()
+    files = WorkspaceScanner().discover(
+        workspace_root=tmp_path,
+        scan_roots=("src",),
+        excluded_globs=(),
+        languages=tuple(cast(list[str], profile["languages"])),
+    )
+
+    result = CodeGraphScanner().scan(
+        code_graph_snapshot_id="graph-polyglot-broken",
+        project_id="project-1",
+        repository_id="repository-1",
+        repository_revision="abc123",
+        scan_roots=("src",),
+        profile=profile,
+        files=files,
+    )
+
+    assert result.artifact["scan_status"] == "truncated"
+    assert set(result.diagnostics) == {
+        "tree_sitter_parse_error:javascript:src/javascript/broken.js",
+        "tree_sitter_parse_error:kotlin:src/kotlin/Broken.kt",
+        "tree_sitter_parse_error:python:src/python/broken.py",
+        "tree_sitter_parse_error:typescript:src/typescript/broken.ts",
+    }
+
+
 def test_tree_sitter_scanner_builds_resolved_java_test_and_lexical_edges(
     tmp_path: Path,
 ) -> None:
@@ -665,7 +963,7 @@ public class SearchController {
     )
 
 
-def test_scanner_blocks_silent_semantic_fallback_for_unimplemented_code_language(
+def test_scanner_requires_the_registered_typescript_extractor(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "src/main/typescript"
@@ -695,4 +993,4 @@ def test_scanner_blocks_silent_semantic_fallback_for_unimplemented_code_language
     )
 
     assert result.artifact["scan_status"] == "truncated"
-    assert result.diagnostics == ("language_extractor_not_implemented:typescript",)
+    assert result.diagnostics == ("required_extractor_missing:typescript:typescript_symbol",)

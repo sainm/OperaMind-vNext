@@ -24,7 +24,12 @@ from operamind.domain import (
     runtime_candidate_id,
     runtime_observation_id,
 )
-from operamind.infrastructure.browser.playwright import LocalEvidenceStore, _locator
+from operamind.infrastructure.browser.playwright import (
+    LocalEvidenceStore,
+    _enforce_approved_navigation,
+    _locator,
+    _require_approved_page_origin,
+)
 
 
 class UiKnowledgeRuntimeObserver(Protocol):
@@ -47,7 +52,7 @@ class PlaywrightUiKnowledgeRuntimeObserver:
         self,
         *,
         browser_name: str = "chromium",
-        browser_channel: str | None = "chrome",
+        browser_channel: str | None = "msedge",
         headless: bool = True,
         viewport_width: int = 1280,
         viewport_height: int = 720,
@@ -187,6 +192,10 @@ class PlaywrightUiKnowledgeRuntimeObserver:
         target = next(item for item in source.targets if item.target_ref == target_ref)
         context = browser.new_context(viewport=self._viewport, storage_state=storage_state)
         context.set_default_timeout(self._timeout_ms)
+        context.route(
+            "**/*",
+            lambda route: _enforce_approved_navigation(route, origin),
+        )
         page = context.new_page()
         page.set_default_navigation_timeout(self._navigation_timeout_ms)
         destination = urljoin(f"{origin}/", trigger_path.lstrip("/"))
@@ -196,6 +205,7 @@ class PlaywrightUiKnowledgeRuntimeObserver:
         try:
             try:
                 response = page.goto(destination, wait_until="domcontentloaded")
+                _require_approved_page_origin(page.url, origin)
                 if response is not None and response.status >= 400:
                     raise PlaywrightError("Trigger Path returned an error response")
             except (PlaywrightTimeoutError, PlaywrightError):
@@ -256,12 +266,16 @@ class PlaywrightUiKnowledgeRuntimeObserver:
                         discovered=True,
                     )
                     observations.append(discovered_observation)
-            evidence = self._capture_target_evidence(
-                source=source,
-                observation_run_id=observation_run_id,
-                target_ref=target_ref,
-                screenshot_source=screenshot_source,
-            )
+            try:
+                _require_approved_page_origin(page.url, origin)
+                evidence = self._capture_target_evidence(
+                    source=source,
+                    observation_run_id=observation_run_id,
+                    target_ref=target_ref,
+                    screenshot_source=screenshot_source,
+                )
+            except PlaywrightError:
+                evidence = None
             if self._evidence_store is not None and evidence is None:
                 issues.append(
                     UiRuntimeObservationIssue(

@@ -2,7 +2,7 @@
 
 ## 1. 适用范围
 
-本规范适用于 OperaMind vNext 的 Python/FastAPI、PostgreSQL/pgvector、React/TypeScript、MCP、Tree-sitter 和 Playwright 实现。
+本规范适用于 OperaMind vNext 的 Python/FastAPI、PostgreSQL/pgvector、Browser HTML/CSS/JavaScript、MCP、Tree-sitter 和 Playwright 实现。
 
 规则分为两类：
 
@@ -43,7 +43,7 @@ Domain 不得反向 import Infrastructure。
 - MUST：一个模块只有一个主要职责。
 - SHOULD：函数控制在 40 行以内；超过 60 行需要拆分或说明。
 - SHOULD：Python 模块控制在 500 行以内。
-- SHOULD：React 页面/组件控制在 400 行以内。
+- SHOULD：Browser UI 模块控制在 500 个逻辑行以内；大型画面按读模型或交互职责拆分。
 - SHOULD：构造函数依赖不超过 6 个；超过时检查职责是否过多。
 - MUST：不得建立通用 `utils.py`、`helpers.py` 垃圾桶；工具按领域命名。
 
@@ -118,6 +118,7 @@ Coverage    changed-code coverage report
 - Use Case 输入输出使用明确 Command/Result 类型。
 - Repository 使用接口隔离，Domain/Application 测试不依赖真实 PostgreSQL。
 - 写操作必须有明确事务边界和幂等键。
+- 人工 Web 写操作必须使用 `WebCommandRepository` 的数据库 Receipt；相同 scope、actor、payload 和 `Idempotency-Key` 只执行一次，内容漂移必须冲突。local Bridge 与 Worker Lease 协议使用已持久化的 Task／Claim／Lease／Result 身份，不得把浏览器幂等键冒充为协议身份。
 - API Error 使用统一结构：`code`、`message`、`details`、`trace_id`。
 - 分页、排序和过滤必须有上限，不能把数据库全表直接返回给 Web/MCP。
 
@@ -179,18 +180,17 @@ SQL 命名使用 `snake_case`；外键字段使用 `<entity>_id`；时间使用 
 - 修改结果必须通过 `git diff --name-only` 与白名单比较。
 - 超出范围返回 `reanalysis_required`，不得静默扩大权限。
 
-## 11. React 和 TypeScript 规范
+## 11. Browser UI 规范
 
-- TypeScript 开启 `strict`，禁止无理由使用 `any`。
-- API 类型从 Contract/OpenAPI 生成或集中维护，页面不得手写不同版本。
-- 组件使用函数组件和明确 Props。
-- 页面负责组合，业务逻辑进入 hook/service，格式化进入纯函数。
+- 当前 Operations Web 使用仓库内 HTML/CSS/JavaScript，不假定 React 或 TypeScript runtime。
+- API 字段与状态值从统一 Contract/OpenAPI 维护，页面不得手写不同版本的业务规则。
+- 页面负责组合；业务判定留在 Application 层，格式化与图布局使用可单测的纯函数。
 - 远程数据状态必须区分 loading、empty、error、stale 和 ready。
 - 不把密码、Token 或敏感环境配置写入 `localStorage`。
 - 按钮、表单、状态和错误必须有可访问名称。
 - 禁止在组件中拼接未经转义的 HTML。
 
-前端强制工具：ESLint、Prettier、TypeScript typecheck、Vitest；关键工作流使用 Playwright。
+前端强制检查：`node --check`、纯 JavaScript 单元测试；关键工作流使用 Playwright。若后续引入 TypeScript 或框架，必须先更新本规范和构建链。
 
 ## 12. Playwright UI 测试规范
 

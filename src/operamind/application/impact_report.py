@@ -20,6 +20,7 @@ from operamind.contracts import ContractCatalog
 from operamind.infrastructure.postgres import (
     ArtifactRepository,
     CodeGraphQueryRepository,
+    GoldenRagQualityRepository,
     ImpactReportPublishResult,
     ImpactRepository,
 )
@@ -94,6 +95,7 @@ class ImpactReportService:
         self._contracts = contracts
         self._artifacts = ArtifactRepository(connection, contracts)
         self._graphs = CodeGraphQueryRepository(connection, contracts)
+        self._rag_quality = GoldenRagQualityRepository(connection, contracts)
         self._scope = CodeScopeResolverService(
             connection=connection,
             contracts=contracts,
@@ -104,10 +106,17 @@ class ImpactReportService:
     def run(self, request: ImpactReportRequest) -> ImpactReportResult:
         """Build and publish a blocked or awaiting-confirmation report."""
 
-        scope = self._scope.resolve(request.scope)
         context = self._artifacts.get(request.scope.context_package_id)
         if context is None or context.get("artifact_type") != "ContextPackage":
             raise ValueError("Impact Report Context Package does not exist")
+        retrieval_policy = cast(dict[str, object], context["retrieval_policy"])
+        self._rag_quality.require_passed_gate(
+            project_id=request.scope.project_id,
+            document_snapshot_id=str(context["document_snapshot_id"]),
+            embedding_profile_version_id=str(retrieval_policy["embedding_profile_version_id"]),
+            search_index_build_id=str(context["search_index_build_id"]),
+        )
+        scope = self._scope.resolve(request.scope)
         graph = self._graphs.get_scope(
             project_id=request.scope.project_id,
             code_graph_snapshot_id=request.scope.code_graph_snapshot_id,

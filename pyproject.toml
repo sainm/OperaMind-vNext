@@ -18,6 +18,10 @@ dependencies = [
   "python-docx>=1.1,<2",
   "tree-sitter>=0.25,<0.27",
   "tree-sitter-java>=0.23.5,<0.24",
+  "tree-sitter-javascript>=0.25,<0.26",
+  "tree-sitter-kotlin>=1.1,<2",
+  "tree-sitter-python>=0.25,<0.26",
+  "tree-sitter-typescript>=0.23.2,<0.24",
   "uvicorn>=0.35,<1",
 ]
 
@@ -45,6 +49,7 @@ operamind-change-draft = "operamind.commands.change_draft:main"
 operamind-change-automation = "operamind.commands.change_automation:main"
 operamind-orchestration-task = "operamind.commands.orchestration_tasks:main"
 operamind-orchestration-worker = "operamind.commands.orchestration_worker:main"
+operamind-profile-rebuild-worker = "operamind.commands.profile_rebuild_worker:main"
 operamind-orchestration-generate-handler = "operamind.commands.orchestration_generate_handler:main"
 operamind-orchestrate = "operamind.commands.orchestrate_change:main"
 operamind-close-change = "operamind.commands.close_change:main"
@@ -57,6 +62,7 @@ operamind-build-impact = "operamind.commands.build_impact:main"
 operamind-build-relations = "operamind.commands.build_relations:main"
 operamind-diff = "operamind.commands.diff:main"
 operamind-evaluate-rag = "operamind.commands.evaluate_rag:main"
+operamind-run-golden-rag = "operamind.commands.run_golden_rag:main"
 operamind-finalize-rag = "operamind.commands.finalize_rag:main"
 operamind-ingest = "operamind.commands.ingest:main"
 operamind-migrate = "operamind.commands.migrate:main"

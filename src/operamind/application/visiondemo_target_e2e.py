@@ -153,25 +153,25 @@ def build_visiondemo_cross_screen_template() -> dict[str, Any]:
                     "fixture",
                     "実行ごとの識別子を割り当てる",
                     target="visiondemo.runtime-identities",
-                        outputs=[
-                            _output(name, "fixture", name)
+                    outputs=[
+                        _output(name, "fixture", name)
                         for name in (
                             "employee_no",
                             "employee_name",
                             "employee_email",
-                                "expense_no",
-                            )
-                        ],
-                        postconditions=[
-                            {
-                                "assertion_id": "runtime-identities-allocated",
-                                "observe_via": "fixture",
-                                "subject": "employee_no",
-                                "operator": "exists",
-                                "expected": True,
-                            }
-                        ],
-                    ),
+                            "expense_no",
+                        )
+                    ],
+                    postconditions=[
+                        {
+                            "assertion_id": "runtime-identities-allocated",
+                            "observe_via": "fixture",
+                            "subject": "employee_no",
+                            "operator": "exists",
+                            "expected": True,
+                        }
+                    ],
+                ),
                 _step(
                     "create-linked-employee",
                     2,

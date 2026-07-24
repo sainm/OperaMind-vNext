@@ -12,11 +12,14 @@
 - 解析前后重新计算来源文件摘要；文件在 Signal/Record 提取期间发生变化时整次 Diff 阻断，不保存混合 Snapshot。
 - Office ZIP 在解析前执行文件大小、条目数、总展开量、加密成员和路径穿越检查。
 - 从 Variant 表头别名提取带单元格/表格位置的 Observed Record，并映射为 Canonical Fact。
+- XLSX 逐 Sheet 独立匹配 Variant；画面概要、画面项目、事件和 API 一览／详细表可以进入同一 Snapshot。只匹配文件名的无关 Sheet 会作为 `ignored_sections` 显式返回，命中表头但未达到唯一自动匹配条件的 Sheet 会阻断，不静默丢弃。
+- Change Draft 与可执行 Diff 复用同一个 Canonical Snapshot Builder，不再分别执行整份工作簿与逐 Sheet 匹配。
 - 按 Stable Key 对齐 before/after Canonical Snapshot，生成 Contract v1 `StructuredChange`。
 - `operamind-diff` 将 Profile 匹配、Office 提取、Canonical 映射、Diff 和 Contract 校验串成可执行入口。
 - migration `0002_p1_canonical_documents` 和 PostgreSQL Repository 持久化 Profile、项目激活审计、Document Snapshot、Fact 与 StructuredChange。
 - migration `0003_structured_change_reviews` 以追加事件实现人工接受/拒绝，不修改原始 StructuredChange。
 - migration `0004_structured_change_review_chain_guards` 在数据库层保证每个 Change 只有一个首事件、每个事件只有一个后继。
+- migration `0056_snapshot_variant_provenance` 为 Snapshot 保存有序且完整的 Variant 集合，并以 `document_fact_variants` 固定每个 Fact 实际使用的 Variant；旧 Snapshot 按原 `selected_variant_id` 安全回填。
 - `operamind-ingest` 在单一事务中写入 Profile 激活审计、before/after Snapshot、Fact、规范化 Change、Change Artifact 和 `DocumentIngestionResult v1`。Ingestion Artifact 固定初始状态事件 ID，以及每个 Document Profile 的数据库版本 ID、binding key、activation event ID 和语义引用；读取时必须与 Snapshot Membership 和激活审计完全一致。
 - Profile 摘要校验不只发生在 `ProfileRepository.get_*`：Relation、Search Index 和 Context provenance 的直接 SQL 联表读取也会重算 payload SHA-256，并核对 profile type、ID 和 semantic version envelope，防止旁路读取接受漂移配置。
 - Canonical Snapshot 读取要求每个 Fact 与同 Snapshot、同 Document Version 的 digest-validated Slice 一一对应，Stable Key、Fact Type、Summary、Canonical values 和 source refs 任一漂移都会阻断。正式 StructuredChange 读取还必须让规范化 Change/Fact 行与同 ID 的不可变 Artifact 完全一致；缺少 Artifact 不是可用的降级路径。
@@ -35,7 +38,7 @@
 
 ## Office 信号提取边界
 
-- XLSX：读取 Sheet 名；在每个 Sheet 的受限行列窗口中，单文本单元格行视作标题候选，多文本单元格行视作表头候选，全部文本作为业务词候选。
+- XLSX：读取 Sheet 名；在每个 Sheet 的受限行列窗口中，单文本单元格行视作标题候选，多文本单元格行视作表头候选，全部文本作为业务词候选。横向键值可以位于任意列；纵向概要键值和由 Profile Alias 声明的分区标题可为后续表格提供 Stable Key 上下文。
 - DOCX：读取 Heading/见出し样式段落、每个表格首行表头以及受限范围内的正文/表格业务词。
 - 公式不作为结构信号，避免把可执行表达式误当作业务文本。
 - `.xls`、`.doc`、`.xlsm` 等未注册格式直接失败，不做静默降级或扩展名猜测。
@@ -51,6 +54,7 @@
 - 同一 Canonical Field 若通过多个别名得到不同值，返回 `conflicting_field_values`，不选择任意一个值。
 - Stable Key 字段缺失或为空时返回 `missing_stable_key_field`。
 - 未映射源字段保留在结果的 `unmapped_fields` 中；已映射字段保留源别名和精确 source ref。
+- 每个映射成功的 Fact 同时保留 `fact_ref -> variant_id`；Snapshot、Ingestion Artifact 和 PostgreSQL 三处回读必须完全一致。
 - Canonical 业务值只执行空白归一化，保留原始大小写和全/半角标点；字段名匹配执行 NFKC，Stable Key 再按 Variant 的显式 normalizer 处理。来源位置不参与 Stable Key。
 
 ## StructuredChange 生成规则
@@ -114,7 +118,7 @@ operamind-ingest \
   --activation-reason 'Reviewed convention for this project'
 ```
 
-当前 P1 尚未建立 Embedding Index，因此生成结果如实使用 `embedding_index_status=not_started`、`indexed_target_count=0` 和 `status=needs_review`，不会伪装成 `ready_for_impact`。
+P1 导入／Diff 命令本身不建立 Embedding Index，因此它生成的首个结果如实使用 `embedding_index_status=not_started`、`indexed_target_count=0` 和 `status=needs_review`，不会伪装成 `ready_for_impact`。后续 P2 命令已经实现索引、检索和 readiness 推进。
 
 ## StructuredChange 人工审阅
 
@@ -184,9 +188,9 @@ OPERAMIND_TEST_DATABASE_URL="$OPERAMIND_TEST_DATABASE_URL" \
 对 Golden source manifest 指向的真实文件做了以下只读验证：
 
 - `ui-demo-after` 的 27/27 个 XLSX、合计 108 个 Sheet 均成功提取。
-- 6 份 API 详细设计书均以 `1.0` 匹配 `api-list-url`，31 条记录全部映射成功且 Stable Key 唯一。
-- API before/after 各 31 条 Fact，Diff 为 0，符合本案例没有修改 API 设计书的事实。
-- 画面设计书 before/after 各提取 10 条 `screen_element` Fact，只生成 1 条 `modified`。
+- 6 份 API 详细设计书的 API 一览与请求／响应明细 Sheet 同时匹配 `api-list-url`、`api-object-table`，before/after 各 81 条 Fact，逐 Fact Variant Provenance 完整且 Stable Key 唯一。
+- API before/after Diff 为 0，符合本案例没有修改 API 设计书的事实。
+- 画面设计书同时提取画面概要、画面项目、事件共 16 条 `screen_element` Fact（1+10+5），画面布局作为明确的忽略 Section 返回，只生成 1 条 `modified`。
 - 该变化的 Stable Key 为 `screen_element:screen_expense_list/expense-search-status`，变化字段恰好为 `default_value` 和 `description`，source refs、confidence、review status 均匹配 silver 期待值。
 - 在隔离 PostgreSQL 18 上真实执行 0001-0004，并通过 migration、Artifact、Profile、Canonical、StructuredChange、审阅事件链、stale writer、完整事务重放及失败回滚集成测试。
 - 当前真实样本没有 DOCX，DOCX 路径由生成式单元测试覆盖。
@@ -201,7 +205,7 @@ Stable Key 格式：
 
 缺少或为空的 Stable Key Field 必须阻断，不允许退回行号、列号或内部节点 ID。
 
-## 下一步
+## 当前后续边界
 
-- P2 已完成追加式 RAG readiness、三类 Query Plan、Profile 驱动的确定性 Relation Build、Golden 检索质量 evaluator、确定性 Context Package 和显式 opt-in 的真实 Provider live 合约测试入口；后续仍需模型压缩保真、实际执行 Provider live test 并保存通过记录，以及冻结 Golden 数据证据。
-- 将当前 local-only silver source 转为不可变引用并完成人工冻结。
+- P2 的追加式 RAG readiness、三类 Query Plan、Profile 驱动 Relation Build、质量 evaluator、确定性 Context Package、真实 Provider test 与 readiness Evidence 已完成；模型压缩保真属于 MVP 后增强，不是当前 readiness 条件。
+- Golden 案例已经冻结。正式 Golden retrieval 命令、质量报告和 Impact 门禁已实现并通过真实 PostgreSQL/pgvector 回归；VisionDemo 运维数据库上的正式 Report 仍需在本地 Embedding Provider 与固定 Canonical Snapshot 可用时采集，详见 [后续任务清单](NEXT-TASKS.md)。

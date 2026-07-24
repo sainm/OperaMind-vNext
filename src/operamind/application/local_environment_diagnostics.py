@@ -469,9 +469,7 @@ class LocalEnvironmentDiagnosticsService:
                 "Credit/Quota を確認してください。"
             ),
             code=(
-                "copilot_model_available_quota_unverified"
-                if available
-                else "copilot_unavailable"
+                "copilot_model_available_quota_unverified" if available else "copilot_unavailable"
             ),
         )
 

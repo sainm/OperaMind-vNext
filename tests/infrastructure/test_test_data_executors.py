@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from http.client import HTTPMessage
+from io import BytesIO
 from pathlib import Path
+from urllib.error import URLError
+from urllib.request import Request
 
 import pytest
 
@@ -46,6 +50,7 @@ def test_http_executor_uses_bound_origin_and_records_sanitized_evidence(
             201,
             {"Content-Type": "application/json"},
             b'{"id":91,"expenseNo":"EXP-001"}',
+            "http://127.0.0.1:8080/expense/api/save?trace=test",
         )
     )
     executor = SafeHttpTestDataExecutor(
@@ -78,12 +83,69 @@ def test_http_executor_uses_bound_origin_and_records_sanitized_evidence(
     assert "top-secret" not in request_file.read_text(encoding="utf-8")
 
 
+def test_http_executor_rejects_a_cross_origin_final_url(tmp_path: Path) -> None:
+    executor = SafeHttpTestDataExecutor(
+        evidence_store=LocalEvidenceStore(tmp_path),
+        transport=FakeTransport(
+            HttpResponse(
+                200,
+                {},
+                b"{}",
+                final_url="http://127.0.0.1:8081/redirected",
+            )
+        ),
+    )
+
+    with pytest.raises(OSError, match="redirect escaped the approved origin"):
+        executor.execute(
+            request=_request(),
+            flow_id="expense-flow",
+            step={"step_id": "create", "target": "POST /expense/api/save"},
+            resolved_inputs={"method": "POST", "path": "/expense/api/save"},
+            variables={},
+            phase="setup",
+        )
+
+
+def test_same_origin_redirect_handler_rejects_cross_origin_redirect() -> None:
+    from operamind.infrastructure.test_data.executors import _SameOriginRedirectHandler
+
+    handler = _SameOriginRedirectHandler()
+    with pytest.raises(URLError, match="redirect escaped the approved origin"):
+        handler.redirect_request(
+            Request("http://127.0.0.1:8080/start"),
+            BytesIO(),
+            302,
+            "Found",
+            HTTPMessage(),
+            "http://127.0.0.1:8081/redirected",
+        )
+
+    redirected = handler.redirect_request(
+        Request("http://127.0.0.1:8080/start"),
+        BytesIO(),
+        302,
+        "Found",
+        HTTPMessage(),
+        "http://127.0.0.1:8080/redirected",
+    )
+    assert redirected is not None
+    assert redirected.full_url == "http://127.0.0.1:8080/redirected"
+
+
 def test_http_executor_rejects_target_drift_and_retains_non_success_observation(
     tmp_path: Path,
 ) -> None:
     executor = SafeHttpTestDataExecutor(
         evidence_store=LocalEvidenceStore(tmp_path),
-        transport=FakeTransport(HttpResponse(409, {}, b'{"error":"duplicate"}')),
+        transport=FakeTransport(
+            HttpResponse(
+                409,
+                {},
+                b'{"error":"duplicate"}',
+                "http://127.0.0.1:8080/expense/api/save",
+            )
+        ),
     )
     with pytest.raises(ValueError, match="differ from the reviewed target"):
         executor.execute(

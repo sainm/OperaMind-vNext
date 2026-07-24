@@ -1,0 +1,26 @@
+{
+  "artifact_type": "ChangedLineCoverageReport",
+  "schema_version": "v1",
+  "changed_line_coverage_report_id": "changed-line-coverage-expense-status",
+  "edit_result_id": "edit-result-expense-status",
+  "project_id": "visiondemo",
+  "base_repository_revision": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6",
+  "result_repository_revision": "bd23d0a7a54ce196c0ea6c41445e5f5492ae1ea7",
+  "minimum_coverage_percent": 80,
+  "changed_line_count": 4,
+  "covered_changed_line_count": 4,
+  "coverage_percent": 100,
+  "files": [
+    {
+      "path": "VisionDemo/src/main/java/com/example/ExpenseRepository.java",
+      "changed_line_count": 4,
+      "covered_changed_line_count": 4,
+      "changed_lines": [41, 42, 43, 44],
+      "covered_changed_lines": [41, 42, 43, 44],
+      "uncovered_changed_lines": []
+    }
+  ],
+  "evidence_refs": ["command-execution:visiondemo-expense-status-coverage"],
+  "status": "passed",
+  "blocking_reasons": []
+}

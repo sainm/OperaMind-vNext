@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/golden-rag-quality-report.schema.json",
+  "title": "GoldenRagQualityReport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_type",
+    "schema_version",
+    "report_id",
+    "case_id",
+    "dataset_id",
+    "dataset_version",
+    "project_id",
+    "document_snapshot_id",
+    "embedding_profile_version_id",
+    "embedding_profile_binding_key",
+    "search_index_build_id",
+    "ranking_policy_version",
+    "query_plan_version",
+    "expectation_digest",
+    "status",
+    "quality_thresholds",
+    "query_results",
+    "metrics",
+    "threshold_failures",
+    "failure_reasons"
+  ],
+  "properties": {
+    "artifact_type": {"const": "GoldenRagQualityReport"},
+    "schema_version": {"const": "v1"},
+    "report_id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "case_id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "dataset_id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "dataset_version": {"type": "string", "minLength": 1, "maxLength": 160},
+    "project_id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "document_snapshot_id": {"type": "string", "minLength": 1, "maxLength": 500},
+    "embedding_profile_version_id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "embedding_profile_binding_key": {"type": "string", "minLength": 1, "maxLength": 500},
+    "search_index_build_id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "ranking_policy_version": {"type": "string", "minLength": 1, "maxLength": 160},
+    "query_plan_version": {"type": "string", "minLength": 1, "maxLength": 160},
+    "expectation_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "status": {"enum": ["passed", "failed", "blocked"]},
+    "semantic_binding_version": {"type": "string", "minLength": 1, "maxLength": 160},
+    "quality_thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min_recall_at_5",
+        "min_recall_at_10",
+        "min_mrr",
+        "max_irrelevant_rate",
+        "max_cross_project_leaks"
+      ],
+      "properties": {
+        "min_recall_at_5": {"type": "number", "minimum": 0, "maximum": 1},
+        "min_recall_at_10": {"type": "number", "minimum": 0, "maximum": 1},
+        "min_mrr": {"type": "number", "minimum": 0, "maximum": 1},
+        "max_irrelevant_rate": {"type": "number", "minimum": 0, "maximum": 1},
+        "max_cross_project_leaks": {"type": "integer", "minimum": 0}
+      }
+    },
+    "semantic_bindings": {
+      "type": "array",
+      "maxItems": 1000,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "semantic_ref",
+          "canonical_node_id",
+          "document",
+          "business_keys",
+          "matched_locations",
+          "unmatched_locations",
+          "matched_source_refs",
+          "resolution_method"
+        ],
+        "properties": {
+          "semantic_ref": {"type": "string", "minLength": 1},
+          "canonical_node_id": {"type": "string", "minLength": 1},
+          "document": {"type": "string", "minLength": 1},
+          "business_keys": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "uniqueItems": true
+          },
+          "matched_locations": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "uniqueItems": true
+          },
+          "unmatched_locations": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "uniqueItems": true
+          },
+          "matched_source_refs": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "uniqueItems": true
+          },
+          "resolution_method": {
+            "enum": ["direct_node_id", "reviewed_source_location"]
+          }
+        }
+      }
+    },
+    "query_results": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "query_purpose",
+          "query_text",
+          "query_text_digest",
+          "candidates",
+          "required_hits_at_5",
+          "required_hits_at_10",
+          "missing_required_refs",
+          "irrelevant_hits",
+          "cross_project_leaks",
+          "failure_reasons"
+        ],
+        "properties": {
+          "query_purpose": {"enum": ["business_behavior", "precise_anchor", "acceptance_criteria"]},
+          "query_text": {"type": "string", "minLength": 1, "maxLength": 10000},
+          "query_text_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "candidates": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["rank", "target_type", "target_id", "project_id", "score", "channels"],
+              "properties": {
+                "rank": {"type": "integer", "minimum": 1},
+                "target_type": {"type": "string", "minLength": 1},
+                "target_id": {"type": "string", "minLength": 1},
+                "semantic_refs": {
+                  "type": "array",
+                  "items": {"type": "string", "minLength": 1},
+                  "uniqueItems": true
+                },
+                "project_id": {"type": "string", "minLength": 1},
+                "score": {"type": "number", "minimum": 0, "maximum": 1},
+                "channels": {
+                  "type": "array",
+                  "items": {"enum": ["vector", "keyword"]},
+                  "minItems": 1,
+                  "uniqueItems": true
+                }
+              }
+            }
+          },
+          "required_hits_at_5": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "required_hits_at_10": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "missing_required_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "irrelevant_hits": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "cross_project_leaks": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "failure_reasons": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+        }
+      }
+    },
+    "metrics": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["recall_at_5", "recall_at_10", "mrr", "irrelevant_rate", "cross_project_leaks"],
+          "properties": {
+            "recall_at_5": {"type": "number", "minimum": 0, "maximum": 1},
+            "recall_at_10": {"type": "number", "minimum": 0, "maximum": 1},
+            "mrr": {"type": "number", "minimum": 0, "maximum": 1},
+            "irrelevant_rate": {"type": "number", "minimum": 0, "maximum": 1},
+            "cross_project_leaks": {"type": "integer", "minimum": 0}
+          }
+        }
+      ]
+    },
+    "threshold_failures": {
+      "type": "array",
+      "items": {"enum": ["recall_at_5", "recall_at_10", "mrr", "irrelevant_rate", "cross_project_leaks"]},
+      "uniqueItems": true
+    },
+    "failure_reasons": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1, "maxLength": 10000},
+      "uniqueItems": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "passed"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "metrics": {"type": "object"},
+          "threshold_failures": {"maxItems": 0},
+          "failure_reasons": {"maxItems": 0}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "failed"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "metrics": {"type": "object"},
+          "threshold_failures": {"minItems": 1},
+          "failure_reasons": {"minItems": 1}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "blocked"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "metrics": {"type": "null"},
+          "threshold_failures": {"maxItems": 0},
+          "failure_reasons": {"minItems": 1}
+        }
+      }
+    }
+  ]
+}

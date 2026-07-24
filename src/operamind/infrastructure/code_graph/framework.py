@@ -12,10 +12,11 @@ from operamind.infrastructure.code_graph.java import (
     JavaSymbol,
     JavaType,
 )
+from operamind.infrastructure.code_graph.struts1 import extract_struts1_graph
 from operamind.infrastructure.code_graph.workspace import DiscoveredCodeFile
 
 SPECIALIZED_FRAMEWORK_EXTRACTORS = frozenset(
-    {"spring_config_binding", "spring_data_access", "web_ui_route"}
+    {"spring_config_binding", "spring_data_access", "struts1_mvc", "web_ui_route"}
 )
 
 
@@ -25,6 +26,7 @@ class FrameworkGraphResult:
 
     symbol_additions: dict[str, tuple[dict[str, object], ...]]
     edges: tuple[JavaDirectEdge, ...]
+    diagnostics: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +160,7 @@ def extract_framework_graph(
     if not enabled_extractors.intersection(SPECIALIZED_FRAMEWORK_EXTRACTORS):
         return FrameworkGraphResult(symbol_additions={}, edges=edges)
     additions: dict[str, list[dict[str, object]]] = {}
+    diagnostics: list[str] = []
     route_facts: list[_UiRoute] = []
     working_edges = list(edges)
     if "web_ui_route" in enabled_extractors:
@@ -302,11 +305,24 @@ def extract_framework_graph(
             java_lambdas=java_lambdas,
             repository_entities=repository_entities,
         )
+    if "struts1_mvc" in enabled_extractors:
+        struts = extract_struts1_graph(
+            files=files,
+            java_symbols=java_symbols,
+            java_types=java_types,
+            edges=tuple(working_edges),
+        )
+        for path, struts_symbols in struts.symbol_additions.items():
+            additions.setdefault(path, []).extend(struts_symbols)
+            symbols_by_path[path].extend(struts_symbols)
+        working_edges = list(struts.edges)
+        diagnostics.extend(struts.diagnostics)
     if route_facts:
         working_edges.extend(_route_endpoint_edges(route_facts, tuple(working_edges)))
     return FrameworkGraphResult(
         symbol_additions={path: tuple(values) for path, values in additions.items()},
         edges=tuple(working_edges),
+        diagnostics=tuple(sorted(set(diagnostics))),
     )
 
 

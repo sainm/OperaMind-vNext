@@ -10,6 +10,9 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from queue import Empty, Queue
+from threading import Thread
+from typing import IO, Any
 
 from operamind.application.orchestration_worker import (
     OrchestrationTaskExecutionCancelled,
@@ -81,8 +84,6 @@ class FixedCommandOrchestrationTaskHandler:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
                 start_new_session=True,
             )
         except OSError as error:
@@ -90,46 +91,21 @@ class FixedCommandOrchestrationTaskHandler:
                 "Task handler could not be started", error_kind="handler_launch_failed"
             ) from error
 
-        deadline = time.monotonic() + self._configuration.timeout_seconds
-        stdout = ""
-        stderr = ""
-        first_communicate = True
-        while True:
-            if context.cancelled:
-                _terminate(process)
-                raise OrchestrationTaskExecutionCancelled(
-                    "Task handler stopped after worker cancellation"
-                )
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                _terminate(process)
-                raise OrchestrationTaskExecutionError(
-                    "Task handler exceeded its configured timeout",
-                    error_kind="handler_timeout",
-                )
-            try:
-                stdout, stderr = process.communicate(
-                    input=payload if first_communicate else None,
-                    timeout=min(0.1, remaining),
-                )
-                break
-            except subprocess.TimeoutExpired:
-                first_communicate = False
-
-        output_bytes = len(stdout.encode("utf-8")) + len(stderr.encode("utf-8"))
-        if output_bytes > self._configuration.max_output_bytes:
-            raise OrchestrationTaskExecutionError(
-                "Task handler output exceeded its configured limit",
-                error_kind="handler_output_too_large",
-            )
+        stdout, _stderr = _collect_output(
+            process=process,
+            payload=payload.encode("utf-8"),
+            context=context,
+            timeout_seconds=self._configuration.timeout_seconds,
+            max_output_bytes=self._configuration.max_output_bytes,
+        )
         if process.returncode != 0:
             raise OrchestrationTaskExecutionError(
                 f"Task handler exited with code {process.returncode}",
                 error_kind="handler_nonzero_exit",
             )
         try:
-            value: object = json.loads(stdout)
-        except json.JSONDecodeError as error:
+            value: object = json.loads(stdout.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise OrchestrationTaskExecutionError(
                 "Task handler returned invalid JSON", error_kind="handler_invalid_json"
             ) from error
@@ -231,16 +207,125 @@ def _parse_result(value: object) -> OrchestrationTaskExecutionResult:
         ) from error
 
 
-def _terminate(process: subprocess.Popen[str]) -> None:
+def _collect_output(
+    *,
+    process: subprocess.Popen[bytes],
+    payload: bytes,
+    context: OrchestrationTaskExecutionContext,
+    timeout_seconds: float,
+    max_output_bytes: int,
+) -> tuple[bytes, bytes]:
+    """Drain both output pipes incrementally and terminate on the first limit breach."""
+
+    if process.stdin is None or process.stdout is None or process.stderr is None:
+        _terminate(process)
+        raise OrchestrationTaskExecutionError(
+            "Task handler pipes were not created", error_kind="handler_launch_failed"
+        )
+
+    events: Queue[tuple[str, bytes | None]] = Queue(maxsize=8)
+
+    def read_stream(name: str, stream: IO[bytes]) -> None:
+        try:
+            while chunk := os.read(stream.fileno(), 65_536):
+                events.put((name, chunk))
+        finally:
+            stream.close()
+            events.put((name, None))
+
+    def write_input(stream: IO[bytes]) -> None:
+        try:
+            stream.write(payload)
+            stream.flush()
+        except (BrokenPipeError, OSError):
+            pass
+        finally:
+            stream.close()
+
+    readers = [
+        Thread(target=read_stream, args=("stdout", process.stdout), daemon=True),
+        Thread(target=read_stream, args=("stderr", process.stderr), daemon=True),
+    ]
+    writer = Thread(target=write_input, args=(process.stdin,), daemon=True)
+    for thread in (*readers, writer):
+        thread.start()
+
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    closed: set[str] = set()
+    total_bytes = 0
+    deadline = time.monotonic() + timeout_seconds
+    failure: OrchestrationTaskExecutionCancelled | OrchestrationTaskExecutionError | None = None
+
+    while len(closed) < 2:
+        remaining = deadline - time.monotonic()
+        if failure is None and context.cancelled:
+            failure = OrchestrationTaskExecutionCancelled(
+                "Task handler stopped after worker cancellation"
+            )
+            _terminate(process)
+        elif failure is None:
+            if remaining <= 0:
+                failure = OrchestrationTaskExecutionError(
+                    "Task handler exceeded its configured timeout",
+                    error_kind="handler_timeout",
+                )
+                _terminate(process)
+        try:
+            name, chunk = events.get(timeout=0.05 if failure is not None else min(0.05, remaining))
+        except Empty:
+            continue
+        if chunk is None:
+            closed.add(name)
+            continue
+        if failure is not None:
+            continue
+        total_bytes += len(chunk)
+        if total_bytes > max_output_bytes:
+            failure = OrchestrationTaskExecutionError(
+                "Task handler output exceeded its configured limit",
+                error_kind="handler_output_too_large",
+            )
+            _terminate(process)
+            continue
+        buffers[name].extend(chunk)
+
+    if failure is None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            failure = OrchestrationTaskExecutionError(
+                "Task handler exceeded its configured timeout",
+                error_kind="handler_timeout",
+            )
+            _terminate(process)
+        else:
+            try:
+                process.wait(timeout=remaining)
+            except subprocess.TimeoutExpired:
+                failure = OrchestrationTaskExecutionError(
+                    "Task handler exceeded its configured timeout",
+                    error_kind="handler_timeout",
+                )
+                _terminate(process)
+
+    for thread in (*readers, writer):
+        thread.join(timeout=2)
+    if failure is not None:
+        raise failure
+    return bytes(buffers["stdout"]), bytes(buffers["stderr"])
+
+
+def _terminate(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        return
     _signal_process(process, signal.SIGTERM)
     try:
-        process.communicate(timeout=2)
+        process.wait(timeout=2)
     except subprocess.TimeoutExpired:
         _signal_process(process, signal.SIGKILL)
-        process.communicate()
+        process.wait()
 
 
-def _signal_process(process: subprocess.Popen[str], signal_number: int) -> None:
+def _signal_process(process: subprocess.Popen[Any], signal_number: int) -> None:
     try:
         if os.name == "posix":
             os.killpg(process.pid, signal_number)

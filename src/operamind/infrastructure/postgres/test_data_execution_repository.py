@@ -116,8 +116,8 @@ class TestDataExecutionRepository:
         self._connection = connection
         self._contracts = contracts
         self._artifacts = ArtifactRepository(connection, contracts)
-        self._case_execution_authorizations = (
-            TestCaseExecutionAuthorizationRepository(connection, contracts)
+        self._case_execution_authorizations = TestCaseExecutionAuthorizationRepository(
+            connection, contracts
         )
 
     def reserve(self, write: TestDataExecutionRunWrite) -> TestDataExecutionReservation:
@@ -161,7 +161,8 @@ class TestDataExecutionRepository:
                              AND event.project_id = grant_record.project_id
                              AND event.event_type = 'revoked'
                        ) AS grant_not_revoked,
-                       case_record.status
+                       case_record.status,
+                       orchestration.test_plan_id
                 FROM change_orchestrations AS orchestration
                 JOIN approval_grants AS grant_record
                   ON grant_record.approval_grant_id = %s
@@ -184,6 +185,21 @@ class TestDataExecutionRepository:
             scope = cursor.fetchone()
             if scope is None:
                 raise ValueError("Test data execution scope does not exist")
+            cursor.execute(
+                """
+                SELECT reason FROM profile_drift_impacts
+                WHERE project_id = %s
+                  AND artifact_type = 'TestPlan'
+                  AND artifact_id = %s
+                  AND resolved_at IS NULL
+                ORDER BY profile_drift_event_id
+                LIMIT 1
+                """,
+                (write.project_id, str(scope[7])),
+            )
+            drift = cursor.fetchone()
+            if drift is not None:
+                raise ValueError(f"TestDataPlan is blocked by Profile drift: {drift[0]}")
             analysis_case_id = str(scope[0])
             actions = _strings(scope[4])
             if str(scope[1]) != "ready":
@@ -198,9 +214,7 @@ class TestDataExecutionRepository:
                 raise ValueError("Analysis Case does not permit test data execution")
             required_actions = {"run_test", "record_evidence"}
             if not required_actions.issubset(actions):
-                raise ValueError(
-                    "Approval Grant must allow run_test and record_evidence"
-                )
+                raise ValueError("Approval Grant must allow run_test and record_evidence")
             self._case_execution_authorizations.authorize_for_run(
                 target_orchestration_id=write.orchestration_id,
                 approval_grant_id=write.approval_grant_id,
@@ -424,10 +438,7 @@ class TestDataExecutionRepository:
             return self._load(cursor, run_id, for_update=False)
 
     def append_event(self, write: TestDataExecutionEventWrite) -> dict[str, Any]:
-        if any(
-            not value.strip()
-            for value in (write.run_id, write.project_id, write.event_type)
-        ):
+        if any(not value.strip() for value in (write.run_id, write.project_id, write.event_type)):
             raise ValueError("Test data progress identity must not be blank")
         if write.phase is not None and write.phase not in {"setup", "cleanup"}:
             raise ValueError("Test data progress phase is invalid")
@@ -654,9 +665,7 @@ class TestDataExecutionRepository:
                 (orchestration_id, project_id),
             )
             if cursor.fetchone() is None:
-                raise ValueError(
-                    "No active Approval Grant permits TestDataPlan execution"
-                )
+                raise ValueError("No active Approval Grant permits TestDataPlan execution")
         authorization = self._case_execution_authorizations.state(
             target_orchestration_id=orchestration_id,
             at=at,
@@ -698,9 +707,7 @@ class TestDataExecutionRepository:
             "authorization_id": authorization["authorization_id"],
         }
 
-    def base_url_for_orchestration(
-        self, *, orchestration_id: str, project_id: str
-    ) -> str | None:
+    def base_url_for_orchestration(self, *, orchestration_id: str, project_id: str) -> str | None:
         with self._connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -750,9 +757,7 @@ class TestDataExecutionRepository:
             record = self._load(cursor, str(row[0]), for_update=False)
         if record is None:
             raise RuntimeError("Latest Test data Run disappeared during read")
-        result = (
-            None if record.status == "running" else self.get_result(record.run_id)
-        )
+        result = None if record.status == "running" else self.get_result(record.run_id)
         return {
             "run_id": record.run_id,
             "execution_result_id": record.execution_result_id,
@@ -764,9 +769,7 @@ class TestDataExecutionRepository:
             "status": record.status,
             "started_at": record.started_at.isoformat(),
             "completed_at": (
-                record.completed_at.isoformat()
-                if record.completed_at is not None
-                else None
+                record.completed_at.isoformat() if record.completed_at is not None else None
             ),
             "replay_of_run_id": record.replay_of_run_id,
             "events": self.events(record.run_id),
@@ -820,9 +823,7 @@ class TestDataExecutionRepository:
         return str(row[0])
 
     @staticmethod
-    def _normalized_matches(
-        cursor: Cursor[Any], run_id: str, artifact: dict[str, Any]
-    ) -> bool:
+    def _normalized_matches(cursor: Cursor[Any], run_id: str, artifact: dict[str, Any]) -> bool:
         cursor.execute(
             """
             SELECT flow_id, execution_order, status, deferred_assertion_ids
@@ -933,8 +934,7 @@ def _validate_evidence_bindings(artifact: dict[str, Any]) -> None:
     if set(by_ref) != referenced:
         raise ValueError("Every Test data Evidence record must be referenced by its step")
     if any(
-        (str(value["flow_id"]), str(value["phase"]), str(value["step_id"]))
-        not in step_scopes
+        (str(value["flow_id"]), str(value["phase"]), str(value["step_id"])) not in step_scopes
         for value in evidence
     ):
         raise ValueError("Test data Evidence refers to an unknown step")

@@ -70,7 +70,7 @@ def _manifest(*, expected_count: str) -> BrowserExecutionManifest:
             "project_id": "project-001",
             "browser": {
                 "name": "chromium",
-                "channel": "chrome",
+                "channel": "msedge",
                 "headless": True,
                 "viewport": {"width": 1024, "height": 768},
             },

@@ -26,9 +26,7 @@ class ChangeClosureService:
         self._repository = ChangeClosureRepository(connection, contracts)
         self._evaluator = ChangeClosureEvaluator(contracts)
 
-    def close(
-        self, *, orchestration_id: str, actor: str
-    ) -> ChangeClosureServiceResult:
+    def close(self, *, orchestration_id: str, actor: str) -> ChangeClosureServiceResult:
         evidence = self._repository.load_evidence(orchestration_id)
         artifact = self._evaluator.evaluate(
             ChangeClosureInput(
@@ -38,6 +36,7 @@ class ChangeClosureService:
                 test_data_plan=evidence.test_data_plan,
                 coverage_report=evidence.coverage_report,
                 edit_result=evidence.edit_result,
+                changed_line_coverage=evidence.changed_line_coverage,
                 test_data_result=evidence.test_data_result,
                 ui_result=evidence.ui_result,
                 ui_test_case_refs=evidence.ui_test_case_refs,

@@ -59,8 +59,14 @@ def test_repository_migrations_are_sequential_and_transaction_free() -> None:
         "0046",
         "0047",
         "0048",
-    "0049",
-    "0050",
+        "0049",
+        "0050",
+        "0051",
+        "0052",
+        "0053",
+        "0054",
+        "0055",
+        "0056",
     ]
     assert all(len(migration.checksum) == 64 for migration in catalog.migrations)
 

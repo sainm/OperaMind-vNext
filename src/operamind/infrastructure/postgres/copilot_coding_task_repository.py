@@ -574,9 +574,7 @@ class CopilotCodingTaskRepository:
             "state": record.state,
             "claimed_by": record.claimed_by,
             "claim_expires_at": (
-                record.claim_expires_at.isoformat()
-                if record.claim_expires_at is not None
-                else None
+                record.claim_expires_at.isoformat() if record.claim_expires_at is not None else None
             ),
             "accepted_by": record.accepted_by,
             "retry_of_coding_task_id": record.retry_of_coding_task_id,

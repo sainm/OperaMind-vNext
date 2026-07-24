@@ -107,12 +107,15 @@ class TestDataRepository:
 
 
 class ClosureRepository:
+    def __init__(self, *, stale: bool = False) -> None:
+        self.stale = stale
+
     def latest(self, request_id: str) -> dict[str, Any]:
         assert request_id == "change-001"
         return {
             "artifact_type": "ChangeClosureResult",
             "status": "blocked",
-            "artifact_refs": ["ui-result-001"],
+            "artifact_refs": ["ui-result-001", "edit-result-001"],
             "ui_status": "blocked",
             "business_coverage_percent": 100,
             "unresolved_items": ["UI verification result is missing"],
@@ -121,6 +124,19 @@ class ClosureRepository:
     def latest_for_orchestration(self, orchestration_id: str) -> dict[str, Any]:
         assert orchestration_id == "orchestration-001"
         return self.latest("change-001")
+
+    def latest_changed_line_coverage(self, **values: object) -> dict[str, Any]:
+        assert values == {
+            "project_id": "visiondemo",
+            "analysis_case_id": "case-001",
+            "orchestration_id": "orchestration-001",
+        }
+        return {
+            "edit_result_id": "edit-result-002" if self.stale else "edit-result-001",
+            "status": "missing",
+            "coverage_percent": 0,
+            "blocking_reasons": ["Changed-line coverage evidence is missing"],
+        }
 
 
 class TestCaseRevisionService:
@@ -188,14 +204,26 @@ def test_management_combines_plan_run_coverage_closure_and_safe_screenshots(
         )
 
 
-def _service(root: Path) -> WebControlPlaneService:
+def test_management_does_not_expose_closure_from_an_older_edit_result(
+    tmp_path: Path,
+) -> None:
+    result = _service(tmp_path, stale_closure=True).execution_management("change-001")
+
+    assert result["change_closure"] is None
+    assert result["changed_line_coverage"]["edit_result_id"] == "edit-result-002"  # type: ignore[index]
+    assert result["controls"]["blocking_reason"] == (  # type: ignore[index]
+        "Change Closure is stale for current Edit Result"
+    )
+
+
+def _service(root: Path, *, stale_closure: bool = False) -> WebControlPlaneService:
     service = object.__new__(WebControlPlaneService)
     service._root = root  # type: ignore[attr-defined]
     service._repository = RequestRepository()  # type: ignore[attr-defined]
     service._artifacts = ArtifactRepository()  # type: ignore[attr-defined]
     service._orchestrations = OrchestrationRepository()  # type: ignore[attr-defined]
     service._test_data_runs = TestDataRepository()  # type: ignore[attr-defined]
-    service._closures = ClosureRepository()  # type: ignore[attr-defined]
+    service._closures = ClosureRepository(stale=stale_closure)  # type: ignore[attr-defined]
     service._test_case_revisions = TestCaseRevisionService()  # type: ignore[attr-defined]
     service._case_execution_authorizations = (  # type: ignore[attr-defined]
         ExecutionAuthorizationRepository()

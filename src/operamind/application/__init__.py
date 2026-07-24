@@ -25,6 +25,7 @@ from operamind.application.change_closure_service import (
     ChangeClosureService,
     ChangeClosureServiceResult,
 )
+from operamind.application.change_coverage import ChangedLineCoverageEvidence
 from operamind.application.change_loop import (
     ChangeInputMode,
     ChangeLoopBlockedError,
@@ -108,6 +109,7 @@ from operamind.application.document_diff import (
     DocumentDiffRequest,
     DocumentDiffResult,
     DocumentDiffService,
+    DocumentSnapshotBuildResult,
 )
 from operamind.application.edit_packet import (
     EditPacketRequest,
@@ -119,6 +121,12 @@ from operamind.application.edit_result import (
     EditResultService,
     EditResultServiceResult,
     EditValidationMode,
+)
+from operamind.application.golden_rag_quality import (
+    GoldenRagQualityBlockedError,
+    GoldenRagQualityRequest,
+    GoldenRagQualityResult,
+    GoldenRagQualityService,
 )
 from operamind.application.hybrid_search import (
     HybridSearchBlockedError,
@@ -136,6 +144,10 @@ from operamind.application.persisted_document_diff import (
     PersistedDocumentDiffRequest,
     PersistedDocumentDiffResult,
     PersistedDocumentDiffService,
+)
+from operamind.application.profile_registry import (
+    CanonicalProfileRegistryService,
+    ProfileActivationRequest,
 )
 from operamind.application.rag_readiness import (
     RagReadinessBlockedError,
@@ -210,6 +222,7 @@ __all__ = [
     "BrowserPreflightService",
     "CanonicalExecutionAuthorizer",
     "CanonicalExecutionBinding",
+    "CanonicalProfileRegistryService",
     "CaseValidationIssue",
     "ChangeClosureEvaluator",
     "ChangeClosureInput",
@@ -233,6 +246,7 @@ __all__ = [
     "ChangeOrchestrationResult",
     "ChangeOrchestrationService",
     "ChangeOrchestrationServiceResult",
+    "ChangedLineCoverageEvidence",
     "CodeGraphBuildBlockedError",
     "CodeGraphBuildRequest",
     "CodeGraphBuildResult",
@@ -266,6 +280,7 @@ __all__ = [
     "DocumentRelationBuildRequest",
     "DocumentRelationBuildService",
     "DocumentRelationBuildServiceResult",
+    "DocumentSnapshotBuildResult",
     "EditPacketRequest",
     "EditPacketResult",
     "EditPacketService",
@@ -273,6 +288,10 @@ __all__ = [
     "EditResultService",
     "EditResultServiceResult",
     "EditValidationMode",
+    "GoldenRagQualityBlockedError",
+    "GoldenRagQualityRequest",
+    "GoldenRagQualityResult",
+    "GoldenRagQualityService",
     "HybridSearchBlockedError",
     "HybridSearchRequest",
     "HybridSearchResult",
@@ -285,6 +304,7 @@ __all__ = [
     "PersistedDocumentDiffResult",
     "PersistedDocumentDiffService",
     "PostgresCanonicalExecutionAuthorizer",
+    "ProfileActivationRequest",
     "RagReadinessBlockedError",
     "RagReadinessRequest",
     "RagReadinessResult",

@@ -341,15 +341,11 @@ def test_copilot_draft_rejects_non_executable_business_verification(
                 "locator": {"strategy": "css", "value": "#expense-status"},
                 "expected": {"source": "literal", "value": ""},
                 "failure_category": "business_assertion",
-                }
-            ]
+            }
+        ]
     elif defect == "empty_business_result":
-        case["execution"]["browser_scenarios"][0]["assertions"][0][
-            "kind"
-        ] = "text_contains"
-        case["execution"]["browser_scenarios"][0]["assertions"][0]["expected"][
-            "value"
-        ] = ""
+        case["execution"]["browser_scenarios"][0]["assertions"][0]["kind"] = "text_contains"
+        case["execution"]["browser_scenarios"][0]["assertions"][0]["expected"]["value"] = ""
     elif defect == "non_executable_data":
         case["data_sets"][0]["setup_actions"] = [
             {"action": "seed_expenses", "dataset": "expense-status"}

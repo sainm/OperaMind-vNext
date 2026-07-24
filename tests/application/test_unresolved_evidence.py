@@ -325,6 +325,18 @@ def test_all_unresolved_namespaces_receive_a_category_and_actionable_evidence_ga
         ("entity", "maps_to", "unresolved:entity:Customer", "entity_mapping"),
         ("config", "reads", "unresolved:config_key:customer.limit", "config_key"),
         ("route", "navigates_to", "unresolved:route:/customers", "navigation_target"),
+        (
+            "struts-route",
+            "exposes",
+            "unresolved:struts_endpoint:/expenses",
+            "endpoint_route",
+        ),
+        (
+            "struts-forward",
+            "navigates_to",
+            "unresolved:struts_forward:success",
+            "navigation_target",
+        ),
         ("generic", "implements", "unresolved:unknown:CustomerPort", "generic_relation"),
         ("external", "calls", "external:call:vendor.lookup", "generic_relation"),
     ]

@@ -1,0 +1,29 @@
+{
+  "case_id": "visiondemo-screen-approval-note-added",
+  "dataset_stage": "silver",
+  "expected_structured_change_count": 1,
+  "changes": [
+    {
+      "stable_key": "screen_element:screen_expense_list/approval-note",
+      "fact_type": "screen_element",
+      "domain": "ui",
+      "change_type": "added",
+      "business_summary": "経費精算申請一覧に承認者向け補足項目を追加する。",
+      "field_deltas": [
+        {
+          "field": "description",
+          "before": null,
+          "after": "承認者向け補足",
+          "source_ref": "02_画面設計書_経費承認一覧_after.xlsx#画面項目一覧!D3"
+        }
+      ],
+      "confidence": "high",
+      "review_status": "needs_review"
+    }
+  ],
+  "must_not_report_as_changes": [
+    "既存のステータス検索項目",
+    "画面概要",
+    "Workbook metadata"
+  ]
+}

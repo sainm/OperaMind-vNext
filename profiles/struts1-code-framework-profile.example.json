@@ -1,0 +1,40 @@
+{
+  "profile_type": "CodeFrameworkProfile",
+  "profile_id": "struts1-web-example",
+  "profile_version": "1.0.0",
+  "languages": ["java", "javascript", "xml"],
+  "framework_markers": [
+    "org.apache.struts.action",
+    "<struts-config",
+    "<tiles-definitions"
+  ],
+  "default_scan_roots": ["src/main", "src/test"],
+  "excluded_globs": [
+    "**/build/**",
+    "**/target/**",
+    "**/generated/**",
+    "**/*.min.js"
+  ],
+  "anchor_extractors": [
+    "java_symbol",
+    "java_field_access",
+    "junit_test",
+    "struts1_mvc",
+    "web_ui_route"
+  ],
+  "relation_policies": [
+    {
+      "change_domain": "api",
+      "edge_types": ["exposes", "calls", "maps_to", "tests"],
+      "max_depth": 3,
+      "include_reverse": true
+    },
+    {
+      "change_domain": "ui",
+      "edge_types": ["calls", "maps_to", "navigates_to", "tests"],
+      "max_depth": 4,
+      "include_reverse": true
+    }
+  ],
+  "unknown_framework_policy": "index_symbols_and_require_review"
+}

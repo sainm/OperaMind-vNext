@@ -22,6 +22,10 @@ _CASE_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+_FULLWIDTH_DIGITS = str.maketrans(
+    "\uff10\uff11\uff12\uff13\uff14\uff15\uff16\uff17\uff18\uff19",
+    "0123456789",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,13 +216,9 @@ class TestCaseRevisionPlanner:
             source_bundle=source_bundle,
             proposal=proposal,
             operations=operations,
-            acceptance=copy.deepcopy(
-                cast(dict[str, Any], restore_bundle["acceptance_criteria"])
-            ),
+            acceptance=copy.deepcopy(cast(dict[str, Any], restore_bundle["acceptance_criteria"])),
             test_plan=copy.deepcopy(cast(dict[str, Any], restore_bundle["test_plan"])),
-            test_data=copy.deepcopy(
-                cast(dict[str, Any], restore_bundle["test_data_plan"])
-            ),
+            test_data=copy.deepcopy(cast(dict[str, Any], restore_bundle["test_data_plan"])),
             applied_by=applied_by,
             selections={},
             stale_run_ids=stale_run_ids,
@@ -382,9 +382,7 @@ def build_undo_proposal(
     if revision["target_orchestration_id"] != current["orchestration_id"]:
         raise ValueError("Only the current Test Case revision can be undone")
     operations: list[dict[str, Any]] = []
-    for operation in reversed(
-        cast(list[dict[str, Any]], revision["applied_operations"])
-    ):
+    for operation in reversed(cast(list[dict[str, Any]], revision["applied_operations"])):
         restored = {
             "operation_id": _id(
                 "test-case-undo-operation",
@@ -424,13 +422,35 @@ def build_undo_proposal(
         "ambiguities": [],
         "blocking_reasons": [],
     }
-    ContractCatalog.load(repository_root.resolve() / "contracts").validate_artifact(
-        proposal
-    )
+    ContractCatalog.load(repository_root.resolve() / "contracts").validate_artifact(proposal)
     return proposal
 
 
 def _parse_statement(statement: str) -> dict[str, Any] | None:
+    indexed_step_patterns = (
+        re.compile(
+            r"(?:第)?(?P<index>[0-9\uFF10-\uFF19]+)(?:番目)?のステップ(?:を)?"
+            + _QUOTED.format(name="after")
+            + r"(?:に変更|へ変更|に修正)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"ステップ(?:第)?(?P<index>[0-9\uFF10-\uFF19]+)(?:番目)?(?:を)?"
+            + _QUOTED.format(name="after")
+            + r"(?:に変更|へ変更|に修正)",
+            re.IGNORECASE,
+        ),
+    )
+    for pattern in indexed_step_patterns:
+        match = pattern.search(statement)
+        if match:
+            position = int(match.group("index").translate(_FULLWIDTH_DIGITS))
+            return {
+                "field": "steps",
+                "action": "replace",
+                "index": position - 1,
+                "after": match.group("after"),
+            }
     patterns: tuple[tuple[str, str, re.Pattern[str]], ...] = (
         (
             "steps",
@@ -612,7 +632,20 @@ def _resolve_intent(
     case_id = str(case["test_case_id"])
     if field in {"steps", "expected_results", "test_data_refs"}:
         values = cast(list[object], case[field])
-        before = intent.get("before")
+        index = intent.get("index")
+        if index is not None:
+            if not isinstance(index, int) or index < 0 or index >= len(values):
+                return (
+                    [],
+                    [],
+                    (
+                        f"{case['title']} に {int(index) + 1 if isinstance(index, int) else index}"
+                        " 番目のステップがありません。"
+                    ),
+                )
+            before = values[index]
+        else:
+            before = intent.get("before")
         after = intent.get("after")
         if action in {"replace", "remove", "insert_after"} and before not in values:
             return [], [], f"{case['title']} に変更前の内容「{before}」がありません。"
@@ -651,6 +684,8 @@ def _resolve_intent(
             before=before,
             after=after,
         )
+        if index is not None:
+            operation["index"] = index
         if field == "expected_results" and action in {"replace", "remove"}:
             linked = _linked_criteria(bundle, case_id)
             exact = [item for item in linked if str(item.get("expected")) == str(before)]
@@ -862,6 +897,7 @@ def _apply_operation(
             raise ValueError(f"Test Case {field} must not become empty")
         if field == "expected_results":
             _update_acceptance(operation, case, acceptance)
+            _regenerate_final_assertions(operation, case, test_data)
         if field == "test_data_refs":
             _update_test_data_refs(operation, case, test_data)
         return
@@ -931,6 +967,51 @@ def _update_acceptance(
     )
     case["acceptance_criteria_refs"].append(criterion_id)
     case["acceptance_criteria_refs"] = sorted(set(case["acceptance_criteria_refs"]))
+
+
+def _regenerate_final_assertions(
+    operation: dict[str, Any],
+    case: dict[str, Any],
+    test_data: dict[str, Any],
+) -> None:
+    """Synchronize final assertions derived from one Case expected result."""
+
+    case_id = str(case["test_case_id"])
+    action = str(operation["action"])
+    before = operation.get("before")
+    after = operation.get("after")
+    for flow in cast(list[dict[str, Any]], test_data["generation_flows"]):
+        if case_id not in cast(list[str], flow["test_case_refs"]):
+            continue
+        assertions = cast(list[dict[str, Any]], flow["final_assertions"])
+        linked = [
+            assertion
+            for assertion in assertions
+            if str(assertion.get("subject")) == case_id
+            and assertion.get("observe_via") == "test"
+            and (action == "append" or assertion.get("expected") == before)
+        ]
+        if action == "replace":
+            for assertion in linked:
+                assertion["expected"] = after
+        elif action == "remove":
+            for assertion in linked:
+                assertions.remove(assertion)
+        elif action == "append":
+            assertions.append(
+                {
+                    "assertion_id": _id(
+                        "assertion-natural-language",
+                        str(flow["flow_id"]),
+                        case_id,
+                        str(after),
+                    ),
+                    "observe_via": "test",
+                    "subject": case_id,
+                    "operator": "satisfies",
+                    "expected": after,
+                }
+            )
 
 
 def _update_test_data_refs(

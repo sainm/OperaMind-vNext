@@ -61,8 +61,7 @@ class ChangeDraftSessionService:
     def next_question(self, draft_root: Path) -> dict[str, Any] | None:
         session = self.load(draft_root)
         answered = {
-            str(value["question_id"])
-            for value in cast(list[dict[str, Any]], session["answers"])
+            str(value["question_id"]) for value in cast(list[dict[str, Any]], session["answers"])
         }
         return next(
             (
@@ -129,9 +128,7 @@ class ChangeDraftSessionService:
         )
         step = str(question["step"])
         step_record = next(
-            value
-            for value in cast(list[dict[str, Any]], session["steps"])
-            if value["step"] == step
+            value for value in cast(list[dict[str, Any]], session["steps"]) if value["step"] == step
         )
         if decision == "revise":
             step_record["status"] = "revision_requested"
@@ -139,9 +136,7 @@ class ChangeDraftSessionService:
         else:
             unanswered_same_step = any(
                 value["step"] == step
-                and not any(
-                    answer["question_id"] == value["question_id"] for answer in answers
-                )
+                and not any(answer["question_id"] == value["question_id"] for answer in answers)
                 for value in cast(list[dict[str, Any]], session["questions"])
             )
             if not unanswered_same_step:
@@ -274,9 +269,7 @@ class ChangeDraftSessionService:
                             "after_sha256": _file_digest(fixture),
                         },
                         "target_repository": {
-                            "url": str(
-                                cast(dict[str, Any], session["repository"])["remote_url"]
-                            ),
+                            "url": str(cast(dict[str, Any], session["repository"])["remote_url"]),
                             "base_commit": base_revision,
                         },
                         "generated_by": "operamind-change-draft-v1",
@@ -311,9 +304,9 @@ class ChangeDraftSessionService:
 
     def _validate_session(self, session: dict[str, Any]) -> None:
         errors = sorted(
-            Draft202012Validator(
-                self._session_schema, format_checker=FormatChecker()
-            ).iter_errors(session),
+            Draft202012Validator(self._session_schema, format_checker=FormatChecker()).iter_errors(
+                session
+            ),
             key=lambda error: list(error.absolute_path),
         )
         if errors:
@@ -338,11 +331,7 @@ def _set_json_pointer(root: dict[str, Any], pointer: str, value: object) -> None
     }
     if not parts or not (
         parts[0] == "document_operations"
-        or (
-            len(parts) >= 2
-            and parts[0] == "case"
-            and parts[1] in allowed
-        )
+        or (len(parts) >= 2 and parts[0] == "case" and parts[1] in allowed)
     ):
         raise ValueError(f"Draft update path is outside mutable proposal fields: {pointer}")
     current: object = root

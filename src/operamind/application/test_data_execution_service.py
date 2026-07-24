@@ -108,9 +108,7 @@ class TestDataExecutionService:
             progress_sink=progress_sink,
         )
 
-    def execute(
-        self, request: TestDataExecutionServiceRequest
-    ) -> TestDataExecutionServiceResult:
+    def execute(self, request: TestDataExecutionServiceRequest) -> TestDataExecutionServiceResult:
         started_at = request.started_at or self._clock()
         reservation = self._repository.reserve(
             TestDataExecutionRunWrite(
@@ -197,9 +195,7 @@ class TestDataExecutionService:
             record=record,
         )
 
-    def recover(
-        self, request: TestDataExecutionRecoveryRequest
-    ) -> TestDataExecutionServiceResult:
+    def recover(self, request: TestDataExecutionRecoveryRequest) -> TestDataExecutionServiceResult:
         record = self._repository.get_record(request.run_id)
         if record is None or record.project_id != request.project_id:
             raise ValueError("Test data recovery Run does not exist")
@@ -228,4 +224,33 @@ class TestDataExecutionService:
                 stale_before=request.stale_before,
             ),
         )
+        return TestDataExecutionServiceResult(True, artifact, completed)
+
+    def fail_reserved(
+        self, request: TestDataExecutionServiceRequest, *, reason: str
+    ) -> TestDataExecutionServiceResult:
+        """Close a still-running reservation when the outer worker fails unexpectedly."""
+        record = self._repository.get_record(request.run_id)
+        if record is None:
+            raise ValueError("Reserved Test data Run does not exist")
+        if record.status != "running":
+            existing = self._repository.get_result(record.run_id)
+            if existing is None:
+                raise RuntimeError("Completed Test data Run has no result Artifact")
+            return TestDataExecutionServiceResult(False, existing, record)
+        plan = self._repository.load_plan(
+            orchestration_id=record.orchestration_id,
+            project_id=record.project_id,
+        )
+        artifact = self._engine.failed_result(
+            plan=plan,
+            request=TestDataExecutionRequest(
+                execution_result_id=record.execution_result_id,
+                run_id=record.run_id,
+                project_id=record.project_id,
+                started_at=record.started_at,
+            ),
+            reason=reason,
+        )
+        completed = self._repository.complete(artifact)
         return TestDataExecutionServiceResult(True, artifact, completed)

@@ -1,0 +1,28 @@
+{
+  "case_id": "visiondemo-api-total-count-type-changed",
+  "dataset_stage": "silver",
+  "base_repository_revision": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6",
+  "must_include_candidates": [
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/controller/ExpenseController.java",
+      "symbols": ["search"],
+      "expected_action": "review_or_modify",
+      "reason": "検索レスポンスを組み立てる API 境界"
+    },
+    {
+      "path": "VisionDemo/src/main/java/com/visiondemo/service/ExpenseService.java",
+      "symbols": ["search"],
+      "expected_action": "review_or_modify",
+      "reason": "検索件数を計算するサービス境界"
+    }
+  ],
+  "required_test_scope": [
+    {
+      "target": "totalCount の Long 応答",
+      "expected": "Integer 上限を超える検索件数も Long として表現できる",
+      "acceptable_test_layers": ["service", "controller", "api"]
+    }
+  ],
+  "must_not_modify_paths": ["VisionDemo/src/main/webapp/WEB-INF/jsp/fragments/expense-list.jsp"],
+  "review_status": "needs_developer_review"
+}

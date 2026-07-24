@@ -1,0 +1,18 @@
+{
+  "case_id": "visiondemo-api-total-count-type-changed",
+  "dataset_stage": "silver",
+  "portability_status": "portable",
+  "project_id": "visiondemo",
+  "document_sources": {
+    "type": "deterministic_xlsx_fixture",
+    "fixture": "source-fixture.silver.json",
+    "changed_document_count": 1
+  },
+  "target_repository": {
+    "url": "git@github.com:d-e-chen/OperaMind-demo.git",
+    "subdirectory": "VisionDemo",
+    "base_commit": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6"
+  },
+  "generated_by": "codex-fixture-assisted",
+  "review_status": "needs_business_developer_and_qa_review"
+}

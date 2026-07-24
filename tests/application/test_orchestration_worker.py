@@ -54,9 +54,7 @@ class FakeQueue:
         task = next(value for value in self.tasks if value["orchestration_task_id"] == task_id)
         return {**task, "lease_token": "token-1", "claims": []}
 
-    def heartbeat(
-        self, *, task_id: str, executor_id: str, lease_token: str
-    ) -> dict[str, object]:
+    def heartbeat(self, *, task_id: str, executor_id: str, lease_token: str) -> dict[str, object]:
         self.heartbeats.append((task_id, lease_token))
         return {"orchestration_task_id": task_id, "state": "running"}
 
@@ -152,15 +150,19 @@ class LeaseRecoveryQueue(FakeQueue):
             "claims": [{"status": "expired", "executor_id": "previous-worker"}],
         }
 
-    def heartbeat(
-        self, *, task_id: str, executor_id: str, lease_token: str
-    ) -> dict[str, object]:
+    def heartbeat(self, *, task_id: str, executor_id: str, lease_token: str) -> dict[str, object]:
         count = self.token_heartbeats.get(lease_token, 0) + 1
         self.token_heartbeats[lease_token] = count
         self.heartbeats.append((task_id, lease_token))
         if lease_token == "token-1" and count >= 2:
             raise ValueError("Orchestration Task lease is no longer active")
         return {"orchestration_task_id": task_id, "state": "running"}
+
+
+class CanonicalRejectionQueue(FakeQueue):
+    def record_result(self, **values: object) -> dict[str, object]:
+        self.results.append(dict(values))
+        return {"orchestration_task_id": values["task_id"], "status": "blocked"}
 
 
 def test_worker_claims_only_supported_capability_task_and_maintains_lease() -> None:
@@ -192,6 +194,18 @@ def test_worker_claims_only_supported_capability_task_and_maintains_lease() -> N
     assert len(queue.heartbeats) >= 3
     assert queue.results[0]["artifact_refs"] == ("plan-1",)
     assert "lease_token" not in handler.tasks[0]
+
+
+def test_worker_reports_persisted_canonical_rejection() -> None:
+    worker = OrchestrationTaskWorker(
+        queue=CanonicalRejectionQueue(),
+        handlers={"generate_plan": SuccessfulHandler()},
+        configuration=_configuration(),
+    )
+
+    iteration = worker.run_once()
+
+    assert iteration.outcome == "blocked"
 
 
 def test_worker_does_not_submit_stale_result_and_next_worker_recovers() -> None:

@@ -25,14 +25,9 @@ from operamind.domain import (
     BrowserActionKind,
     BrowserAssertionKind,
     BrowserFailureCategory,
-    CanonicalFactMapper,
     LocatorStrategy,
 )
-from operamind.domain.document_conventions import (
-    ConventionMatcher,
-    DocumentConvention,
-    MatchStatus,
-)
+from operamind.domain.document_conventions import DocumentConvention
 from operamind.infrastructure.code_graph import (
     CodeGraphScanner,
     GitRevisionEvidence,
@@ -153,7 +148,11 @@ class ChangeDraftService:
         self._profiles.validate_profile(document_profile)
         convention = DocumentConvention.from_validated_profile(document_profile)
         files, graph = self._scan(request, git, code_profile)
-        source_facts = self._source_facts(before, convention)
+        source_facts = self._source_facts(
+            before,
+            convention,
+            snapshot_id=_identifier("draft-source", request.draft_id, "handoff"),
+        )
         initial_diff: DocumentDiffResult | None = None
         if request.input_mode is ChangeDraftInputMode.DOCUMENTS:
             assert request.after_document is not None
@@ -235,7 +234,11 @@ material uncertainty.
         self._profiles.validate_profile(document_profile)
         convention = DocumentConvention.from_validated_profile(document_profile)
         files, graph = self._scan(request, git, code_profile)
-        source_facts = self._source_facts(before, convention)
+        source_facts = self._source_facts(
+            before,
+            convention,
+            snapshot_id=_identifier("draft-source", request.draft_id, "generation"),
+        )
 
         initial_diff: DocumentDiffResult | None = None
         if request.input_mode is ChangeDraftInputMode.DOCUMENTS:
@@ -410,38 +413,32 @@ material uncertainty.
         )
         return files, graph
 
-    def _source_facts(self, path: Path, convention: DocumentConvention) -> list[dict[str, Any]]:
-        match = ConventionMatcher().match(convention, self._extractors.extract(path))
-        if match.status is not MatchStatus.AUTO_MATCHED or match.selected_variant_id is None:
-            raise ChangeDraftBlockedError(
-                f"Document Convention requires confirmation: {match.reason}"
-            )
-        variant = next(
-            value for value in convention.variants if value.variant_id == match.selected_variant_id
-        )
-        mapper = CanonicalFactMapper()
-        facts: list[dict[str, Any]] = []
-        for record in self._extractors.extract_records(path, variant):
-            mapped = mapper.map_record(
-                convention=convention,
-                match=match,
+    def _source_facts(
+        self,
+        path: Path,
+        convention: DocumentConvention,
+        *,
+        snapshot_id: str,
+    ) -> list[dict[str, Any]]:
+        try:
+            built = self._diff.build_snapshot(
+                path=path,
+                snapshot_id=snapshot_id,
                 fact_type="screen_element",
-                record=record,
+                convention=convention,
             )
-            if mapped.fact is None:
-                raise ChangeDraftBlockedError(
-                    f"Canonical source record requires confirmation: {record.record_ref}"
-                )
-            facts.append(
-                {
-                    "stable_key": mapped.fact.stable_key,
-                    "values": dict(mapped.fact.values),
-                    "source_refs": list(mapped.fact.source_refs),
-                }
-            )
-        if not facts:
-            raise ChangeDraftBlockedError("Source document contains no canonical facts")
-        return facts
+        except ValueError as error:
+            raise ChangeDraftBlockedError(str(error)) from error
+        variant_by_fact_ref = dict(built.fact_variant_ids)
+        return [
+            {
+                "stable_key": snapshot_fact.fact.stable_key,
+                "values": dict(snapshot_fact.fact.values),
+                "source_refs": list(snapshot_fact.fact.source_refs),
+                "variant_id": variant_by_fact_ref[snapshot_fact.fact_ref],
+            }
+            for snapshot_fact in built.snapshot.facts
+        ]
 
     def _run_diff(
         self,
@@ -705,9 +702,7 @@ def _validate_business_result_assertions(case: ChangeLoopCase) -> None:
         has_business_result = any(
             str(assertion["kind"]) in {"text_equals", "text_contains", "count_equals"}
             and _locator_identity(cast(dict[str, Any], assertion["locator"])) not in action_locators
-            and bool(
-                str(cast(dict[str, Any], assertion["expected"]).get("value", "")).strip()
-            )
+            and bool(str(cast(dict[str, Any], assertion["expected"]).get("value", "")).strip())
             for assertion in assertions
         )
         if not has_business_result:

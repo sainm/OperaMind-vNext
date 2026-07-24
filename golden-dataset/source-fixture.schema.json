@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/golden-dataset/source-fixture.schema.json",
+  "title": "SilverDocumentDiffSourceFixture",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "case_id",
+    "dataset_stage",
+    "fixture_type",
+    "project_id",
+    "profile",
+    "domain",
+    "fact_type",
+    "before",
+    "after"
+  ],
+  "properties": {
+    "case_id": {"type": "string", "minLength": 1},
+    "dataset_stage": {"const": "silver"},
+    "fixture_type": {"const": "xlsx_document_diff"},
+    "project_id": {"type": "string", "minLength": 1},
+    "profile": {"enum": ["screen_design", "api_design"]},
+    "domain": {"enum": ["ui", "api"]},
+    "fact_type": {"type": "string", "minLength": 1},
+    "before": {"$ref": "#/$defs/workbook"},
+    "after": {"$ref": "#/$defs/workbook"}
+  },
+  "$defs": {
+    "cell": {
+      "type": ["string", "number", "boolean", "null"]
+    },
+    "row": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/cell"}
+    },
+    "sheet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "rows"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "rows": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/row"},
+          "minItems": 1
+        }
+      }
+    },
+    "workbook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "sheets"],
+      "properties": {
+        "filename": {"type": "string", "pattern": "\\.xlsx$"},
+        "sheets": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/sheet"},
+          "minItems": 1
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"profile": {"const": "screen_design"}}},
+      "then": {
+        "properties": {
+          "domain": {"const": "ui"},
+          "fact_type": {"const": "screen_element"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"profile": {"const": "api_design"}}},
+      "then": {
+        "properties": {
+          "domain": {"const": "api"},
+          "fact_type": {"const": "api"}
+        }
+      }
+    }
+  ]
+}

@@ -210,9 +210,7 @@ class UnresolvedEvidenceRepository:
         if row is None or tuple(row) != expected:
             raise ValueError("Unresolved Evidence Code Graph scope differs")
 
-    def _predecessor(
-        self, cursor: Cursor[Any], graph: dict[str, Any]
-    ) -> dict[str, Any] | None:
+    def _predecessor(self, cursor: Cursor[Any], graph: dict[str, Any]) -> dict[str, Any] | None:
         base_id = graph.get("base_code_graph_snapshot_id")
         if isinstance(base_id, str):
             cursor.execute(
@@ -245,9 +243,7 @@ class UnresolvedEvidenceRepository:
             return None
         artifact = self._artifacts.get_for_share(str(row[0]))
         if artifact is None:
-            raise PersistenceConflictError(
-                "Unresolved Evidence predecessor Artifact disappeared"
-            )
+            raise PersistenceConflictError("Unresolved Evidence predecessor Artifact disappeared")
         return artifact
 
     @staticmethod
@@ -300,9 +296,7 @@ class UnresolvedEvidenceRepository:
         )
 
     @staticmethod
-    def _load_result(
-        cursor: Cursor[Any], report_id: str
-    ) -> UnresolvedEvidencePublishResult | None:
+    def _load_result(cursor: Cursor[Any], report_id: str) -> UnresolvedEvidencePublishResult | None:
         cursor.execute(
             """
             SELECT unresolved_evidence_report_id, code_graph_snapshot_id,
@@ -352,11 +346,15 @@ class UnresolvedEvidenceRepository:
             int(artifact["closed_count"]),
         )
         actual_header = (
-            *tuple(row[:7]),
-            tuple(cast(list[object], row[7])),
-            int(row[8]),
-            int(row[9]),
-        ) if row is not None else None
+            (
+                *tuple(row[:7]),
+                tuple(cast(list[object], row[7])),
+                int(row[8]),
+                int(row[9]),
+            )
+            if row is not None
+            else None
+        )
         if actual_header != expected_header:
             raise PersistenceConflictError("Unresolved Evidence report header differs")
         cursor.execute(
@@ -383,12 +381,23 @@ def _artifact_item(item: dict[str, Any]) -> tuple[object, ...]:
     location = cast(dict[str, Any], item["source_location"])
     closure = cast(dict[str, Any] | None, item.get("closure"))
     return (
-        item["item_id"], item["finding_key"], item["edge_ref"], item["status"],
-        item["category"], item["reason"], item["edge_type"], item["source_ref"],
-        item["unresolved_target_ref"], location["path"], location["start_line"],
-        location["end_line"], _json(item["candidate_targets"]),
-        tuple(item["missing_evidence"]), tuple(item["resolution_suggestions"]),
-        item["provenance"], tuple(item["evidence_refs"]),
+        item["item_id"],
+        item["finding_key"],
+        item["edge_ref"],
+        item["status"],
+        item["category"],
+        item["reason"],
+        item["edge_type"],
+        item["source_ref"],
+        item["unresolved_target_ref"],
+        location["path"],
+        location["start_line"],
+        location["end_line"],
+        _json(item["candidate_targets"]),
+        tuple(item["missing_evidence"]),
+        tuple(item["resolution_suggestions"]),
+        item["provenance"],
+        tuple(item["evidence_refs"]),
         closure.get("resolved_target_ref") if closure else None,
         closure.get("resolved_edge_ref") if closure else None,
         closure.get("proof_kind") if closure else None,

@@ -295,7 +295,7 @@ def _employee_ui_binding(
     employee_name = _required_text(inputs, "employee_name")
     employee_no = _required_text(inputs, "employee_no")
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True, channel="chrome")
+        browser = playwright.chromium.launch(headless=True, channel="msedge")
         try:
             page = browser.new_page(viewport={"width": 1280, "height": 720})
             page.goto(
@@ -307,9 +307,7 @@ def _employee_ui_binding(
             page.get_by_text(employee_no, exact=True).wait_for(state="visible")
             screenshot = page.screenshot(full_page=True)
             return UiDataActionResult(
-                observations={
-                    "employee": {"employeeNo": employee_no, "name": employee_name}
-                },
+                observations={"employee": {"employeeNo": employee_no, "name": employee_name}},
                 screenshot=screenshot,
             )
         finally:
@@ -327,7 +325,7 @@ def _expense_ui_binding(
     employee_name = _required_text(inputs, "employee_name")
     status = _required_text(inputs, "status")
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True, channel="chrome")
+        browser = playwright.chromium.launch(headless=True, channel="msedge")
         try:
             page = browser.new_page(viewport={"width": 1280, "height": 720})
             page.goto(

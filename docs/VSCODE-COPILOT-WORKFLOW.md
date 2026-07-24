@@ -46,7 +46,7 @@ npm run package:vsix
 
 用户可以从日文确认框或 Command Palette 取消当前 Task；Web 也提供取消入口。取消保留完整 Event 历史。重试只能从 `cancelled`／`failed` 创建新的不可变 Task，记录 `retry_of_coding_task_id` 和递增的 `attempt_number`，并重新绑定当前 Edit Packet、Approval Grant 与 Workspace。重试不复活旧 Task，也不隐式沿用已失效 Grant。
 
-Bridge 不发送文件，MCP 不返回 Context Package，Web 不接收源码、Diff 内容或日志正文。任务事件、命令摘要、changed path、测试引用和最终状态进入 Canonical ledger。POC 固定使用 `copilot_coding_plan + local_bridge + vscode_github_copilot`；生产 API Provider 只需实现 `coding_task_provider_v1` 并消费同一 `CopilotCodingTask`，当前尚未实现远程 Provider。
+Bridge 不发送文件，MCP 不返回 Context Package，Web 不接收源码、Diff 内容或日志正文。任务事件、命令摘要、changed path、测试引用和最终状态进入 Canonical ledger。当前产品路线固定使用 `copilot_coding_plan + local_bridge + vscode_github_copilot`；`coding_task_provider_v1` 保留为边界契约，不计划实现远程生产 Provider。
 
 ## 3. 文档 Draft 交接（保留的候选生成路径）
 

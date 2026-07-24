@@ -1,0 +1,36 @@
+{
+  "profile_type": "CodeFrameworkProfile",
+  "profile_id": "polyglot-service-example",
+  "profile_version": "1.0.0",
+  "languages": ["javascript", "typescript", "python", "kotlin"],
+  "framework_markers": ["export ", "def ", "fun "],
+  "default_scan_roots": ["src", "tests"],
+  "excluded_globs": [
+    "**/build/**",
+    "**/dist/**",
+    "**/node_modules/**",
+    "**/__pycache__/**",
+    "**/.venv/**"
+  ],
+  "anchor_extractors": [
+    "javascript_symbol",
+    "typescript_symbol",
+    "python_symbol",
+    "kotlin_symbol"
+  ],
+  "relation_policies": [
+    {
+      "change_domain": "api",
+      "edge_types": ["contains", "imports", "calls", "implements", "tests"],
+      "max_depth": 3,
+      "include_reverse": true
+    },
+    {
+      "change_domain": "ui",
+      "edge_types": ["contains", "imports", "calls", "tests"],
+      "max_depth": 3,
+      "include_reverse": true
+    }
+  ],
+  "unknown_framework_policy": "index_symbols_and_require_review"
+}

@@ -1,0 +1,11 @@
+{
+  "profile_type": "UiLocatorProfile",
+  "profile_id": "visiondemo-expense-locators",
+  "profile_version": "1.0.0",
+  "environment_id": "visiondemo-local",
+  "deployment_revision": "visiondemo-v1",
+  "ui_knowledge_snapshot_id": "ui-knowledge-visiondemo-v1",
+  "locator_policy_version": "semantic-first-v1",
+  "minimum_reliability": 0.8,
+  "target_refs": ["expense.status-filter", "expense.result-rows"]
+}

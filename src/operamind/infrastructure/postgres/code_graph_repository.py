@@ -117,9 +117,9 @@ class CodeGraphSnapshotRepository:
                 base_graph = self._artifacts.get_for_share(graph.base_snapshot_id)
                 if base_graph is None:
                     raise ValueError("Derived Code Graph base Snapshot does not exist")
-                UnresolvedEvidenceRepository(
-                    self._connection, self._contracts
-                ).ensure_for_graph(base_graph)
+                UnresolvedEvidenceRepository(self._connection, self._contracts).ensure_for_graph(
+                    base_graph
+                )
             existing = self._load_result(cursor, graph.snapshot_id)
             if existing is not None:
                 stored = self._artifacts.get(graph.snapshot_id)
@@ -234,9 +234,9 @@ class CodeGraphSnapshotRepository:
                 raise RuntimeError("Code Graph Test Binding count drifted during publication")
             self._validate_normalized_integrity(cursor, graph=graph)
             if graph.status in {"complete", "truncated"}:
-                UnresolvedEvidenceRepository(
-                    self._connection, self._contracts
-                ).ensure_for_graph(artifact)
+                UnresolvedEvidenceRepository(self._connection, self._contracts).ensure_for_graph(
+                    artifact
+                )
             return replace(result, created=True)
 
     @staticmethod

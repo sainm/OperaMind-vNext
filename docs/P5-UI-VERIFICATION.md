@@ -217,7 +217,9 @@ operamind-ui execute-browser \
 
 PostgreSQL の空 Schema migration、checksum、既存 Preflight row の Attempt バックフィル、blocked Preflight の再試行、Scenario の不変性、Deployment commit 一致、Plan の完全 Scope 重放と source invalidation、Run の静的 identity、UI Knowledge/Locator と Browser Manifest/spec の digest drift、UI Knowledge の Deployment 固定、Runtime Observation と Screenshot Evidence の完全重放、新 draft version、Review Event の完全重放と active approved Snapshot、Manifest の完全 coverage/trigger/version 固定、Plan 順序と Evidence 要件に反する Executor 出力の拒否、Evidence のサニタイズと digest、Artifact の完全重放、Case の `verifying_ui -> passed` 遷移を自動テストしています。`OPERAMIND_PLAYWRIGHT_LIVE=1` の live test はローカル HTTP target と実 Chromium を使い、Browser Preflight、runtime `data-testid` discovery、要素 Screenshot、日文 Web 画面での一致数／信頼度表示、approve/reject による新 Version 生成、成功、business assertion 失敗を確認します。
 
-## 未実装の境界
+## 後続タスクと意図的な信頼境界
 
-- S3 などの共有 Object Storage Evidence adapter。現在は path-confined Local Evidence Store を実装しています。
-- Approval Grant の Web UI、UI 結果を書き込む MCP adapter、および Golden Dataset の実 target deployment を使った E2E。UI Plan と Validation Result の有界 read-only MCP query は実装済みです。
+- S3 などの共有 Object Storage Evidence Adapter は未実装です。現在は path-confined Local Evidence Store を実装しており、これは MVP の対象です。
+- Approval Grant の日本語 Web UI は実装済みです。Impact の確認後、期限、Command Profile、Test Command refs と確認者を指定して Grant を発行し、再送時は Idempotency Key で保護します。
+- Golden Dataset の固定 Revision に結び付いた target Deployment E2E は、実 Chromium、三つの Scenario、TestPlan Case mapping、Evidence と Canonical Closure まで実行済みで、`target_deployment_e2e` readiness gate は `passed` です。業務責任者／開発／QA を分けた追加の製品化レビューは後続のガバナンスタスクです。
+- 原始 UI 結果を書き込む MCP Adapter は意図的に公開しません。UI Plan と Validation Result の有界 read-only MCP query は提供しますが、結果の書き込みは固定 Deployment の Browser Executor、または操作者と理由を持つ Recovery だけに限定します。

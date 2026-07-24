@@ -79,9 +79,7 @@ class ChangeLoopCaseCatalog:
         case_ids: frozenset[str] = frozenset(),
         require_after: bool = True,
     ) -> tuple[DiscoveredChangeLoopCase, ...]:
-        roots = sorted(
-            path.parent for path in self._cases_root.glob("*/change-loop-case.json")
-        )
+        roots = sorted(path.parent for path in self._cases_root.glob("*/change-loop-case.json"))
         discovered = tuple(
             self._inspect(
                 root,
@@ -285,17 +283,13 @@ def initialize_case(
             manifest["review_status"] = "draft"
             manifest["generated_by"] = "operamind-change-cases-init-v1"
             _write_object(manifest_path, manifest)
-        return ChangeLoopCase.load(
-            target, require_approved=False, schema_path=schema_path
-        )
+        return ChangeLoopCase.load(target, require_approved=False, schema_path=schema_path)
     except Exception:
         shutil.rmtree(target, ignore_errors=True)
         raise
 
 
-def _load_optional_object(
-    path: Path, issues: list[CaseValidationIssue]
-) -> dict[str, Any] | None:
+def _load_optional_object(path: Path, issues: list[CaseValidationIssue]) -> dict[str, Any] | None:
     try:
         return _load_object(path)
     except (OSError, ValueError, json.JSONDecodeError) as error:
@@ -421,9 +415,7 @@ def _validate_repository_references(
     revision = str(case.repository["base_revision"])
     if not root.is_dir():
         issues.append(
-            CaseValidationIssue(
-                "repository_missing", f"Target repository does not exist: {root}"
-            )
+            CaseValidationIssue("repository_missing", f"Target repository does not exist: {root}")
         )
         return
     if not _git_object_exists(root, f"{revision}^{{commit}}"):

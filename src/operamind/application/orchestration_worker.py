@@ -262,17 +262,13 @@ class OrchestrationTaskWorker:
             heartbeat_thread.join()
 
         if heartbeat_error:
-            return self._lease_lost_iteration(
-                task_id, action, recovered, heartbeat_error[0]
-            )
+            return self._lease_lost_iteration(task_id, action, recovered, heartbeat_error[0])
         if self._stop_event.is_set():
             return self._release_for_shutdown(task_id, action, lease_token, recovered)
         if execution_error is not None:
             if isinstance(execution_error, OrchestrationTaskExecutionCancelled):
                 if lease_lost.is_set():
-                    return self._lease_lost_iteration(
-                        task_id, action, recovered, execution_error
-                    )
+                    return self._lease_lost_iteration(task_id, action, recovered, execution_error)
                 return self._release_claim(
                     task_id,
                     action,
@@ -288,7 +284,7 @@ class OrchestrationTaskWorker:
 
         try:
             self._heartbeat(task_id=task_id, lease_token=lease_token)
-            self._queue.record_result(
+            recorded = self._queue.record_result(
                 task_id=task_id,
                 executor_id=self._configuration.executor_id,
                 lease_token=lease_token,
@@ -299,11 +295,17 @@ class OrchestrationTaskWorker:
             )
         except Exception as error:
             return self._lease_lost_iteration(task_id, action, recovered, error)
+        persisted_state = recorded.get("status", recorded.get("state"))
+        persisted_outcome: WorkerOutcome = execution_result.outcome
+        if persisted_state == "failed":
+            persisted_outcome = "failed"
+        elif persisted_state == "blocked":
+            persisted_outcome = "blocked"
         return OrchestrationWorkerIteration(
             status="submitted",
             task_id=task_id,
             action=action,
-            outcome=execution_result.outcome,
+            outcome=persisted_outcome,
             recovered_expired_lease=recovered,
         )
 

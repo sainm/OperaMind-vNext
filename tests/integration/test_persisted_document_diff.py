@@ -67,6 +67,30 @@ def write_screen_design(path: Path, default_value: str) -> None:
     workbook.close()
 
 
+def write_multi_sheet_screen_design(path: Path, default_value: str) -> None:
+    workbook = Workbook()
+    overview = workbook.active
+    assert overview is not None
+    overview.title = "画面概要"
+    overview.append(["画面名", "経費精算申請一覧"])
+    overview.append(["画面ID", "SCREEN_EXPENSE_LIST"])
+    items = workbook.create_sheet("画面項目一覧")
+    items.append(["項目名", "種別", "初期値", "備考"])
+    items.append(
+        [
+            "expense-search-status",
+            "セレクト",
+            default_value,
+            "ステータスフィルタ",
+        ]
+    )
+    events = workbook.create_sheet("イベント一覧")
+    events.append(["No", "イベント名", "発生源", "トリガー", "処理内容"])
+    events.append([1, "検索", "expense-search-btn", "クリック", "一覧を更新"])
+    workbook.save(path)
+    workbook.close()
+
+
 def insert_project_case(
     connection: psycopg.Connection[Any],
     *,
@@ -292,6 +316,80 @@ def test_persisted_document_diff_is_atomic_and_idempotent(tmp_path: Path) -> Non
                 ),
             )
             assert cursor.fetchone() == (1, 2, 2, 4, 1, 2, 1)
+        connection.rollback()
+
+
+@pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
+def test_persisted_multi_sheet_diff_retains_snapshot_and_fact_variant_provenance(
+    tmp_path: Path,
+) -> None:
+    assert DATABASE_URL is not None
+    suffix = uuid4().hex
+    project_id = f"project-{suffix}"
+    case_id = f"case-{suffix}"
+    before_path = tmp_path / "画面設計書_before.xlsx"
+    after_path = tmp_path / "画面設計書_after.xlsx"
+    write_multi_sheet_screen_design(before_path, "申請中")
+    write_multi_sheet_screen_design(after_path, "すべて")
+    request = build_request(
+        suffix=suffix,
+        project_id=project_id,
+        case_id=case_id,
+        before_path=before_path,
+        after_path=after_path,
+    )
+
+    with psycopg.connect(DATABASE_URL) as connection:
+        MigrationRunner(connection, MigrationCatalog.load(ROOT / "migrations")).apply()
+        insert_project_case(
+            connection,
+            project_id=project_id,
+            case_id=case_id,
+            suffix=suffix,
+        )
+        result = build_service(connection).run(request, load_profile())
+
+        expected_variants = (
+            "screen-overview-table-ja",
+            "screen-item-table-ja",
+            "screen-event-table-ja",
+        )
+        assert result.diff.source_snapshot_variant_ids == expected_variants
+        assert result.diff.target_snapshot_variant_ids == expected_variants
+        assert set(dict(result.diff.source_fact_variant_ids).values()) == set(expected_variants)
+        assert result.ingestion_artifact["source_variant_ids"] == list(expected_variants)
+        assert result.ingestion_artifact["source_fact_variant_ids"] == dict(
+            result.diff.source_fact_variant_ids
+        )
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT selected_variant_id, selected_variant_ids
+                FROM snapshot_memberships
+                WHERE project_id = %s AND document_snapshot_id = %s
+                """,
+                (project_id, request.diff.source_snapshot_id),
+            )
+            membership = cursor.fetchone()
+            cursor.execute(
+                """
+                SELECT selected_variant_id, count(*)
+                FROM document_fact_variants
+                WHERE project_id = %s AND document_snapshot_id = %s
+                GROUP BY selected_variant_id
+                ORDER BY selected_variant_id
+                """,
+                (project_id, request.diff.source_snapshot_id),
+            )
+            fact_variants = cursor.fetchall()
+
+        assert membership == (expected_variants[0], list(expected_variants))
+        assert fact_variants == [
+            ("screen-event-table-ja", 1),
+            ("screen-item-table-ja", 1),
+            ("screen-overview-table-ja", 1),
+        ]
         connection.rollback()
 
 

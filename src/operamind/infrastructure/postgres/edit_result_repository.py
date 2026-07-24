@@ -41,6 +41,7 @@ class EditResultWrite:
     out_of_scope_files: tuple[str, ...]
     test_result_refs: tuple[str, ...]
     tests_passed: bool | None
+    changed_line_coverage: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,10 +156,11 @@ class EditResultRepository:
                     validation_mode, status, base_repository_revision,
                     result_repository_revision, path_changes, changed_paths,
                     out_of_scope_files, test_result_refs, tests_passed,
-                    command_evidence_status
+                    command_evidence_status, changed_line_coverage,
+                    changed_line_coverage_status
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb,
-                    %s::jsonb, %s::jsonb, %s, %s
+                    %s::jsonb, %s::jsonb, %s, %s, %s::jsonb, %s
                 )
                 """,
                 (
@@ -182,6 +184,8 @@ class EditResultRepository:
                     _json(list(write.test_result_refs)),
                     write.tests_passed,
                     _command_evidence_status(write),
+                    _json(write.changed_line_coverage),
+                    write.changed_line_coverage["status"],
                 ),
             )
             if write.test_result_refs:
@@ -303,7 +307,8 @@ class EditResultRepository:
                    result.base_repository_revision, result.result_repository_revision,
                    result.path_changes, result.changed_paths, result.out_of_scope_files,
                    result.test_result_refs, result.tests_passed,
-                   result.command_evidence_status
+                   result.command_evidence_status, result.changed_line_coverage,
+                   result.changed_line_coverage_status
             FROM edit_results AS result
             WHERE result.edit_result_id = %s
             """,
@@ -330,6 +335,8 @@ def _identity(scope: EditResultPacketScope, write: EditResultWrite) -> tuple[obj
         list(write.test_result_refs),
         write.tests_passed,
         _command_evidence_status(write),
+        write.changed_line_coverage,
+        write.changed_line_coverage["status"],
     )
 
 
@@ -338,7 +345,11 @@ def _next_case_status(scope: EditResultPacketScope, write: EditResultWrite) -> s
         return "reanalysis_required"
     if write.validation_mode == "working":
         return "editing"
-    if write.status == "no_changes" or not write.tests_passed:
+    if (
+        write.status == "no_changes"
+        or not write.tests_passed
+        or write.changed_line_coverage["status"] in {"failed", "missing"}
+    ):
         return "failed"
     return "verifying_ui" if scope.required_ui_scenario_refs else "passed"
 

@@ -228,6 +228,22 @@ class UiKnowledgeReviewCreate(StrictModel):
         return self
 
 
+class ProfileActivationCreate(StrictModel):
+    binding_key: str = Field(min_length=1, max_length=500)
+    profile_version_id: str = Field(min_length=1, max_length=160)
+    reason: str = Field(min_length=1, max_length=10_000)
+
+
+class ProfileRebuildCreate(StrictModel):
+    drift_event_id: str = Field(min_length=1, max_length=160)
+    artifact_type: str = Field(min_length=1, max_length=160)
+    artifact_id: str = Field(min_length=1, max_length=500)
+
+
+class ProfileRebuildRequeue(StrictModel):
+    reason: str = Field(min_length=1, max_length=10_000)
+
+
 class ImpactConfirmationCreate(StrictModel):
     change_request_id: str = Field(min_length=1, max_length=160)
     report_id: str = Field(min_length=1, max_length=160)

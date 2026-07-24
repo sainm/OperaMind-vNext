@@ -1,0 +1,57 @@
+{
+  "case_id": "visiondemo-api-total-count-type-changed",
+  "dataset_stage": "silver",
+  "fixture_type": "xlsx_document_diff",
+  "project_id": "visiondemo",
+  "profile": "api_design",
+  "domain": "api",
+  "fact_type": "api",
+  "before": {
+    "filename": "04_API詳細設計書_経費検索_before.xlsx",
+    "sheets": [
+      {
+        "name": "searchExpense",
+        "rows": [
+          ["API: searchExpense"],
+          ["GET /expense/api/search"],
+          [],
+          ["【レスポンス】"],
+          ["No", "項目名", "データ型", "説明"],
+          [1, "expenses", "List", "経費一覧"],
+          [2, "totalCount", "Integer", "検索件数"]
+        ]
+      },
+      {
+        "name": "API一覧",
+        "rows": [
+          ["API名", "URL", "HTTPメソッド"],
+          ["経費検索", "/expense/api/search", "GET"]
+        ]
+      }
+    ]
+  },
+  "after": {
+    "filename": "04_API詳細設計書_経費検索_after.xlsx",
+    "sheets": [
+      {
+        "name": "searchExpense",
+        "rows": [
+          ["API: searchExpense"],
+          ["GET /expense/api/search"],
+          [],
+          ["【レスポンス】"],
+          ["No", "項目名", "データ型", "説明"],
+          [1, "expenses", "List", "経費一覧"],
+          [2, "totalCount", "Long", "検索件数"]
+        ]
+      },
+      {
+        "name": "API一覧",
+        "rows": [
+          ["API名", "URL", "HTTPメソッド"],
+          ["経費検索", "/expense/api/search", "GET"]
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "case_id": "visiondemo-screen-approval-note-added",
+  "dataset_stage": "silver",
+  "fixture_type": "xlsx_document_diff",
+  "project_id": "visiondemo",
+  "profile": "screen_design",
+  "domain": "ui",
+  "fact_type": "screen_element",
+  "before": {
+    "filename": "02_画面設計書_経費承認一覧_before.xlsx",
+    "sheets": [
+      {
+        "name": "画面概要",
+        "rows": [
+          ["画面ID", "SCREEN_EXPENSE_LIST"],
+          ["画面名", "経費精算申請一覧"]
+        ]
+      },
+      {
+        "name": "画面項目一覧",
+        "rows": [
+          ["項目名", "種別", "初期値", "備考"],
+          ["expense-search-status", "セレクト", "すべて", "ステータスフィルタ"]
+        ]
+      }
+    ]
+  },
+  "after": {
+    "filename": "02_画面設計書_経費承認一覧_after.xlsx",
+    "sheets": [
+      {
+        "name": "画面概要",
+        "rows": [
+          ["画面ID", "SCREEN_EXPENSE_LIST"],
+          ["画面名", "経費精算申請一覧"]
+        ]
+      },
+      {
+        "name": "画面項目一覧",
+        "rows": [
+          ["項目名", "種別", "初期値", "備考"],
+          ["expense-search-status", "セレクト", "すべて", "ステータスフィルタ"],
+          ["approval-note", "テキスト", null, "承認者向け補足"]
+        ]
+      }
+    ]
+  }
+}

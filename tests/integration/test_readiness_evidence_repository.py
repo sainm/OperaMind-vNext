@@ -190,7 +190,7 @@ def _seed_completed_change(connection: psycopg.Connection[object]) -> None:
             "artifact_id, artifact_type, schema_version, project_id, analysis_case_id, "
             "payload, payload_digest) VALUES ("
             "'change-request-1', 'ChangeRequest', 'v1', 'project-1', 'case-1', "
-            "'{\"artifact_type\":\"ChangeRequest\",\"schema_version\":\"v1\"}'::jsonb, "
+            '\'{"artifact_type":"ChangeRequest","schema_version":"v1"}\'::jsonb, '
             f"'{digest}')"
         ),
         (
@@ -279,7 +279,7 @@ def _seed_completed_change(connection: psycopg.Connection[object]) -> None:
             "artifact_id, artifact_type, schema_version, project_id, analysis_case_id, "
             "payload, payload_digest) VALUES ("
             "'coding-task-1', 'CopilotCodingTask', 'v1', 'project-1', 'case-1', "
-            "'{\"artifact_type\":\"CopilotCodingTask\",\"schema_version\":\"v1\"}'::jsonb, "
+            '\'{"artifact_type":"CopilotCodingTask","schema_version":"v1"}\'::jsonb, '
             f"'{digest}')"
         ),
         (
@@ -298,11 +298,27 @@ def _seed_completed_change(connection: psycopg.Connection[object]) -> None:
             "edit_result_id, edit_packet_id, project_id, analysis_case_id, validation_mode, "
             "status, base_repository_revision, result_repository_revision, path_changes, "
             "changed_paths, out_of_scope_files, test_result_refs, tests_passed, "
-            "approval_grant_id, command_evidence_status) VALUES ("
+            "approval_grant_id, command_evidence_status, changed_line_coverage, "
+            "changed_line_coverage_status) VALUES ("
             "'edit-result-1', 'packet-1', 'project-1', 'case-1', 'committed', 'in_scope', "
             f"'{base_revision}', '{result_revision}', '[]'::jsonb, "
             "'[\"src/app.py\"]'::jsonb, '[]'::jsonb, '[\"command-1\"]'::jsonb, true, "
-            "'grant-1', 'verified')"
+            "'grant-1', 'verified', jsonb_build_object("
+            "'artifact_type', 'ChangedLineCoverageReport', "
+            "'schema_version', 'v1', "
+            "'changed_line_coverage_report_id', 'coverage-edit-result-1', "
+            "'edit_result_id', 'edit-result-1', 'project_id', 'project-1', "
+            f"'base_repository_revision', '{base_revision}', "
+            f"'result_repository_revision', '{result_revision}', "
+            "'minimum_coverage_percent', 80, 'changed_line_count', 1, "
+            "'covered_changed_line_count', 1, 'coverage_percent', 100, "
+            "'files', jsonb_build_array(jsonb_build_object("
+            "'path', 'src/app.py', 'changed_line_count', 1, "
+            "'covered_changed_line_count', 1, 'changed_lines', '[1]'::jsonb, "
+            "'covered_changed_lines', '[1]'::jsonb, "
+            "'uncovered_changed_lines', '[]'::jsonb)), "
+            "'evidence_refs', '[\"command-1\"]'::jsonb, 'status', 'passed', "
+            "'blocking_reasons', '[]'::jsonb), 'passed')"
         ),
         (
             "INSERT INTO copilot_coding_task_edit_results ("

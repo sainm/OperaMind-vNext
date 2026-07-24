@@ -20,6 +20,7 @@ class ChangeClosureInput:
     edit_result: dict[str, Any] | None
     test_data_result: dict[str, Any] | None
     ui_result: dict[str, Any] | None
+    changed_line_coverage: dict[str, Any] | None = None
     ui_test_case_refs: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
@@ -47,6 +48,7 @@ class ChangeClosureEvaluator:
             for test_case in test_cases
         ]
         ui_status = _ui_status(test_cases, value.ui_result)
+        business_coverage_percent, _ = _business_coverage_summary(value)
         unresolved = _unresolved_items(
             value=value,
             test_results=test_results,
@@ -66,7 +68,9 @@ class ChangeClosureEvaluator:
                 "modified_paths": _modified_paths(value.edit_result),
                 "test_results": test_results,
                 "ui_status": ui_status,
-                "coverage": value.coverage_report["coverage_percent"],
+                "coverage": business_coverage_percent,
+                "changed_line_coverage": _changed_line_coverage_percent(value),
+                "changed_line_coverage_status": _changed_line_coverage_status(value),
                 "status": status,
                 "unresolved": unresolved,
             },
@@ -76,7 +80,7 @@ class ChangeClosureEvaluator:
         ).encode()
         artifact: dict[str, Any] = {
             "artifact_type": "ChangeClosureResult",
-            "schema_version": "v1",
+            "schema_version": "v2",
             "closure_result_id": f"closure-{hashlib.sha256(material).hexdigest()[:24]}",
             "change_request_id": value.change_request["change_request_id"],
             "project_id": value.change_request["project_id"],
@@ -84,14 +88,14 @@ class ChangeClosureEvaluator:
             "artifact_refs": component_refs,
             "structured_change_refs": sorted(
                 str(reference)
-                for reference in cast(
-                    list[object], value.orchestration["structured_change_refs"]
-                )
+                for reference in cast(list[object], value.orchestration["structured_change_refs"])
             ),
             "modified_paths": _modified_paths(value.edit_result),
             "test_results": test_results,
             "ui_status": ui_status,
-            "business_coverage_percent": value.coverage_report["coverage_percent"],
+            "business_coverage_percent": business_coverage_percent,
+            "changed_line_coverage_percent": _changed_line_coverage_percent(value),
+            "changed_line_coverage_status": _changed_line_coverage_status(value),
             "status": status,
             "unresolved_items": unresolved,
         }
@@ -130,6 +134,20 @@ class ChangeClosureEvaluator:
             or str(value.edit_result.get("analysis_case_id")) != analysis_case_id
         ):
             raise ValueError("Edit Result is outside Closure scope")
+        if value.changed_line_coverage is not None and (
+            value.edit_result is None
+            or str(value.changed_line_coverage.get("edit_result_id"))
+            != str(value.edit_result.get("edit_result_id"))
+            or str(value.changed_line_coverage.get("project_id")) != project_id
+            or str(value.changed_line_coverage.get("base_repository_revision"))
+            != str(value.edit_result.get("base_repository_revision"))
+            or str(value.changed_line_coverage.get("result_repository_revision"))
+            != str(
+                value.edit_result.get("result_repository_revision")
+                or value.edit_result.get("base_repository_revision")
+            )
+        ):
+            raise ValueError("Changed-line Coverage Report is outside Closure scope")
         if value.test_data_result is not None and (
             str(value.test_data_result.get("project_id")) != project_id
             or str(value.test_data_result.get("test_data_plan_id"))
@@ -180,8 +198,7 @@ def _flow_results_by_case(
     if result is None:
         return {}
     result_by_id = {
-        str(flow["flow_id"]): flow
-        for flow in cast(list[dict[str, Any]], result["flow_results"])
+        str(flow["flow_id"]): flow for flow in cast(list[dict[str, Any]], result["flow_results"])
     }
     collected: dict[str, list[dict[str, Any]]] = {}
     for flow in cast(list[dict[str, Any]], plan["generation_flows"]):
@@ -249,8 +266,7 @@ def _test_result(
             raw = str(ui_result["status"])
             status = raw if raw in {"passed", "failed", "blocked"} else "blocked"
             evidence_refs.update(
-                str(reference)
-                for reference in cast(list[object], ui_result["evidence_refs"])
+                str(reference) for reference in cast(list[object], ui_result["evidence_refs"])
             )
             summary = str(ui_result.get("summary") or f"UI Scenario is {raw}.")
     elif edit_result is None or str(edit_result.get("validation_mode")) != "committed":
@@ -261,8 +277,7 @@ def _test_result(
         summary = "Committed Edit Result has no command test evidence."
     else:
         evidence_refs.update(
-            str(reference)
-            for reference in cast(list[object], edit_result["test_result_refs"])
+            str(reference) for reference in cast(list[object], edit_result["test_result_refs"])
         )
         status = "passed" if edit_result.get("tests_passed") is True else "failed"
         summary = (
@@ -296,8 +311,7 @@ def _unresolved_items(
     items: set[str] = set()
     if value.orchestration["status"] != "ready":
         items.update(
-            str(reason)
-            for reason in cast(list[object], value.orchestration["blocking_reasons"])
+            str(reason) for reason in cast(list[object], value.orchestration["blocking_reasons"])
         )
     if value.edit_result is None:
         items.add("Committed Edit Result is missing")
@@ -312,22 +326,36 @@ def _unresolved_items(
             f"Out-of-scope file: {path}"
             for path in cast(list[object], value.edit_result.get("out_of_scope_files", []))
         )
-    if value.test_data_plan["status"] == "ready" and cast(
-        list[object], value.test_data_plan["generation_flows"]
-    ) and value.test_data_result is None:
+    if value.changed_line_coverage is None:
+        items.add("Changed-line coverage evidence is missing")
+    elif value.changed_line_coverage["status"] in {"missing", "failed"}:
+        items.update(
+            str(reason)
+            for reason in cast(
+                list[object], value.changed_line_coverage.get("blocking_reasons", [])
+            )
+        )
+    if (
+        value.test_data_plan["status"] == "ready"
+        and cast(list[object], value.test_data_plan["generation_flows"])
+        and value.test_data_result is None
+    ):
         items.add("Test Data Execution Result is missing")
     if value.test_data_result is not None and value.test_data_result["cleanup_status"] in {
         "failed",
         "interrupted",
     }:
         items.add("Test data cleanup failed")
-    if (
-        value.coverage_report["status"] != "passed"
-        or value.coverage_report["coverage_percent"] < 100
+    business_coverage_percent, coverage_inconsistent = _business_coverage_summary(value)
+    for item in cast(list[dict[str, Any]], value.coverage_report["items"]):
+        if item["status"] != "covered":
+            items.add(f"Uncovered business rule: {item['business_rule_id']}")
+    if coverage_inconsistent:
+        items.add("Business Coverage Report summary is inconsistent")
+    if business_coverage_percent < 100 and not any(
+        item.startswith("Uncovered business rule:") for item in items
     ):
-        for item in cast(list[dict[str, Any]], value.coverage_report["items"]):
-            if item["status"] != "covered":
-                items.add(f"Uncovered business rule: {item['business_rule_id']}")
+        items.add("Business Coverage Report has no covered business rules")
     items.update(
         f"Test case {result['test_case_id']} is {result['status']}"
         for result in test_results
@@ -345,10 +373,7 @@ def _unresolved_items(
             for path in cast(list[object], value.ui_result["out_of_scope_files"])
         )
         items.update(
-            str(reason)
-            for reason in cast(
-                list[object], value.ui_result.get("failure_reasons", [])
-            )
+            str(reason) for reason in cast(list[object], value.ui_result.get("failure_reasons", []))
         )
     return sorted(items)
 
@@ -360,6 +385,7 @@ def _closure_status(
     ui_status: str,
     unresolved: list[str],
 ) -> str:
+    business_coverage_percent, coverage_inconsistent = _business_coverage_summary(value)
     if value.edit_result is not None and (
         value.edit_result.get("status") == "out_of_scope"
         or bool(cast(list[object], value.edit_result.get("out_of_scope_files", [])))
@@ -376,8 +402,13 @@ def _closure_status(
         or value.edit_result is None
         or value.edit_result.get("validation_mode") != "committed"
         or value.edit_result.get("command_evidence_status") != "verified"
-        or (value.test_data_result is None
-        and bool(cast(list[object], value.test_data_plan["generation_flows"])))
+        or _changed_line_coverage_status(value) in {"missing", "failed"}
+        or business_coverage_percent < 100
+        or coverage_inconsistent
+        or (
+            value.test_data_result is None
+            and bool(cast(list[object], value.test_data_plan["generation_flows"]))
+        )
         or any(result["status"] == "blocked" for result in test_results)
         or ui_status == "blocked"
     ):
@@ -390,10 +421,35 @@ def _closure_status(
             value.test_data_result is not None
             and value.test_data_result["cleanup_status"] == "failed"
         )
-        or value.coverage_report["status"] != "passed"
-        or value.coverage_report["coverage_percent"] < 100
         or any(result["status"] == "failed" for result in test_results)
         or ui_status == "failed"
     ):
         return "failed"
     return "passed" if not unresolved else "blocked"
+
+
+def _changed_line_coverage_status(value: ChangeClosureInput) -> str:
+    if value.changed_line_coverage is None:
+        return "missing"
+    return str(value.changed_line_coverage["status"])
+
+
+def _business_coverage_summary(value: ChangeClosureInput) -> tuple[float, bool]:
+    report = value.coverage_report
+    items = cast(list[dict[str, Any]], report["items"])
+    covered = sum(item.get("status") == "covered" for item in items)
+    percent = covered * 100.0 / len(items) if items else 0.0
+    expected_status = "passed" if items and covered == len(items) else "failed"
+    inconsistent = (
+        int(report.get("business_rule_count", -1)) != len(items)
+        or int(report.get("covered_rule_count", -1)) != covered
+        or abs(float(report.get("coverage_percent", -1)) - percent) > 1e-9
+        or str(report.get("status")) != expected_status
+    )
+    return percent, inconsistent
+
+
+def _changed_line_coverage_percent(value: ChangeClosureInput) -> float:
+    if value.changed_line_coverage is None:
+        return 0.0
+    return float(value.changed_line_coverage["coverage_percent"])

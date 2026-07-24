@@ -138,6 +138,65 @@ def test_framework_extractors_require_their_declared_language() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("language", "extractor"),
+    [
+        ("javascript", "javascript_symbol"),
+        ("typescript", "typescript_symbol"),
+        ("python", "python_symbol"),
+        ("kotlin", "kotlin_symbol"),
+    ],
+)
+def test_polyglot_semantic_extractors_require_their_language(
+    language: str,
+    extractor: str,
+) -> None:
+    catalog = ProfileCatalog.load(ROOT / "profiles")
+    profile = copy.deepcopy(load_example("polyglot-code-framework-profile.example.json"))
+    profile["languages"].remove(language)
+
+    with pytest.raises(ProfileValidationError) as captured:
+        catalog.validate_profile(profile)
+
+    assert {issue.message for issue in captured.value.report.issues} == {
+        f"{extractor} requires language {language}"
+    }
+    assert {issue.code for issue in captured.value.report.issues} == {
+        "profile.extractor_language_missing"
+    }
+
+
+@pytest.mark.parametrize("language", ["java", "xml"])
+def test_struts1_extractor_requires_java_and_xml(language: str) -> None:
+    catalog = ProfileCatalog.load(ROOT / "profiles")
+    profile = copy.deepcopy(load_example("struts1-code-framework-profile.example.json"))
+    profile["languages"].remove(language)
+
+    with pytest.raises(ProfileValidationError) as captured:
+        catalog.validate_profile(profile)
+
+    assert any(
+        issue.code == "profile.extractor_language_missing"
+        and issue.message == f"struts1_mvc requires language {language}"
+        for issue in captured.value.report.issues
+    )
+
+
+def test_struts1_extractor_requires_java_symbols() -> None:
+    catalog = ProfileCatalog.load(ROOT / "profiles")
+    profile = copy.deepcopy(load_example("struts1-code-framework-profile.example.json"))
+    profile["anchor_extractors"].remove("java_symbol")
+
+    with pytest.raises(ProfileValidationError) as captured:
+        catalog.validate_profile(profile)
+
+    assert any(
+        issue.code == "profile.extractor_dependency_missing"
+        and issue.message == "struts1_mvc requires java_symbol"
+        for issue in captured.value.report.issues
+    )
+
+
 def test_framework_specialized_java_extractors_require_symbol_extraction() -> None:
     catalog = ProfileCatalog.load(ROOT / "profiles")
     profile = copy.deepcopy(load_example("code-framework-profile.example.json"))
@@ -200,6 +259,17 @@ def test_command_refs_must_be_unique() -> None:
     assert {issue.code for issue in captured.value.report.issues} == {
         "profile.duplicate_command_ref"
     }
+
+
+def test_ui_locator_target_refs_must_be_unique() -> None:
+    catalog = ProfileCatalog.load(ROOT / "profiles")
+    profile = copy.deepcopy(load_example("ui-locator-profile.example.json"))
+    profile["target_refs"].append(profile["target_refs"][0])
+
+    with pytest.raises(ProfileValidationError) as captured:
+        catalog.validate_profile(profile)
+
+    assert captured.value.report.issues[0].location == "target_refs"
 
 
 @pytest.mark.parametrize(

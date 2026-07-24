@@ -273,7 +273,13 @@ def _role_for_path(path: str, *, language: str) -> str:
     pure = PurePosixPath(path)
     folded_parts = tuple(part.casefold() for part in pure.parts)
     folded_name = pure.name.casefold()
-    if "test" in folded_parts or "tests" in folded_parts or folded_name.endswith("test.java"):
+    test_name_markers = (
+        folded_name.startswith("test_"),
+        ".test." in folded_name,
+        ".spec." in folded_name,
+        folded_name.endswith(("test.java", "test.kt", "test.kts", "_test.py")),
+    )
+    if "test" in folded_parts or "tests" in folded_parts or any(test_name_markers):
         return "test"
     if "migration" in folded_parts or "migrations" in folded_parts:
         return "migration"

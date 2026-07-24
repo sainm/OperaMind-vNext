@@ -267,6 +267,88 @@ class SearchIndexRepository:
                 self._validate_build_integrity(cursor, state)
         return state
 
+    def find_current_builds_containing_targets(
+        self,
+        *,
+        project_id: str,
+        profile_version_id: str,
+        target_node_ids: tuple[str, ...],
+    ) -> tuple[SearchIndexBuildState, ...]:
+        """Find exact ready/current builds containing every frozen Golden target."""
+
+        if not project_id.strip() or not profile_version_id.strip():
+            raise ValueError("Golden Search Index discovery scope must not be blank")
+        if not target_node_ids or any(not value.strip() for value in target_node_ids):
+            raise ValueError("Golden Search Index discovery targets must not be blank")
+        if len(target_node_ids) != len(set(target_node_ids)):
+            raise ValueError("Golden Search Index discovery targets must be unique")
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT b.search_index_build_id
+                FROM search_index_builds AS b
+                WHERE b.project_id = %s
+                  AND b.embedding_profile_version_id = %s
+                  AND b.status = 'ready'
+                  AND b.is_current
+                  AND (
+                      SELECT count(DISTINCT e.target_node_id)
+                      FROM search_index_entries AS e
+                      WHERE e.search_index_build_id = b.search_index_build_id
+                        AND e.project_id = b.project_id
+                        AND e.document_snapshot_id = b.document_snapshot_id
+                        AND e.embedding_profile_version_id =
+                            b.embedding_profile_version_id
+                        AND e.target_node_id = ANY(%s)
+                  ) = %s
+                ORDER BY b.started_at DESC, b.search_index_build_id
+                """,
+                (
+                    project_id,
+                    profile_version_id,
+                    list(target_node_ids),
+                    len(target_node_ids),
+                ),
+            )
+            build_ids = tuple(str(row[0]) for row in cursor.fetchall())
+            states = tuple(self._load_build(cursor, build_id) for build_id in build_ids)
+            for state in states:
+                if state is None:
+                    raise RuntimeError("Discovered Golden Search Index disappeared")
+                self._validate_build_integrity(cursor, state)
+        return tuple(state for state in states if state is not None)
+
+    def find_current_builds(
+        self,
+        *,
+        project_id: str,
+        profile_version_id: str,
+    ) -> tuple[SearchIndexBuildState, ...]:
+        """Return integrity-checked ready/current builds for semantic target discovery."""
+
+        if not project_id.strip() or not profile_version_id.strip():
+            raise ValueError("Golden Search Index discovery scope must not be blank")
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT search_index_build_id
+                FROM search_index_builds
+                WHERE project_id = %s
+                  AND embedding_profile_version_id = %s
+                  AND status = 'ready'
+                  AND is_current
+                ORDER BY started_at DESC, search_index_build_id
+                """,
+                (project_id, profile_version_id),
+            )
+            build_ids = tuple(str(row[0]) for row in cursor.fetchall())
+            states = tuple(self._load_build(cursor, build_id) for build_id in build_ids)
+            for state in states:
+                if state is None:
+                    raise RuntimeError("Discovered Golden Search Index disappeared")
+                self._validate_build_integrity(cursor, state)
+        return tuple(state for state in states if state is not None)
+
     def vector_search(
         self,
         *,
@@ -373,6 +455,31 @@ class SearchIndexRepository:
             )
             for index, row in enumerate(rows, start=1)
         )
+
+    def resolve_target_projects(self, target_node_ids: tuple[str, ...]) -> dict[str, str]:
+        """Resolve actual Canonical Project ownership for retrieved target IDs."""
+
+        if not target_node_ids:
+            return {}
+        if any(not value.strip() for value in target_node_ids):
+            raise ValueError("Search target IDs must not be blank")
+        if len(target_node_ids) != len(set(target_node_ids)):
+            raise ValueError("Search target IDs must be unique")
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT document_node_id, project_id
+                FROM document_nodes
+                WHERE document_node_id = ANY(%s)
+                ORDER BY document_node_id
+                """,
+                (list(target_node_ids),),
+            )
+            rows = cursor.fetchall()
+        resolved = {str(row[0]): str(row[1]) for row in rows}
+        if set(resolved) != set(target_node_ids):
+            raise ValueError("Retrieved Search target cannot resolve Canonical Project ownership")
+        return resolved
 
     def start_build(
         self,

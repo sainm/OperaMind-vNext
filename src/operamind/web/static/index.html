@@ -4,28 +4,162 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>OperaMind コントロールプレーン</title>
-  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/app.css?v=20260724-ui2">
 </head>
 <body>
+  <a class="skip-link" href="#workspaceMain">メインコンテンツへ移動</a>
+  <div id="loadingBar" class="loading-bar" aria-hidden="true"></div>
   <header class="topbar">
-    <div><span class="brand-mark">O</span><strong>OperaMind</strong><span class="muted">変更コントロールプレーン</span></div>
+    <div class="brand">
+      <button id="mobileNavToggle" class="topbar-icon mobile-only" type="button" aria-label="ナビゲーションを開く" aria-controls="primarySidebar" aria-expanded="false">☰</button>
+      <span class="brand-mark" aria-hidden="true">O</span>
+      <span class="brand-copy"><strong>OperaMind</strong><span>変更コントロールプレーン</span></span>
+    </div>
     <div class="header-actions">
       <label>確認者 <input id="actor" placeholder="例：sainm" autocomplete="off"></label>
-      <span id="readinessBadge" class="badge neutral">Readiness 読み込み中</span>
+      <span id="readinessBadge" class="badge neutral">準備状況を読み込み中</span>
+      <button id="detailDrawerToggle" class="topbar-icon" type="button" aria-label="詳細を開く" aria-controls="detailDrawer" aria-expanded="false">詳細</button>
     </div>
   </header>
   <div class="shell">
-    <aside>
-      <div class="aside-title"><span>プロジェクトと変更</span><button id="newRequest" class="icon-button" title="変更を新規作成">＋</button></div>
-      <select id="projectSelect" aria-label="プロジェクトを選択"></select>
-      <div id="requestList" class="request-list"></div>
+    <aside id="primarySidebar" class="primary-sidebar" aria-label="メインナビゲーション">
+      <div class="project-switcher">
+        <label for="projectSelect">プロジェクト</label>
+        <select id="projectSelect" aria-label="プロジェクトを選択"></select>
+      </div>
+      <nav class="workspace-nav" aria-label="ワークスペース">
+        <p class="nav-caption">ワークスペース</p>
+        <button type="button" class="nav-item active" data-view="change" aria-current="page">
+          <span class="nav-icon" aria-hidden="true">変</span><span><strong>変更フロー</strong><small>要件から実装まで</small></span>
+        </button>
+        <button type="button" class="nav-item" data-view="tests">
+          <span class="nav-icon" aria-hidden="true">試</span><span><strong>テスト</strong><small>データ・結果・完了判定</small></span>
+        </button>
+        <button type="button" class="nav-item" data-view="evidence">
+          <span class="nav-icon" aria-hidden="true">証</span><span><strong>証跡</strong><small>証跡と変更追跡</small></span>
+        </button>
+        <button type="button" class="nav-item" data-view="operations">
+          <span class="nav-icon" aria-hidden="true">運</span><span><strong>運用</strong><small>作業・実行担当・環境</small></span>
+        </button>
+        <button type="button" class="nav-item" data-view="settings">
+          <span class="nav-icon" aria-hidden="true">設</span><span><strong>設定</strong><small>設定プロファイルと差異</small></span>
+        </button>
+      </nav>
+      <div class="request-context">
+        <div class="aside-title"><span>変更要件</span><button id="newRequest" class="icon-button" type="button" title="変更を新規作成" aria-label="変更を新規作成">＋</button></div>
+        <div id="requestList" class="request-list" aria-live="polite"></div>
+      </div>
     </aside>
-    <main>
+    <button id="mobileNavBackdrop" class="mobile-nav-backdrop" type="button" aria-label="ナビゲーションを閉じる" tabindex="-1"></button>
+    <main id="workspaceMain" tabindex="-1">
       <div id="notice" role="status" aria-live="polite"></div>
-      <section class="hero">
-        <div><p class="eyebrow">CONTROLLED CHANGE DELIVERY</p><h1>要件から証跡まで、一段階ずつ確認</h1>
-          <p>判断が必要な箇所は人が確認し、決定的な生成と検証は自動で進めます。</p></div>
-        <div class="hero-state"><span>現在の変更</span><strong id="currentRequest">未選択</strong></div>
+      <section class="workspace-header" aria-labelledby="workspaceTitle">
+        <div>
+          <p id="workspaceEyebrow" class="eyebrow">統制された変更デリバリー</p>
+          <h1 id="workspaceTitle" tabindex="-1">変更フロー</h1>
+          <p id="workspaceDescription">要件から証跡まで、判断が必要な地点だけを一段階ずつ確認します。</p>
+        </div>
+        <div class="workspace-context">
+          <span>現在の変更</span>
+          <strong id="currentRequest">未選択</strong>
+          <button id="workspaceDetailButton" type="button" class="text-button" aria-controls="detailDrawer">コンテキストを表示</button>
+        </div>
+      </section>
+
+      <section id="workbenchOverviewPanel" class="panel workbench-overview" aria-labelledby="workbenchOverviewTitle">
+        <div class="workbench-heading">
+          <div>
+            <p class="section-kicker">CHANGE WORKBENCH</p>
+            <h2 id="workbenchOverviewTitle">変更ワークベンチ</h2>
+            <p>現在の判断地点と次に行う操作を、変更全体の進捗と一緒に確認します。</p>
+          </div>
+          <span id="workbenchStateBadge" class="badge neutral">変更未選択</span>
+        </div>
+        <div class="workbench-grid" aria-live="polite">
+          <article class="workbench-card current">
+            <span>現在の変更</span>
+            <strong id="workbenchCurrentChange">未選択</strong>
+            <small id="workbenchCurrentDetail">左の一覧から変更要件を選択してください。</small>
+          </article>
+          <article class="workbench-card pending">
+            <span>待ち確認</span>
+            <strong id="workbenchPendingCount">0 件</strong>
+            <small id="workbenchPendingDetail">確認待ちはありません。</small>
+          </article>
+          <article class="workbench-card blocker">
+            <span>ブロック</span>
+            <strong id="workbenchBlockerState">なし</strong>
+            <small id="workbenchBlockerDetail">進行を妨げる理由はありません。</small>
+          </article>
+          <article class="workbench-card progress">
+            <span>全体進捗</span>
+            <strong id="workbenchProgressValue">0%</strong>
+            <div class="workbench-meter" aria-hidden="true"><span id="workbenchProgressBar"></span></div>
+            <small id="workbenchProgressDetail">工程を開始していません。</small>
+          </article>
+          <article class="workbench-card next">
+            <span>次の操作</span>
+            <strong id="workbenchNextAction">変更要件を登録</strong>
+            <small id="workbenchNextDetail">業務目標と期待結果を入力します。</small>
+          </article>
+        </div>
+        <nav id="workflowNavigator" class="workflow-navigator" aria-label="変更工程ナビゲーション"></nav>
+        <div class="workbench-action-bar">
+          <p id="workbenchActionHint">変更要件を登録すると、次の判断地点を自動で案内します。</p>
+          <button id="workbenchPrimaryAction" class="primary" type="button">変更要件を入力</button>
+        </div>
+      </section>
+
+      <section id="orchestrationTaskManagementPanel" class="panel task-management">
+        <div class="step-heading">
+          <span class="step-number">作業</span>
+          <div><h2>自動編成作業の管理</h2><p>複数の実行にまたがる待機作業、実行能力、担当者、担当期限、結果、依存関係と履歴を一つの画面で確認します。</p></div>
+          <button id="refreshTaskManagement" class="secondary compact">更新</button>
+        </div>
+        <div class="task-management-filters">
+          <label>状態<select id="taskStateFilter"><option value="ready">実行待ち</option><option value="active">実行中・照合待ち</option><option value="blocked">ブロック・失敗</option><option value="completed">完了</option><option value="all">すべて</option></select></label>
+          <label>実行能力<input id="taskCapabilityFilter" maxlength="200" placeholder="例：impact_review"></label>
+          <label>ブロック理由<input id="taskBlockingReasonFilter" maxlength="500" placeholder="理由の一部を入力"></label>
+          <button id="applyTaskFilters" class="primary">絞り込む</button>
+        </div>
+        <div id="taskManagementSummary" class="management-summary empty">作業一覧を読み込んでいます。</div>
+        <section class="task-monitoring" aria-labelledby="taskMonitoringTitle">
+          <div class="task-monitoring-heading">
+            <div><h3 id="taskMonitoringTitle">作業実行モニタリング</h3><p>待機時間、実行時間、成功率、再試行、担当期限切れと頻出ブロック理由を運用単位で確認します。</p></div>
+            <label>集計期間<select id="taskMonitoringWindow"><option value="1">直近 1 時間</option><option value="24" selected>直近 24 時間</option><option value="168">直近 7 日</option><option value="720">直近 30 日</option></select></label>
+          </div>
+          <div id="taskMonitoringMetrics" class="task-monitoring-metrics empty">実行指標を読み込んでいます。</div>
+          <div class="task-monitoring-columns">
+            <section><h4>実行担当の運用管理</h4><p class="worker-operation-note">登録状態、実行能力、並行上限を確認し、有効化、停止、受付終了を操作します。</p><div id="taskWorkerStatus" class="task-worker-status empty">登録済みの実行担当はありません。</div></section>
+            <section><h4>頻出ブロック理由</h4><div id="taskBlockerRanking" class="task-blocker-ranking empty">集計期間内のブロックはありません。</div></section>
+          </div>
+        </section>
+        <section class="task-graph-panel" aria-labelledby="taskGraphTitle">
+          <div class="task-graph-heading">
+            <div><h3 id="taskGraphTitle">作業依存関係図</h3><p>矢印は前置作業から後続作業を示します。最長経路とブロック伝播を強調します。</p></div>
+            <label>対象実行<select id="taskGraphRunFilter"><option value="">実行を読み込み中</option></select></label>
+          </div>
+          <div id="taskGraphControls" class="graph-controls" aria-label="作業依存関係図の表示操作">
+            <button type="button" data-graph-action="zoom-out" aria-label="縮小">−</button>
+            <output data-graph-scale>100%</output>
+            <button type="button" data-graph-action="zoom-in" aria-label="拡大">＋</button>
+            <button type="button" data-graph-action="fit">全体表示</button>
+          </div>
+          <div class="task-graph-legend" aria-label="図の凡例">
+            <span class="task-graph-legend-item"><i class="ready"></i>現在状態</span>
+            <span class="task-graph-legend-item"><i class="critical"></i>重要経路</span>
+            <span class="task-graph-legend-item"><i class="blocked"></i>実ブロック</span>
+            <span class="task-graph-legend-item"><i class="propagated"></i>上流からブロック伝播</span>
+          </div>
+          <p id="taskGraphSummary" class="task-graph-summary">依存関係を読み込んでいます。</p>
+          <div id="taskGraphViewport" class="task-graph-viewport graph-viewport" role="region" aria-label="作業の SVG 依存関係図。マウスでドラッグ、ホイールで拡大縮小できます" tabindex="0">
+            <svg id="taskDependencyGraph" role="img" aria-labelledby="taskGraphTitle taskGraphSummary"></svg>
+          </div>
+          <p id="taskGraphCriticalPath" class="task-graph-critical-path"></p>
+        </section>
+        <div class="task-management-layout">
+          <div id="taskManagementQueue" class="task-management-queue empty">実行待ちの作業はありません。</div>
+        </div>
       </section>
 
       <section id="environmentDiagnosticsPanel" class="panel environment-diagnostics">
@@ -39,69 +173,22 @@
         <div class="safe-initialization-guide">
           <h3>安全な初期化ガイド</h3>
           <ol>
-            <li>PostgreSQL を起動し、Web の Terminal だけに接続情報を設定します。</li>
-            <li><code>.venv/bin/operamind-migrate</code> を実行して Migration を整合させます。</li>
-            <li>隔離 linked worktree を VS Code で開き、Workspace Trust を自分で確認します。</li>
+            <li>PostgreSQL を起動し、Web 用ターミナルだけに接続情報を設定します。</li>
+            <li><code>.venv/bin/operamind-migrate</code> を実行してデータベース構造を更新します。</li>
+            <li>隔離された作業ディレクトリを VS Code で開き、ワークスペースの信頼を自分で確認します。</li>
             <li>operaMind MCP を起動し、「OperaMind: ローカル環境を診断」を実行します。</li>
-            <li>GitHub Copilot Chat のサインインと Credit／Quota を実会話前に確認します。</li>
+            <li>GitHub Copilot Chat のサインインと利用上限を実会話前に確認します。</li>
           </ol>
-          <p>OperaMind は Workspace Trust、認証情報、Migration を自動変更しません。</p>
+          <p>OperaMind はワークスペースの信頼、認証情報、データベース構造を自動変更しません。</p>
         </div>
         <div class="form-actions"><button id="refreshEnvironmentDiagnostics" class="secondary compact">再診断</button></div>
-      </section>
-
-      <section id="orchestrationTaskManagementPanel" class="panel task-management">
-        <div class="step-heading">
-          <span class="step-number">Task</span>
-          <div><h2>OrchestrationTask 管理</h2><p>複数 Run の Ready Queue、Capability、担当者、Lease、Result、依存関係と Event 履歴を一つの画面で確認します。</p></div>
-          <button id="refreshTaskManagement" class="secondary compact">更新</button>
-        </div>
-        <div class="task-management-filters">
-          <label>状態<select id="taskStateFilter"><option value="ready">Ready Queue</option><option value="active">実行中・対帳待ち</option><option value="blocked">ブロック・失敗</option><option value="completed">完了</option><option value="all">すべて</option></select></label>
-          <label>Capability<input id="taskCapabilityFilter" maxlength="200" placeholder="例：impact_review"></label>
-          <label>阻断理由<input id="taskBlockingReasonFilter" maxlength="500" placeholder="理由の一部を入力"></label>
-          <button id="applyTaskFilters" class="primary">絞り込む</button>
-        </div>
-        <div id="taskManagementSummary" class="management-summary empty">Task Queue を読み込んでいます。</div>
-        <section class="task-monitoring" aria-labelledby="taskMonitoringTitle">
-          <div class="task-monitoring-heading">
-            <div><h3 id="taskMonitoringTitle">Task 実行モニタリング</h3><p>Queue 待機、実行時間、成功率、再試行、Lease 期限切れと頻出阻断理由を運用単位で確認します。</p></div>
-            <label>集計期間<select id="taskMonitoringWindow"><option value="1">直近 1 時間</option><option value="24" selected>直近 24 時間</option><option value="168">直近 7 日</option><option value="720">直近 30 日</option></select></label>
-          </div>
-          <div id="taskMonitoringMetrics" class="task-monitoring-metrics empty">実行指標を読み込んでいます。</div>
-          <div class="task-monitoring-columns">
-            <section><h4>Worker 運用管理</h4><p class="worker-operation-note">登録状態、Capability、並行上限を確認し、有効化、停止、ドレインを操作します。</p><div id="taskWorkerStatus" class="task-worker-status empty">登録済み Worker はありません。</div></section>
-            <section><h4>頻出阻断理由</h4><div id="taskBlockerRanking" class="task-blocker-ranking empty">集計期間内の阻断はありません。</div></section>
-          </div>
-        </section>
-        <section class="task-graph-panel" aria-labelledby="taskGraphTitle">
-          <div class="task-graph-heading">
-            <div><h3 id="taskGraphTitle">Task 依存関係図</h3><p>矢印は前置 Task から後続 Task を示します。最長の依存段数を Critical Path として強調します。</p></div>
-            <label>対象 Run<select id="taskGraphRunFilter"><option value="">Run を読み込み中</option></select></label>
-          </div>
-          <div class="task-graph-legend" aria-label="図の凡例">
-            <span class="task-graph-legend-item"><i class="ready"></i>現在状態</span>
-            <span class="task-graph-legend-item"><i class="critical"></i>Critical Path</span>
-            <span class="task-graph-legend-item"><i class="blocked"></i>実ブロック</span>
-            <span class="task-graph-legend-item"><i class="propagated"></i>上流から阻断伝播</span>
-          </div>
-          <p id="taskGraphSummary" class="task-graph-summary">依存関係を読み込んでいます。</p>
-          <div id="taskGraphViewport" class="task-graph-viewport" role="region" aria-label="OrchestrationTask SVG 依存関係図" tabindex="0">
-            <svg id="taskDependencyGraph" role="img" aria-labelledby="taskGraphTitle taskGraphSummary"></svg>
-          </div>
-          <p id="taskGraphCriticalPath" class="task-graph-critical-path"></p>
-        </section>
-        <div class="task-management-layout">
-          <div id="taskManagementQueue" class="task-management-queue empty">Ready Task はありません。</div>
-          <div id="taskManagementDetail" class="task-management-detail empty">Task を選択すると詳細と履歴を表示します。</div>
-        </div>
       </section>
 
       <section id="requestPanel" class="panel">
         <div class="step-heading"><span class="step-number">1</span><div><h2>変更要件を入力</h2><p>自然言語または設計書で業務目標を記述します。</p></div></div>
         <form id="requestForm" class="form-grid">
           <label>変更番号<input id="requestId" required maxlength="160"></label>
-          <label>関連する分析 Case<input id="caseId" placeholder="既存の Case ID（任意）" maxlength="160"></label>
+          <label>関連する分析ケース<input id="caseId" placeholder="既存のケース ID（任意）" maxlength="160"></label>
           <label>入力方式<select id="inputMode"><option value="natural_language">自然言語</option><option value="documents">文書</option><option value="hybrid">ハイブリッド</option></select></label>
           <label>変更前文書の参照<input id="sourceRef" placeholder="docs/design.md"></label>
           <label>変更後文書の参照<input id="targetRef" placeholder="drafts/design.proposed.md"></label>
@@ -117,25 +204,25 @@
         <div id="automationTimeline" class="timeline automation-timeline"></div>
         <ol id="automationEvents" class="execution-events automation-events"></ol>
         <div id="humanTaskControls" class="execution-controls hidden">
-          <div><strong>人による Task 実行</strong><p id="humanTaskNote">現在の Task を同じ Claim／Lease／Result プロトコルで担当します。Claim しただけでは承認になりません。</p></div>
+          <div><strong>人による作業実行</strong><p id="humanTaskNote">現在の作業を共通の担当・期限・結果プロトコルで処理します。担当を開始しただけでは承認になりません。</p></div>
           <div class="execution-actions">
-            <button id="claimHumanTask" class="primary">この Task を担当</button>
-            <button id="heartbeatHumanTask" class="secondary hidden">Lease を更新</button>
-            <button id="releaseHumanTask" class="secondary hidden">Task を解放</button>
+            <button id="claimHumanTask" class="primary">この作業を担当</button>
+            <button id="heartbeatHumanTask" class="secondary hidden">担当期限を更新</button>
+            <button id="releaseHumanTask" class="secondary hidden">作業を解放</button>
           </div>
           <div id="humanTaskResultForm" class="form-grid hidden">
             <label>実行結果<select id="humanTaskOutcome"><option value="completed">完了・対帳待ち</option><option value="blocked">ブロック</option><option value="failed">失敗</option></select></label>
-            <label>Artifact 参照<input id="humanTaskArtifactRefs" maxlength="10000" placeholder="artifact-id-1, artifact-id-2"></label>
+            <label>成果物の参照<input id="humanTaskArtifactRefs" maxlength="10000" placeholder="成果物 ID をカンマ区切りで入力"></label>
             <label class="wide">結果概要<textarea id="humanTaskSummary" rows="2" maxlength="10000" placeholder="実行内容と確認した結果"></textarea></label>
-            <label class="wide">受入 Evidence (JSON)<textarea id="humanTaskEvidence" rows="3" maxlength="20000" placeholder='{"human_confirmation":true}'></textarea></label>
-            <div class="wide form-actions"><button id="submitHumanTaskResult" class="primary">Result を提出</button></div>
+            <label class="wide">受入証跡（JSON 形式）<textarea id="humanTaskEvidence" rows="3" maxlength="20000" placeholder='{"human_confirmation":true}'></textarea></label>
+            <div class="wide form-actions"><button id="submitHumanTaskResult" class="primary">実行結果を提出</button></div>
           </div>
           <div id="humanTaskRequeueForm" class="recovery-controls hidden">
-            <label>再試行理由<input id="humanTaskRequeueReason" maxlength="2000" placeholder="阻断理由を解消した根拠"></label>
-            <button id="requeueHumanTask" class="secondary">Task を再試行</button>
+            <label>再試行理由<input id="humanTaskRequeueReason" maxlength="2000" placeholder="ブロック理由を解消した根拠"></label>
+            <button id="requeueHumanTask" class="secondary">作業を再試行</button>
           </div>
         </div>
-        <div id="automationCaseBinding" class="recovery-controls hidden"><label>取り込み済み Analysis Case<input id="automationCaseId" maxlength="160" placeholder="Copilot 生成結果を取り込んだ Case ID"></label><button id="bindAutomationCase" class="secondary">Case を関連付けて再開</button></div>
+        <div id="automationCaseBinding" class="recovery-controls hidden"><label>取り込み済み分析ケース<input id="automationCaseId" maxlength="160" placeholder="VS Code 生成結果を取り込んだケース ID"></label><button id="bindAutomationCase" class="secondary">ケースを関連付けて再開</button></div>
         <div class="form-actions"><button id="resumeAutomation" class="secondary hidden">現在の状態から再開</button><button id="startAutomation" class="primary">一括編成を開始</button></div>
       </section>
 
@@ -152,13 +239,41 @@
         <label>確認メモ<textarea id="impactNote" rows="2"></textarea></label>
         <div class="form-actions"><button id="confirmImpact" class="primary">影響範囲を確定</button></div>
       </section>
+      <section id="traceabilityPanel" class="panel hidden">
+          <div class="step-heading"><span class="step-number">5</span><div><h2>変更追跡図</h2><p>設計変更から影響コード、テストケース、テストデータ、検証基準、UI テストと変更完了判定までの関係を表示します。</p></div><span id="traceabilityBadge" class="badge neutral">未評価</span></div>
+          <div id="traceabilitySummary" class="management-summary empty">変更要件を選択すると関連台帳を表示します。</div>
+          <div id="traceabilityGaps" class="traceability-gaps"></div>
+          <div id="traceabilityGraphControls" class="graph-controls" aria-label="変更追跡図の表示操作">
+            <button type="button" data-graph-action="zoom-out" aria-label="縮小">−</button><output data-graph-scale>100%</output>
+            <button type="button" data-graph-action="zoom-in" aria-label="拡大">＋</button><button type="button" data-graph-action="fit">全体表示</button>
+          </div>
+          <div class="relation-graph-legend" aria-label="図の凡例"><span><i class="normal"></i>通常</span><span><i class="critical"></i>重要経路</span><span><i class="blocking"></i>ブロック経路</span></div>
+          <div id="traceabilityGraphViewport" class="graph-viewport" role="region" aria-label="変更追跡 SVG 図。マウスでドラッグ、ホイールで拡大縮小できます" tabindex="0">
+            <svg id="traceabilityGraph" class="relation-graph" role="img" aria-labelledby="traceabilitySummary"></svg>
+          </div>
+          <div id="traceabilityNodeDetail" class="graph-node-detail empty">ノードを選択すると詳細を表示します。</div>
+        </section>
+
+        <section id="codeGraphPanel" class="panel hidden">
+          <div class="step-heading"><span class="step-number">図</span><div><h2>コード関係図</h2><p>解析済みのファイル、シンボル、呼び出し関係と未解決のブロック経路を表示します。ソース本文は表示しません。</p></div><span id="codeGraphBadge" class="badge neutral">未選択</span></div>
+          <div id="codeGraphSummary" class="management-summary empty">コード関係図を含む影響分析を選択してください。</div>
+          <div id="codeGraphControls" class="graph-controls" aria-label="コード関係図の表示操作">
+            <button type="button" data-graph-action="zoom-out" aria-label="縮小">−</button><output data-graph-scale>100%</output>
+            <button type="button" data-graph-action="zoom-in" aria-label="拡大">＋</button><button type="button" data-graph-action="fit">全体表示</button>
+          </div>
+          <div class="relation-graph-legend" aria-label="図の凡例"><span><i class="file"></i>ファイル</span><span><i class="symbol"></i>シンボル</span><span><i class="critical"></i>重要経路</span><span><i class="blocking"></i>未解決・ブロック経路</span></div>
+          <div id="codeGraphViewport" class="graph-viewport" role="region" aria-label="コード関係 SVG 図。マウスでドラッグ、ホイールで拡大縮小できます" tabindex="0">
+            <svg id="codeGraph" class="relation-graph" role="img" aria-labelledby="codeGraphSummary"></svg>
+          </div>
+          <div id="codeGraphNodeDetail" class="graph-node-detail empty">ノードを選択すると詳細を表示します。</div>
+        </section>
 
       <section id="orchestrationPanel" class="panel hidden">
         <div class="step-heading"><span class="step-number">4</span><div><h2>変更実装とテストを自動編成</h2><p>確認済み差分からコード範囲、受入基準、テスト、画面横断データ、業務カバレッジ、UI シナリオを同時に生成します。</p></div><span id="orchestrationState" class="badge neutral">未生成</span></div>
         <div id="orchestrationSummary" class="empty">影響範囲を確定すると生成できます。</div>
         <div class="form-actions"><button id="orchestrateChange" class="primary">自動編成を実行</button></div>
         <div id="testCaseEditor" class="test-case-editor hidden">
-          <div class="subsection-heading"><div><h3>生成テスト Case の自然言語一括修正</h3><p>一つの依頼で複数 Case の手順、テストデータ、期待結果、業務アサーションを変更できます。全体差分とすべての曖昧候補を確認した後、一度だけ新 Version を生成します。</p></div></div>
+          <div class="subsection-heading"><div><h3>生成テストケースの自然言語一括修正</h3><p>一つの依頼で複数ケースの手順、テストデータ、期待結果、業務アサーションを変更できます。全体差分とすべての曖昧候補を確認した後、一度だけ新版を生成します。</p></div></div>
           <div id="generatedTestCases" class="generated-test-cases"></div>
           <label>修正内容<textarea id="testCaseInstruction" rows="4" placeholder="例：ケース「経費一覧を確認」の期待結果「4 件を表示する」を「5 件を表示する」に変更&#10;複数の変更は一行ずつ入力してください"></textarea></label>
           <div class="form-actions"><button id="modifyTestCase" class="primary">全体差分を生成</button></div>
@@ -169,101 +284,143 @@
       </section>
 
       <section id="uiKnowledgePanel" class="panel hidden">
-        <div class="step-heading"><span class="step-number">UI</span><div><h2>UI Knowledge をレビュー</h2><p>画面上の業務対象、Locator 候補、実ブラウザ観測と証跡を確認し、新しい Version として承認または却下します。</p></div><button id="refreshUiKnowledge" class="secondary compact">更新</button></div>
+        <div class="step-heading"><span class="step-number">UI</span><div><h2>画面操作情報をレビュー</h2><p>画面上の業務対象、要素候補、実ブラウザ観測と証跡を確認し、新版として承認または却下します。</p></div><button id="refreshUiKnowledge" class="secondary compact">更新</button></div>
         <div id="uiKnowledgeSummary" class="management-summary"></div>
         <div id="uiKnowledgeQueue" class="ui-knowledge-queue empty">レビュー対象を読み込んでいます。</div>
-        <div class="subsection-heading"><div><h3>Version 履歴</h3><p>Draft とレビュー結果は上書きせず、すべて履歴として保持します。</p></div></div>
+        <div class="subsection-heading"><div><h3>版の履歴</h3><p>下書きとレビュー結果は上書きせず、すべて履歴として保持します。</p></div></div>
         <div id="uiKnowledgeVersions" class="ui-knowledge-versions"></div>
       </section>
 
+      <section id="profileRegistryPanel" class="panel hidden">
+        <div class="step-heading">
+          <span class="step-number">設定</span>
+          <div><h2>標準設定プロファイルと設定差異の管理</h2><p>文書、埋め込み、コード構造、コマンド、画面要素の有効版と、変更により再評価が必要な成果物を管理します。</p></div>
+          <button id="refreshProfileRegistry" class="secondary compact">更新</button>
+        </div>
+        <div id="profileRegistrySummary" class="management-summary empty">設定プロファイル一覧を読み込んでいます。</div>
+        <div class="profile-registry-layout">
+          <section><h3>有効な設定プロファイル</h3><div id="profileBindings" class="profile-bindings empty">有効な設定プロファイルはありません。</div></section>
+          <section><h3>新しい適用設定</h3><div id="profileActivationForm" class="profile-activation-form"></div></section>
+        </div>
+        <section class="profile-drift-section"><h3>設定差異の影響範囲と再構築</h3><div id="profileDriftImpacts" class="profile-drift-impacts empty">未解決の設定差異はありません。</div></section>
+        <section class="profile-rebuild-section"><h3>設定差異の一括再構築</h3><p class="section-note">実行担当がスナップショット → 影響分析 → テスト計画 → 証跡 → 完了判定の順に処理し、標準検証に合格した代替成果物だけがブロックを解除します。</p><div id="profileRebuildRequests" class="profile-rebuild-requests empty">再構築リクエストはありません。</div></section>
+      </section>
+
       <section id="unresolvedEvidencePanel" class="panel hidden">
-        <div class="step-heading"><span class="step-number">証</span><div><h2>未解決 Evidence 管理</h2><p>Code Graph の未解決関係を理由別に整理し、候補、欠けている証拠、解決案と履歴を確認します。新しい静的・実行時 Evidence の取り込み時に自動再計算され、一意に証明された項目だけが解決済みになります。</p></div><button id="refreshUnresolvedEvidence" class="secondary compact">更新</button></div>
-        <div id="unresolvedEvidenceSummary" class="management-summary empty">プロジェクトを選択すると未解決 Evidence を表示します。</div>
+        <div class="step-heading"><span class="step-number">証</span><div><h2>未解決証跡の管理</h2><p>コード関係図の未解決関係を理由別に整理し、候補、欠けている証拠、解決案と履歴を確認します。新しい静的・実行時証跡の取り込み時に自動再計算され、一意に証明された項目だけが解決済みになります。</p></div><button id="refreshUnresolvedEvidence" class="secondary compact">更新</button></div>
+        <div id="unresolvedEvidenceSummary" class="management-summary empty">プロジェクトを選択すると未解決証跡を表示します。</div>
         <div id="unresolvedEvidenceReports" class="unresolved-evidence-reports"></div>
-        <div class="subsection-heading"><div><h3>再計算履歴</h3><p>過去の Report は上書きせず、どの Code Graph と Evidence で判定したかを保持します。</p></div></div>
+        <div class="subsection-heading"><div><h3>再計算履歴</h3><p>過去の報告は上書きせず、どのコード関係図と証跡で判定したかを保持します。</p></div></div>
         <div id="unresolvedEvidenceHistory" class="unresolved-evidence-history"></div>
       </section>
 
       <section id="grantPanel" class="panel hidden">
-        <div class="step-heading"><span class="step-number">5</span><div><h2>実行範囲を承認</h2><p>Edit Packet、コマンド構成、テスト集合、有効期限を限定します。</p></div></div>
+        <div class="step-heading"><span class="step-number">5</span><div><h2>実行範囲を承認</h2><p>変更指示、コマンド構成、テスト集合、有効期限を限定します。</p></div></div>
         <div class="form-grid">
-          <label>Edit Packet<input id="editPacket" readonly></label>
+          <label>変更指示パッケージ<input id="editPacket" readonly></label>
           <label>有効期限<input id="grantExpiry" type="datetime-local"></label>
           <label>コマンド構成バインド<input id="commandProfile" value="visiondemo-command-profile@v1"></label>
           <label>テストコマンド参照<input id="testRefs" value="test:visiondemo-expense-status-search"></label>
-          <div class="wide form-actions"><button id="issueGrant" class="primary">Approval Grant を発行</button></div>
+          <div class="wide form-actions sticky-actions"><span class="action-note">発行前に変更指示、コマンド構成、テスト集合、有効期限を確認してください。</span><button id="issueGrant" class="primary">実行許可を発行</button></div>
         </div>
       </section>
 
       <section id="copilotBridgePanel" class="panel hidden">
-        <div class="step-heading"><span class="step-number">VS</span><div><h2>VS Code GitHub Copilot へ送信</h2><p>ファイルを介さず、承認済み ChangeSession を local Bridge から現在の VS Code Workspace に通知します。</p></div><span id="copilotTaskState" class="badge neutral">未送信</span></div>
+        <div class="step-heading"><span class="step-number">VS</span><div><h2>VS Code GitHub Copilot へ送信</h2><p>ファイルを介さず、承認済みの変更セッションをローカル連携機能から現在の VS Code ワークスペースへ通知します。</p></div><span id="copilotTaskState" class="badge neutral">未送信</span></div>
         <div id="copilotTaskForm" class="form-grid">
-          <label class="wide">隔離 linked worktree<input id="copilotWorkspace" maxlength="4000" placeholder="/absolute/path/to/approved-linked-worktree"></label>
-          <label class="wide">Coding Plan の概要<textarea id="copilotTaskSummary" rows="3" maxlength="10000" placeholder="承認済み変更の目的を記述"></textarea></label>
+          <label class="wide">隔離された作業ディレクトリ<input id="copilotWorkspace" maxlength="4000" placeholder="/承認済み/作業ディレクトリ/の絶対パス"></label>
+          <label class="wide">変更作業計画の概要<textarea id="copilotTaskSummary" rows="3" maxlength="10000" placeholder="承認済み変更の目的を記述"></textarea></label>
           <div class="wide form-actions"><button id="publishCopilotTask" class="primary">VS Code に通知</button></div>
         </div>
-        <div id="copilotTaskResult" class="management-summary empty">Approval Grant 発行後に通知できます。</div>
+        <div id="copilotTaskResult" class="management-summary empty">実行許可の発行後に通知できます。</div>
         <div class="form-actions">
-          <button id="cancelCopilotTask" class="secondary hidden">タスクを取消</button>
-          <button id="retryCopilotTask" class="primary hidden">新しい Task として再試行</button>
+          <button id="cancelCopilotTask" class="danger hidden">タスクを取消</button>
+          <button id="retryCopilotTask" class="primary hidden">新しい作業として再試行</button>
         </div>
         <ol id="copilotTaskEvents" class="execution-events"></ol>
       </section>
 
       <section id="progressPanel" class="panel hidden">
-        <div class="step-heading"><span class="step-number">6</span><div><h2>実行進捗と結果</h2><p>Canonical 状態のみを表示し、画面側で完了状態を推測しません。</p></div><button id="refreshCase" class="secondary compact">更新</button></div>
+        <div class="step-heading"><span class="step-number">6</span><div><h2>実行進捗と結果</h2><p>正規に保存された状態のみを表示し、画面側で完了状態を推測しません。</p></div><button id="refreshCase" class="secondary compact">更新</button></div>
         <div id="timeline" class="timeline"></div>
       </section>
 
       <section id="testDataManagementPanel" class="panel hidden">
-        <div class="step-heading"><span class="step-number">7</span><div><h2>テストデータ管理</h2><p>TestDataPlan、実行ステップ、出力変数、事後条件、クリーンアップとスクリーンショットを確認します。</p></div><div id="testDataBadges" class="heading-badges"></div></div>
-        <div id="testDataSummary" class="empty">変更を選択すると TestDataPlan を表示します。</div>
+        <div class="step-heading"><span class="step-number">7</span><div><h2>テストデータ管理</h2><p>テストデータ計画、実行手順、出力変数、事後条件、クリーンアップとスクリーンショットを確認します。</p></div><div id="testDataBadges" class="heading-badges"></div></div>
+        <div id="testDataSummary" class="empty">変更を選択するとテストデータ計画を表示します。</div>
         <div id="testCaseExecutionAuthorization" class="scope-authorization hidden"></div>
         <div id="testDataControls" class="execution-controls hidden">
-          <div><strong>実行制御</strong><p id="testDataControlNote">Approval Grant の範囲内でのみ実行できます。クリーンアップは各 Run の終了時に自動実行されます。</p></div>
+          <div><strong>実行制御</strong><p id="testDataControlNote">実行許可の範囲内でのみ実行できます。クリーンアップは各実行の終了時に自動実行されます。</p></div>
           <div class="execution-actions">
             <button id="startTestData" class="primary">テストデータ実行を開始</button>
-            <button id="rerunTestData" class="secondary">新しい Run で再実行</button>
+            <button id="rerunTestData" class="secondary">新しい実行として再試行</button>
           </div>
           <div id="recoveryControls" class="recovery-controls hidden">
-            <label>中断理由<input id="recoveryReason" maxlength="2000" placeholder="例：Worker が停止し、進捗が更新されない"></label>
-            <button id="recoverTestData" class="secondary">実行中 Run を中断として復旧</button>
+            <label>中断理由<input id="recoveryReason" maxlength="2000" placeholder="例：実行担当が停止し、進捗が更新されない"></label>
+            <button id="recoverTestData" class="secondary">実行中の処理を中断として復旧</button>
           </div>
           <ol id="testDataEvents" class="execution-events"></ol>
         </div>
         <div id="testDataFlows" class="test-data-flows"></div>
         <div id="versionResultComparison" class="version-result-comparison hidden"></div>
-        <div class="subsection-heading"><div><h3>スクリーンショット</h3><p>Canonical Evidence に登録され、リポジトリ内で安全に参照できる画像だけを表示します。</p></div></div>
+        <div class="subsection-heading"><div><h3>スクリーンショット</h3><p>正規の証跡として登録され、リポジトリ内で安全に参照できる画像だけを表示します。</p></div></div>
         <div id="screenshotGallery" class="screenshot-gallery empty">スクリーンショット証跡はまだありません。</div>
       </section>
 
       <section id="failureManagementPanel" class="panel hidden">
-        <div class="step-heading"><span class="step-number">失敗</span><div><h2>失敗管理</h2><p>TestData、UI、Cleanup、Coverage、Closure の失敗理由と安全な再開方法を一か所で確認します。</p></div><span id="failureManagementBadge" class="badge neutral">未評価</span></div>
+        <div class="step-heading"><span class="step-number">失敗</span><div><h2>失敗管理</h2><p>テストデータ、UI、クリーンアップ、カバレッジ、完了判定の失敗理由と安全な再開方法を一か所で確認します。</p></div><span id="failureManagementBadge" class="badge neutral">未評価</span></div>
         <div id="failureManagementSummary" class="failure-management-summary empty">変更を選択すると失敗状態を表示します。</div>
         <div id="failureManagementList" class="failure-management-list"></div>
         <div id="failureManagementActions" class="failure-management-actions hidden">
-          <label id="failureRecoveryReasonLabel" class="hidden">安全復旧の理由<input id="failureRecoveryReason" maxlength="2000" placeholder="例：Worker 停止後、30 秒以上進捗が更新されていない"></label>
+          <label id="failureRecoveryReasonLabel" class="hidden">安全復旧の理由<input id="failureRecoveryReason" maxlength="2000" placeholder="例：実行担当の停止後、30 秒以上進捗が更新されていない"></label>
           <div class="execution-actions">
-            <button id="failureRecover" class="secondary hidden">中断 Run を安全に復旧</button>
-            <button id="failureRerun" class="primary hidden">新しい Run で再実行</button>
+            <button id="failureRecover" class="secondary hidden">中断した処理を安全に復旧</button>
+            <button id="failureRerun" class="primary hidden">新しい実行として再試行</button>
           </div>
         </div>
       </section>
 
       <section id="closureManagementPanel" class="panel hidden">
-        <div class="step-heading"><span class="step-number">8</span><div><h2>変更クローズ管理</h2><p>ChangeClosureResult、業務カバレッジ、テスト結果とブロック理由を一つの画面で確認します。</p></div><span id="closureBadge" class="badge neutral">未評価</span></div>
-        <div id="coverageSummary" class="coverage-summary empty">業務カバレッジはまだ生成されていません。</div>
-        <div id="coverageItems" class="coverage-items"></div>
-        <div id="closureSummary" class="closure-summary empty">ChangeClosureResult はまだ生成されていません。</div>
+        <div class="step-heading"><span class="step-number">8</span><div><h2>変更完了判定の管理</h2><p>変更完了判定、業務カバレッジ、テスト結果とブロック理由を一つの画面で確認します。</p></div><span id="closureBadge" class="badge neutral">未評価</span></div>
+        <details class="collapsible-section" open>
+          <summary><strong>カバレッジ</strong><span>業務ルールと変更行の達成状況</span></summary>
+          <div id="coverageSummary" class="coverage-summary empty">業務カバレッジはまだ生成されていません。</div>
+          <div id="coverageItems" class="coverage-items"></div>
+          <div id="changedLineCoverageSummary" class="coverage-summary empty">変更行カバレッジはまだ生成されていません。</div>
+          <div id="changedLineCoverageFiles" class="coverage-items"></div>
+        </details>
+        <details class="collapsible-section" open>
+          <summary><strong>完了判定とブロック理由</strong><span>テストケース別結果と未解決項目</span></summary>
+          <div id="closureSummary" class="closure-summary empty">変更完了判定はまだ生成されていません。</div>
+        </details>
       </section>
 
-      <section class="two-columns">
-        <div class="panel"><div class="step-heading"><span class="step-number">9</span><div><h2>Evidence</h2><p>検証可能な要約と参照のみを表示します。</p></div></div><div id="evidenceList" class="empty">関連する Case を選ぶと証跡を表示します。</div></div>
-        <div class="panel"><div class="step-heading"><span class="step-number">10</span><div><h2>Readiness</h2><p>リリースゲートとブロック理由を表示します。</p></div></div><div id="readinessList"></div></div>
+      <section id="evidenceReadinessPanel" class="two-columns">
+        <div class="panel"><div class="step-heading"><span class="step-number">9</span><div><h2>証跡</h2><p>検証可能な要約と参照のみを表示します。</p></div></div><div id="evidenceList" class="empty">関連するテストケースを選ぶと証跡を表示します。</div></div>
+        <div class="panel"><div class="step-heading"><span class="step-number">10</span><div><h2>準備状況</h2><p>リリースゲートとブロック理由を表示します。</p></div></div><div id="readinessList"></div></div>
       </section>
     </main>
   </div>
-  <script src="/task-graph.js" defer></script>
-  <script src="/app.js" defer></script>
+  <div id="drawerBackdrop" class="drawer-backdrop" aria-hidden="true"></div>
+  <aside id="detailDrawer" class="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="detailDrawerTitle" aria-hidden="true">
+    <header class="detail-drawer-header">
+      <div><span class="drawer-kicker">詳細情報</span><h2 id="detailDrawerTitle">詳細</h2></div>
+      <button id="detailDrawerClose" class="icon-button" type="button" aria-label="詳細を閉じる">×</button>
+    </header>
+    <div id="drawerContext" class="drawer-context" aria-live="polite"></div>
+    <div id="taskManagementDetail" class="task-management-detail empty">作業を選択すると詳細と履歴を表示します。</div>
+  </aside>
+  <script src="/ui-copy.js?v=20260724" defer></script>
+  <script src="/graph-canvas.js?v=20260724" defer></script>
+  <script src="/code-graph.js?v=20260724" defer></script>
+  <script src="/change-management.js" defer></script>
+  <script src="/traceability-view.js?v=20260724" defer></script>
+  <script src="/case-editor.js" defer></script>
+  <script src="/test-data-management.js" defer></script>
+  <script src="/verification-results.js" defer></script>
+  <script src="/profile-registry.js" defer></script>
+  <script src="/task-graph.js?v=20260724" defer></script>
+  <script src="/layout.js?v=20260724-ui2" defer></script>
+  <script src="/app.js?v=20260724-ui2" defer></script>
 </body>
 </html>

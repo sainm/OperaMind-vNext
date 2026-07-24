@@ -291,13 +291,9 @@ class ChangeLoopCase:
                 validate_test_data_plan_flows,
             )
 
-            flow_errors = validate_test_data_plan_flows(
-                self, deepcopy(self.data_generation_flows)
-            )
+            flow_errors = validate_test_data_plan_flows(self, deepcopy(self.data_generation_flows))
             if flow_errors:
-                raise ValueError(
-                    "Invalid test-data generation flows: " + "; ".join(flow_errors)
-                )
+                raise ValueError("Invalid test-data generation flows: " + "; ".join(flow_errors))
         execution = self.execution
         for key in (
             "source_tests",

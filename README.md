@@ -2,7 +2,7 @@
 
 OperaMind vNext は、設計書の変更を起点としてコードへの影響範囲を特定し、VS Code GitHub Copilot によるコード変更を制御したうえで、OperaMind が対象システムの UI 検証を実行するための設計ベースラインプロジェクトです。
 
-現在のリポジトリには、アーキテクチャ、24 個のコアデータ契約、Profile のサンプル、Golden Dataset、P0-P2 の実行可能なデータ/RAG 基盤、P3 Code Graph Scanner／Scope Resolver、P4 の変更境界、および P5 UI 検証 orchestration／Playwright Runner が含まれています。旧 OperaMind の Java、Python、React、生成スクリプトは継承していません。
+現在のリポジトリには、アーキテクチャ、25 個のコアデータ契約、Profile のサンプル、凍結済み Golden Dataset、および P0-P6 の実行可能な変更クローズドループが含まれています。文書 Diff／実 RAG、Code Graph、Impact／Approval、VS Code GitHub Copilot handoff、テストデータ、Playwright UI 検証、Change Closure までを実装しています。旧 OperaMind の Java、Python、React、生成スクリプトは継承していません。
 
 ## メインフロー
 
@@ -25,12 +25,13 @@ OperaMind vNext は、設計書の変更を起点としてコードへの影響�
 
 ```text
 docs/             アーキテクチャ、MVP、RAG、Code Graph、Copilot、UI 検証の設計
-contracts/        24 個のコア Artifact JSON Schema
+contracts/        25 個のコア Artifact JSON Schema
 profiles/         Embedding、設計書の記述パターン、コードフレームワークの Profile サンプル
 golden-dataset/   AI 支援候補と人手で確認されたエンドツーエンド正解データの形式
 readiness/        実 Provider、人手承認、Copilot、Deployment、全回帰の証拠ゲート
 vscode-extension/ local Bridge 通知、SecretStorage、一クリック Copilot Coding Plan の POC 拡張
 decisions/        Greenfield の境界と旧プロジェクトから抽出した知見の記録
+docs/NEXT-TASKS.md 現在の未完了事項、依存条件、完了基準
 ```
 
 ## 双入口の変更クローズドループ
@@ -48,7 +49,9 @@ Draft には文書 Diff、コード候補、変更案、テスト Case、テス�
 
 ## Web コントロールプレーン
 
-日本語の Web 画面から、変更要件の登録、Canonical な文書差分のレビュー、影響範囲の段階確認、Approval Grant の発行、実行進捗、Evidence、Readiness を一つのフローで確認できます。書き込み操作では確認者を必須とし、レビュー、影響確認、Grant 発行は `Idempotency-Key` によって安全に再実行できます。
+日本語の Web 画面から、変更要件の登録、Canonical な文書差分のレビュー、影響範囲の段階確認、Approval Grant の発行、実行進捗、Evidence、Readiness を一つのフローで確認できます。書き込み操作では確認者を必須とし、人工 Web 命令はデータベース Receipt と `Idempotency-Key` によって一度だけ実行・安全に再実行できます。local Bridge と Worker Lease は Task／Claim／Result の永続化されたプロトコル ID で重複を防ぎます。
+
+画面は「変更フロー」「テスト」「Evidence」「運用」「設定」の五つのワークスペースと Task 詳細ドロワーに分かれています。Design Token、状態表示、レスポンシブ、キーボード操作、および Edge／Playwright の画像回帰基準は [Web コンソール UI](docs/WEB-CONSOLE-UI.md) を参照してください。
 
 「自然言語から UI 検証まで一括編成」は、同じ画面にある個別操作とは別の入口です。`POST /api/v1/change-requests/{id}/automation` で永続 Run を開始し、Canonical 状態を読みながら確定的な工程を自動で進めます。設計書ドラフト／コード変更を VS Code 上の GitHub Copilot に渡す地点、設計書差分、影響項目、Approval Grant など信頼判断が必要な地点では `waiting` になり、既存の確認操作後に自動続行します。自然言語から生成・取り込み済みの Analysis Case は、日文画面、`POST .../case-binding`、または `operamind-change-automation bind-case` から監査付きで一度だけ関連付けられます。`GET .../automation` で現在工程とイベント履歴を取得し、外部処理後は `POST .../automation/{run_id}/resume` で同じ Run を再開できます。不足する RAG、Code Graph、Golden Case、UI 証跡を推測して完了扱いにはしません。
 
@@ -75,12 +78,13 @@ UI Scenario は `test_case_refs` によって TestPlan の業務テスト Case �
 ```bash
 export OPERAMIND_DATABASE_URL='postgresql:///operamind?host=/private/tmp&port=5432'
 export OPERAMIND_BRIDGE_TOKEN='<random-local-secret>'
+export OPERAMIND_WEB_TOKEN='<random-local-web-secret>'
 # 既定値は 1。将来の複数 Subagent 実行時だけ変更する。
 export OPERAMIND_MAX_ACTIVE_TASKS_PER_RUN='1'
 operamind-web --root . --host 127.0.0.1 --port 8765
 ```
 
-起動時に未適用 migration を実行し、`http://127.0.0.1:8765/` で画面を公開します。Bridge を有効にした場合は loopback host が必須です。Evidence は本文や秘密情報ではなく、Canonical DB に保存されたコマンド結果の digest と UI Evidence の参照だけを表示します。
+起動時に未適用 migration を実行し、`http://127.0.0.1:8765/` で画面を公開します。Web は常に loopback host に限定され、`OPERAMIND_WEB_TOKEN` の Bearer または Basic 認証が必要です。`/health` と local Bridge の専用 token 認証だけが例外です。Evidence は本文や秘密情報ではなく、Canonical DB に保存されたコマンド結果の digest と UI Evidence の参照だけを表示します。
 
 ### VS Code Copilot の無ファイル Bridge
 
@@ -206,6 +210,7 @@ operamind-change-cases --help
 operamind-change-draft --help
 operamind-change-automation --help
 operamind-orchestration-worker --help
+operamind-profile-rebuild-worker --help
 operamind-orchestration-generate-handler --help
 operamind-build-edit-packet --help
 operamind-build-impact --help
@@ -216,6 +221,7 @@ operamind-recover-index --help
 operamind-build-relations --help
 operamind-diff --help
 operamind-evaluate-rag --help
+operamind-run-golden-rag --help
 operamind-finalize-rag --help
 operamind-ingest --help
 operamind-migrate
@@ -230,14 +236,18 @@ operamind-ui --help
 operamind-web --help
 ```
 
+`operamind-run-golden-rag` は、凍結済み Golden Manifest の三つの Query 文を、固定 Snapshot、現在の Embedding Profile、および current/ready Search Index に対して実行します。Golden の意味参照は物理 `node-*` と混同せず、承認済み document/location から Index 内の一意な Canonical Slice に解決します。三つの Scope ID をすべて省略すると、この解決がすべて成功する current Index が一件だけの場合に限って Scope を確定します。結果は不変 `GoldenRagQualityReport` として保存され、意味参照と物理 Node の Binding、Recall@5、Recall@10、MRR、Query ごとの候補順位、欠落 ID、無関係ヒット、Project 漏えい、および失敗理由を保持します。最新の同一スコープ Report が `passed` でない場合、Impact Report の生成と新規確認は fail-closed で拒否されます。
+
 `operamind-build-code-graph` は、同一 Repository・scan roots・Code Framework Profile の現在 Snapshot がある場合、Git Revision 差分から影響ファイルだけを再解析します。結果には基準 Snapshot、変更／影響パス、解析／再利用ファイル数が記録され、非祖先 Revision や Profile 変更時は全量走査へ安全にフォールバックします。監査や再構築で増分再利用を無効にする場合は `--full-scan` を指定します。
 
 `operamind-runtime-routes` は、Browser Runner が保存した network request／page navigation／form submission のサニタイズ済み Observation を静的 Code Graph と照合します。静的 Route Ref、HTTP method、Endpoint template、候補の一意性がすべて証明された場合だけ `static_runtime` Edge を持つ新しい Snapshot を発行し、証明できない Observation は理由付きの unresolved のまま保存します。
 
 `operamind-unresolved-evidence recompute --code-graph-snapshot-id ...` は、既存 Code Graph に対応する決定的な Report を作成または整合性確認します。通常は Code Graph 発行時に自動作成されるため、移行前 Snapshot の backfill や監査に使用します。`show --project-id ...` は current Report と上限付き履歴を JSON で返します。
 
-セットアップ、migration、手動確認項目、既知の制限については `docs/P0-BASELINE.md`、RAG の実装については `docs/P2-REAL-RAG.md`、Code Graph の実装境界については `docs/P3-CODE-GRAPH.md`、Impact と確認については `docs/P4-IMPACT.md`、UI 検証については `docs/P5-UI-VERIFICATION.md` を参照してください。
+Windows/WSL のセットアップと旧環境の Canonical Data／Evidence 移行については `docs/WSL-PODMAN-SETUP.md`、セットアップ、migration、手動確認項目、既知の制限については `docs/P0-BASELINE.md`、RAG の実装については `docs/P2-REAL-RAG.md`、Code Graph の実装境界については `docs/P3-CODE-GRAPH.md`、Impact と確認については `docs/P4-IMPACT.md`、UI 検証については `docs/P5-UI-VERIFICATION.md` を参照してください。
 
 ## ステータス
 
-`P6-real-change-loop-in-progress`：P1-P5 の Canonical Data、実 RAG、Code Graph、Impact／Approval、隔離編集、コマンド監査、および Playwright UI 検証基盤を実装しています。順序付き TestDataPlan 実行、変数連携、事後条件、失敗時停止、cleanup、Evidence と、Edit／テスト／業務 Coverage／UI を fail-closed で集約する ChangeClosureResult に加え、生成 Test Case の自然言語修正、曖昧候補の確認、Version 化、下流 Artifact 再生成、旧証跡の stale 化、改訂前後の実行範囲比較、Grant の安全な再利用／再確認、新 Run と結果差分表示も実装済みです。VisionDemo の跨画面データは再利用可能な `BusinessDataTemplate` に移行し、主従関係、共有変数、前提条件、生成順序、断言、逆順 cleanup を固定しました。日文失敗管理画面は TestData／UI／Cleanup／Coverage／Closure の理由と、安全条件を満たす復旧／再実行入口を統合しています。VisionDemo の固定 Revision に対して Fixture／HTTP／SQL／UI Binding、跨画面関連データ、意図的失敗時の cleanup、三つの UI Scenario、および TestPlan への明示対応を実行し、Canonical ChangeClosureResult は `passed`、業務 Coverage は 100% になりました。Silver Dataset の業務責任者／開発／QA による Golden 昇格レビューと `github_copilot_live` Readiness は別の未完了ゲートであり、まだ MVP ready とはみなしません。
+`golden_ready_partial`：P0-P6 の Canonical Data、実 RAG、Code Graph、Impact／Approval、隔離編集、コマンド監査、テストデータ、Playwright UI 検証、および fail-closed Change Closure を実装済みです。VisionDemo の固定 Revision に対して Fixture／HTTP／SQL／UI Binding、跨画面関連データ、失敗時 cleanup、三つの UI Scenario、TestPlan への明示対応、100% 業務 Coverage と `passed` の Canonical ChangeClosureResult を確認しています。
+
+Golden Dataset、実 Embedding Provider、人手 Approval、target Deployment E2E には既存の通過 Evidence があります。健壮性修正後の source tree は旧 `full_local_regression` Evidence の digest と一致しないため、WSL + Podman + Microsoft Edge で再生成するまでこの gate は現在有効とは扱いません。さらに実際の VS Code GitHub Copilot 完了セッション receipt を要求する `github_copilot_live` も未完了です。この二つが解消するまで `mvp_ready` とは宣言しません。Golden RAG は 2026-07-23 に三つの実 VisionDemo 設計書、ローカル Nomic Q8、21/21 current Index で正式実行し、意味 Binding 後の三つの必須 Context がすべて rank 1、Recall@5／10 と MRR が 1.0 であること、および同 Scope の Impact gate 通過を確認しました。正確な未完了一覧と完了条件は [後続タスクリスト](docs/NEXT-TASKS.md) を参照してください。

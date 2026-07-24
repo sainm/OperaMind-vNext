@@ -46,6 +46,10 @@ def test_document_profiles_must_match_snapshot_membership_and_activation() -> No
     cursor = MagicMock()
     cursor.fetchall.side_effect = [
         [("screen-design-profile-version-001", "screen-design", "1.0.0")],
+        [(["screen-item-table-ja"],)],
+        [("fact-screen-status-before-001", "screen-item-table-ja")],
+        [(["screen-item-table-ja"],)],
+        [("fact-screen-status-after-001", "screen-item-table-ja")],
         [
             (
                 "screen-design-activation-001",

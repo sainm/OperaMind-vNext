@@ -1,0 +1,20 @@
+{
+  "case_id": "visiondemo-screen-approval-note-added",
+  "project_id": "visiondemo",
+  "dataset_stage": "silver",
+  "ui_impact_status": "impacted",
+  "scenarios": [
+    {
+      "scenario_id": "expense-approval-note-visible",
+      "title": "承認者向け補足項目を表示する",
+      "preconditions": ["経費精算申請一覧を表示できる"],
+      "steps": ["経費精算申請一覧を開く", "承認対象の行を確認する"],
+      "expected_visible_results": ["承認者向け補足項目が表示される"],
+      "evidence": ["追加項目を含む画面スクリーンショット"]
+    }
+  ],
+  "expected_current_base_outcome": {
+    "expense-approval-note-visible": "追加前のため補足項目は表示されない"
+  },
+  "review_status": "needs_business_and_qa_review"
+}

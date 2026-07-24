@@ -14,7 +14,7 @@ expected must-include and must-exclude code paths
 expected UI scenarios and visible results
 ```
 
-Manifest 通过 `source_manifest` 统一引用 before/after 文档来源和固定代码 Revision。`silver` 可用于开发 fixture；AI 辅助生成的数据在确认前必须标记为 `golden_candidate / needs_review` 并记录 `candidate_provenance`。当前 `manifest.golden.json` 只选择了 1 个有既存 VisionDemo Silver 检查结果支撑的案例；用户已在当前 Codex 对话中确认需要人工判断的内容，案例已提升为 `golden / frozen`。正式证据 `readiness/evidence/golden-dataset-1.0.0.json` 同时固定 manifest SHA-256 和覆盖 manifest、Schema、全部引用 JSON 的 `operamind-golden-dataset-v1` 摘要。
+Manifest 通过 `source_manifest` 统一引用 before/after 文档来源和固定代码 Revision。可移植的开发案例还可通过 `source_fixture` 引用确定性 XLSX 生成规格；校验器将 Fixture 纳入 Schema、路径隔离和 Dataset digest，自动测试会实际生成 before/after Workbook 并运行 Canonical Diff。AI 辅助生成的数据必须保持 `silver / needs_review`；只有进入正式晋级候选流程后才改为 `golden_candidate` 并记录 `candidate_provenance`，不得自动成为 Golden。当前 `manifest.golden.json` 只选择了 1 个有既存 VisionDemo Silver 检查结果支撑的案例；用户已在当前 Codex 对话中确认需要人工判断的内容，案例已提升为 `golden / frozen`。正式证据 `readiness/evidence/golden-dataset-1.0.0.json` 同时固定 manifest SHA-256 和覆盖 manifest、Schema、全部引用 JSON 的 `operamind-golden-dataset-v1` 摘要。
 
 正式 Golden manifest 记录至少一个可审计确认身份。每个案例的 `review.json` 将人工判断拆成 source identity、expected change/RAG、code scope、UI scenarios 四个步骤；同一确认人可以完成全部步骤。Schema、哈希、路径、ID、覆盖率等确定性条件由校验器自动判定，不要求重复人工审批。候选阶段禁止提前填写确认身份或批准结果。
 
@@ -28,6 +28,8 @@ MVP 接受 1–5 个真实、可复核案例；当前冻结的 1 个案例覆盖
 - 空状态查询的后端契约及多代码文件影响范围。
 - RAG 业务语义、精确锚点和验收标准三类期待值。
 - 三个可见 UI 验收场景。
+
+开发用 `manifest.silver.json` 当前包含 5 个案例，覆盖画面字段修改、画面项目新增、画面事件删除、跨画面关联数据链和 API 字段类型修改。新增／删除／API 三个案例使用可移植的确定性 XLSX Fixture 并执行真实 `DocumentDiffService`；跨画面案例继续以顺序化 TestDataPlan 固定变量传递、断言和清理。所有新增案例仍需业务、开发和 QA 审核。
 
 双入口 Change Loop 另有 3 份通过 `change-loop-case.schema.json` 校验的可执行案例配置：既存的经费状态案例，以及新增的社員姓名空白检索、発注状态／仕入先检索案例。案例配置固定需求意图、文档差异、影响候选、精确代码替换、测试数据、验收条件、API 断言和受限 Browser Scenario；歧义、冲突、Revision 不一致或编辑越界仍会停止并要求人工确认。这两份新增配置用于多案例闭环回归，不会自动扩大 `manifest.golden.json` 中已冻结的正式 Golden 范围。
 

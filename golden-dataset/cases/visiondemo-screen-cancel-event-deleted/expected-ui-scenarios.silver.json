@@ -1,0 +1,20 @@
+{
+  "case_id": "visiondemo-screen-cancel-event-deleted",
+  "project_id": "visiondemo",
+  "dataset_stage": "silver",
+  "ui_impact_status": "impacted",
+  "scenarios": [
+    {
+      "scenario_id": "expense-cancel-action-removed",
+      "title": "取消操作が表示されない",
+      "preconditions": ["経費精算申請一覧を表示できる"],
+      "steps": ["経費精算申請一覧を開く", "各行の操作を確認する"],
+      "expected_visible_results": ["取消操作が表示されない", "検索操作は引き続き利用できる"],
+      "evidence": ["操作列と検索ボタンを含む画面スクリーンショット"]
+    }
+  ],
+  "expected_current_base_outcome": {
+    "expense-cancel-action-removed": "削除前のため取消操作が表示される"
+  },
+  "review_status": "needs_business_and_qa_review"
+}

@@ -130,16 +130,12 @@ def test_engine_stops_after_failure_and_still_cleans_created_data() -> None:
     assert failed["evidence_refs"] == [
         "evidence://visiondemo/run-cross-screen/setup-update-expense"
     ]
-    assert any(
-        evidence["step_id"] == "update-expense" for evidence in result["evidence"]
-    )
+    assert any(evidence["step_id"] == "update-expense" for evidence in result["evidence"])
 
 
 def test_engine_blocks_when_a_required_channel_executor_is_missing() -> None:
     calls: list[tuple[str, str, dict[str, object]]] = []
-    executors = {
-        channel: FakeExecutor(channel, calls) for channel in ("fixture", "http", "sql")
-    }
+    executors = {channel: FakeExecutor(channel, calls) for channel in ("fixture", "http", "sql")}
     result = _engine(executors).execute(plan=_plan(), request=_request())
 
     assert result["status"] == "blocked"
@@ -151,8 +147,7 @@ def test_engine_emits_sanitized_live_progress_including_cleanup() -> None:
     calls: list[tuple[str, str, dict[str, object]]] = []
     events: list[DataExecutionProgress] = []
     executors = {
-        channel: FakeExecutor(channel, calls)
-        for channel in ("fixture", "http", "sql", "ui")
+        channel: FakeExecutor(channel, calls) for channel in ("fixture", "http", "sql", "ui")
     }
     values = iter(
         (
@@ -263,11 +258,7 @@ def _plan() -> dict[str, Any]:
                     "required": True,
                 }
             ],
-            [
-                _assertion(
-                    "expense-created", "response", "expenseNo", "equals", "EXP-CROSS-001"
-                )
-            ],
+            [_assertion("expense-created", "response", "expenseNo", "equals", "EXP-CROSS-001")],
             target="POST /expense/api/save",
         ),
         _step(
@@ -333,9 +324,7 @@ def _plan() -> dict[str, Any]:
                 "test_case_refs": ["expense-flow"],
                 "steps": steps,
                 "final_assertions": [
-                    _assertion(
-                        "scenario-result", "test", "expense-flow", "satisfies", "passed"
-                    )
+                    _assertion("scenario-result", "test", "expense-flow", "satisfies", "passed")
                 ],
                 "cleanup_policy": "delete_after_run",
                 "cleanup_steps": [cleanup],

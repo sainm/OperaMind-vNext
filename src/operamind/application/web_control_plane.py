@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -23,6 +24,8 @@ from operamind.application.change_automation import (
 )
 from operamind.application.change_closure_service import ChangeClosureService
 from operamind.application.change_orchestration_service import ChangeOrchestrationService
+from operamind.application.change_traceability import build_change_traceability
+from operamind.application.code_graph_view import build_code_graph_view
 from operamind.application.copilot_coding_task import (
     CopilotCodingTaskPublishRequest,
     CopilotCodingTaskService,
@@ -31,6 +34,10 @@ from operamind.application.failure_management import build_failure_management
 from operamind.application.orchestration_task import (
     OrchestrationSchedulingPolicy,
     build_orchestration_task,
+)
+from operamind.application.profile_registry import (
+    CanonicalProfileRegistryService,
+    ProfileActivationRequest,
 )
 from operamind.application.test_case_revision_service import TestCaseRevisionService
 from operamind.application.test_data_execution_service import (
@@ -52,6 +59,7 @@ from operamind.infrastructure.postgres import (
     ChangeAutomationRunRecord,
     ChangeClosureRepository,
     ChangeOrchestrationRepository,
+    CodeGraphSnapshotRepository,
     ImpactRepository,
     OrchestrationTaskRepository,
     PersistenceConflictError,
@@ -63,6 +71,7 @@ from operamind.infrastructure.postgres import (
     UnresolvedEvidenceRepository,
     WebControlPlaneRepository,
 )
+from operamind.infrastructure.postgres.web_command_repository import WebCommandRepository
 from operamind.profiles import ProfileCatalog
 from operamind.readiness import MvpReadinessValidator
 
@@ -122,6 +131,7 @@ class WebControlPlaneService:
         self._contracts = ContractCatalog.load(self._root / "contracts")
         self._profiles = ProfileCatalog.load(self._root / "profiles")
         self._repository = WebControlPlaneRepository(connection, self._contracts)
+        self._web_commands = WebCommandRepository(connection)
         self._artifacts = ArtifactRepository(connection, self._contracts)
         self._impacts = ImpactRepository(connection, self._contracts)
         self._grants = ApprovalGrantRepository(connection, self._contracts)
@@ -134,9 +144,14 @@ class WebControlPlaneService:
             connection=connection, repository_root=self._root
         )
         self._orchestrations = ChangeOrchestrationRepository(connection, self._contracts)
+        self._code_graphs = CodeGraphSnapshotRepository(connection, self._contracts)
         self._test_data_runs = TestDataExecutionRepository(connection, self._contracts)
         self._closures = ChangeClosureRepository(connection, self._contracts)
         self._automation_runs = ChangeAutomationRepository(connection)
+        self._profile_registry = CanonicalProfileRegistryService(
+            connection=connection,
+            profiles=self._profiles,
+        )
         self._orchestration_tasks = OrchestrationTaskRepository(
             connection, orchestration_scheduling_policy
         )
@@ -150,7 +165,28 @@ class WebControlPlaneService:
         )
         self._ui_knowledge_reviews = UiKnowledgeReviewQueryRepository(connection)
         self._unresolved_evidence = UnresolvedEvidenceRepository(connection, self._contracts)
-        self._ui_knowledge_review_service = UiKnowledgeReviewService(connection=connection)
+        self._ui_knowledge_review_service = UiKnowledgeReviewService(
+            connection=connection,
+            profiles=self._profiles,
+        )
+
+    def execute_web_command(
+        self,
+        *,
+        command_scope: str,
+        idempotency_key: str,
+        actor: str,
+        payload: dict[str, object],
+        operation: Callable[[], dict[str, object]],
+    ) -> dict[str, object]:
+        """Execute and replay one human command under a durable receipt."""
+        return self._web_commands.execute(
+            command_scope=command_scope,
+            idempotency_key=idempotency_key,
+            actor=actor,
+            payload=payload,
+            operation=operation,
+        )
 
     def submit_change_request(self, value: ChangeRequestInput) -> dict[str, object]:
         if not value.business_rules:
@@ -192,6 +228,108 @@ class WebControlPlaneService:
     def list_projects(self) -> dict[str, object]:
         projects = self._repository.list_projects()
         return {"projects": list(projects), "count": len(projects)}
+
+    def profile_registry(self, *, project_id: str) -> dict[str, object]:
+        return self._profile_registry.management_view(project_id=project_id)
+
+    def activate_profile(
+        self,
+        *,
+        project_id: str,
+        binding_key: str,
+        profile_version_id: str,
+        reason: str,
+        idempotency_key: str,
+        actor: str,
+    ) -> dict[str, object]:
+        activation_event_id = _web_id(
+            "profile-activation",
+            project_id,
+            binding_key,
+            profile_version_id,
+            idempotency_key,
+        )
+        return self.execute_web_command(
+            command_scope=f"profile:activate:{project_id}:{binding_key}",
+            idempotency_key=idempotency_key,
+            actor=actor,
+            payload={
+                "profile_version_id": profile_version_id,
+                "binding_key": binding_key,
+                "reason": reason,
+            },
+            operation=lambda: self._profile_registry.activate(
+                ProfileActivationRequest(
+                    activation_event_id=activation_event_id,
+                    project_id=project_id,
+                    binding_key=binding_key,
+                    profile_version_id=profile_version_id,
+                    activated_by=actor,
+                    reason=reason,
+                )
+            ),
+        )
+
+    def request_profile_rebuild(
+        self,
+        *,
+        project_id: str,
+        drift_event_id: str,
+        artifact_type: str,
+        artifact_id: str,
+        idempotency_key: str,
+        actor: str,
+    ) -> dict[str, object]:
+        request_id = _web_id(
+            "profile-rebuild",
+            project_id,
+            drift_event_id,
+            artifact_type,
+            artifact_id,
+            idempotency_key,
+        )
+        return self.execute_web_command(
+            command_scope=(
+                f"profile:rebuild:{project_id}:{drift_event_id}:{artifact_type}:{artifact_id}"
+            ),
+            idempotency_key=idempotency_key,
+            actor=actor,
+            payload={
+                "drift_event_id": drift_event_id,
+                "artifact_type": artifact_type,
+                "artifact_id": artifact_id,
+            },
+            operation=lambda: self._profile_registry.request_rebuild(
+                rebuild_request_id=request_id,
+                project_id=project_id,
+                drift_event_id=drift_event_id,
+                artifact_type=artifact_type,
+                artifact_id=artifact_id,
+                requested_by=actor,
+            ),
+        )
+
+    def requeue_profile_rebuild(
+        self,
+        *,
+        project_id: str,
+        rebuild_request_id: str,
+        reason: str,
+        idempotency_key: str,
+        actor: str,
+    ) -> dict[str, object]:
+        return self.execute_web_command(
+            command_scope=(f"profile:rebuild:requeue:{project_id}:{rebuild_request_id}"),
+            idempotency_key=idempotency_key,
+            actor=actor,
+            payload={"rebuild_request_id": rebuild_request_id, "reason": reason},
+            operation=lambda: self._profile_registry.requeue_rebuild(
+                rebuild_request_id=rebuild_request_id,
+                project_id=project_id,
+                actor=actor,
+                reason=reason,
+            ),
+        )
 
     def unresolved_evidence_management(
         self, *, project_id: str, history_limit: int = 50
@@ -539,9 +677,7 @@ class WebControlPlaneService:
         )
 
     def orchestration_workers(self, *, project_id: str | None) -> dict[str, object]:
-        workers = self._orchestration_tasks.list_worker_registrations(
-            project_id=project_id
-        )
+        workers = self._orchestration_tasks.list_worker_registrations(project_id=project_id)
         return {"workers": workers, "count": len(workers), "project_id": project_id}
 
     def update_orchestration_worker_configuration(
@@ -686,9 +822,7 @@ class WebControlPlaneService:
         self, *, task_id: str, actor: str, reason: str
     ) -> dict[str, object]:
         return {
-            "task": self._orchestration_tasks.requeue(
-                task_id=task_id, actor=actor, reason=reason
-            )
+            "task": self._orchestration_tasks.requeue(task_id=task_id, actor=actor, reason=reason)
         }
 
     def update_orchestration_task_priority(
@@ -749,9 +883,7 @@ class WebControlPlaneService:
             has_orchestration=bundle is not None,
             execution=execution,
         )
-        current_task = self._sync_orchestration_task(
-            record=record, decision=decision, actor=actor
-        )
+        current_task = self._sync_orchestration_task(record=record, decision=decision, actor=actor)
         if decision.stage == "planning" and current_task is None:
             raise RuntimeError("Planning decision did not produce an Orchestration Task")
         if (
@@ -778,8 +910,7 @@ class WebControlPlaneService:
             and current_task["state"] == "ready"
         ):
             internal_executor_id = (
-                "operamind-single-agent:"
-                f"{hashlib.sha256(run_id.encode()).hexdigest()[:24]}"
+                f"operamind-single-agent:{hashlib.sha256(run_id.encode()).hexdigest()[:24]}"
             )
             internal_registration = self._orchestration_tasks.register_worker(
                 executor_kind="agent",
@@ -817,7 +948,11 @@ class WebControlPlaneService:
                 result = self._orchestration_service.orchestrate(
                     change_request_id=record.change_request_id, actor=actor
                 )
-            except (ValueError, RuntimeError) as error:
+            except Exception as error:
+                blocking_reason = (
+                    "自動編成の内部処理に失敗しました。再試行または原因確認が必要です。"
+                    f" ({type(error).__name__})"
+                )
                 self._orchestration_tasks.record_result(
                     task_id=str(current_task["orchestration_task_id"]),
                     executor_id=internal_executor_id,
@@ -825,14 +960,14 @@ class WebControlPlaneService:
                     outcome="blocked",
                     summary="自動編成を完了できませんでした。",
                     artifact_refs=(),
-                    evidence={"blocking_reason": str(error)},
+                    evidence={"blocking_reason": blocking_reason},
                 )
                 decision = type(decision)(
                     stage="planning",
                     status="blocked",
                     next_action="resolve_blocker",
-                    blocking_reason=str(error),
-                    message=f"自動編成を完了できませんでした: {error}",
+                    blocking_reason=blocking_reason,
+                    message="自動編成を完了できませんでした。Canonical 状態を確認してください。",
                 )
             else:
                 bundle = self._orchestrations.latest_bundle(record.change_request_id)
@@ -863,11 +998,12 @@ class WebControlPlaneService:
                     ),
                     artifact_refs=artifact_refs,
                 )
-            self._orchestration_tasks.unregister_worker(
-                executor_kind="agent",
-                executor_id=internal_executor_id,
-                worker_token=internal_worker_token,
-            )
+            finally:
+                self._orchestration_tasks.unregister_worker(
+                    executor_kind="agent",
+                    executor_id=internal_executor_id,
+                    worker_token=internal_worker_token,
+                )
         self._sync_orchestration_task(record=record, decision=decision, actor=actor)
         self._automation_runs.transition(
             run_id=run_id,
@@ -948,6 +1084,27 @@ class WebControlPlaneService:
 
     def change_orchestration(self, request_id: str) -> dict[str, object]:
         return {"bundle": self._orchestrations.latest_bundle(request_id)}
+
+    def change_traceability(self, request_id: str) -> dict[str, object]:
+        """Return one request-scoped relation graph and its missing-link ledger."""
+
+        request = self._repository.get_change_request(request_id)
+        case_id = request.get("analysis_case_id")
+        project_id = str(request["project_id"])
+        case = (
+            self.case_detail(project_id=project_id, case_id=str(case_id))
+            if case_id is not None
+            else None
+        )
+        return build_change_traceability(
+            request=request,
+            document_diff=self.document_diff(request_id),
+            case=case,
+            bundle=self._orchestrations.latest_bundle(request_id),
+            management=self.execution_management(request_id),
+            modification=self.test_case_modification_state(request_id),
+            copilot_task=self.copilot_task(request_id),
+        )
 
     def modify_test_case(
         self, *, request_id: str, instruction: str, actor: str
@@ -1040,6 +1197,7 @@ class WebControlPlaneService:
                 "test_data_plan": None,
                 "test_data_execution": None,
                 "business_coverage": None,
+                "changed_line_coverage": None,
                 "change_closure": None,
                 "screenshots": [],
                 "stale_history": self._test_case_revisions.state(request_id)["history"],
@@ -1059,6 +1217,21 @@ class WebControlPlaneService:
         execution = self._test_data_runs.latest_for_orchestration(orchestration_id)
         project_id = str(orchestration["project_id"])
         case_id = str(orchestration["analysis_case_id"])
+        coverage_loader = getattr(self._closures, "latest_changed_line_coverage", None)
+        changed_line_coverage = (
+            coverage_loader(
+                project_id=project_id,
+                analysis_case_id=case_id,
+                orchestration_id=orchestration_id,
+            )
+            if callable(coverage_loader)
+            else None
+        )
+        closure_stale = closure is not None and not _closure_matches_edit_result(
+            closure, changed_line_coverage
+        )
+        if closure_stale:
+            closure = None
         revision_state = self._test_case_revisions.state(request_id)
         current_revision = next(
             (
@@ -1085,6 +1258,8 @@ class WebControlPlaneService:
             at=datetime.now(UTC),
         )
         authorization_error = cast(str | None, authorization["blocking_reason"])
+        if authorization_error is None and closure_stale:
+            authorization_error = "Change Closure is stale for current Edit Result"
         running = execution is not None and execution["status"] == "running"
         recoverable = running and _execution_is_stale(execution, datetime.now(UTC))
         version_comparison = self._version_comparison(
@@ -1114,6 +1289,7 @@ class WebControlPlaneService:
             "test_data_plan": bundle["test_data_plan"],
             "test_data_execution": execution,
             "business_coverage": bundle["coverage_report"],
+            "changed_line_coverage": changed_line_coverage,
             "change_closure": closure,
             "screenshots": screenshots,
             "stale_history": revision_state["history"],
@@ -1354,6 +1530,26 @@ class WebControlPlaneService:
         progress["steps"] = _progress_steps(progress, grant_state)
         return {"progress": progress, "impact_report": report, "evidence": evidence}
 
+    def code_graph_view(
+        self,
+        *,
+        project_id: str,
+        snapshot_id: str,
+        max_nodes: int = 240,
+        max_edges: int = 480,
+    ) -> dict[str, object]:
+        """Return a bounded graph without source content for visual inspection."""
+
+        artifact = self._code_graphs.get(snapshot_id)
+        if artifact is None:
+            raise ValueError("Code Graph Snapshot does not exist")
+        return build_code_graph_view(
+            artifact,
+            project_id=project_id,
+            max_nodes=max_nodes,
+            max_edges=max_edges,
+        )
+
     def confirm_impact(
         self,
         *,
@@ -1585,6 +1781,19 @@ class WebControlPlaneService:
         if resolved.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
             return None
         return resolved if resolved.is_file() else None
+
+
+def _closure_matches_edit_result(
+    closure: dict[str, Any], changed_line_coverage: dict[str, Any] | None
+) -> bool:
+    if changed_line_coverage is None:
+        return "Committed Edit Result is missing" in {
+            str(value) for value in cast(list[object], closure.get("unresolved_items", []))
+        }
+    edit_result_id = str(changed_line_coverage.get("edit_result_id") or "")
+    return bool(edit_result_id) and edit_result_id in {
+        str(value) for value in cast(list[object], closure.get("artifact_refs", []))
+    }
 
 
 def _web_id(prefix: str, *values: str) -> str:

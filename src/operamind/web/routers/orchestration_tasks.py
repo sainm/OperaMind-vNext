@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Header, Query
 
 from operamind.application.web_control_plane import WebControlPlaneService
-from operamind.web.dependencies import command_actor, get_service
+from operamind.web.dependencies import command_actor, get_service, idempotency_key
 from operamind.web.models import (
     OrchestrationTaskClaim,
     OrchestrationTaskLease,
@@ -19,6 +19,7 @@ from operamind.web.models import (
 router = APIRouter(prefix="/api/v1/orchestration-tasks", tags=["orchestration-tasks"])
 Service = Annotated[WebControlPlaneService, Depends(get_service)]
 Actor = Annotated[str, Depends(command_actor)]
+IdempotencyKey = Annotated[str, Depends(idempotency_key)]
 WorkerToken = Annotated[
     str | None,
     Header(alias="X-OperaMind-Worker-Token", min_length=1, max_length=500),
@@ -100,13 +101,20 @@ def update_worker_configuration(
     body: OrchestrationWorkerConfigurationUpdate,
     service: Service,
     actor: Actor,
+    key: IdempotencyKey,
 ) -> dict[str, object]:
-    return service.update_orchestration_worker_configuration(
-        executor_kind=executor_kind,
-        executor_id=executor_id,
-        capabilities=tuple(body.capabilities),
-        max_concurrent_tasks=body.max_concurrent_tasks,
+    return service.execute_web_command(
+        command_scope=f"orchestration-worker:configure:{executor_kind}:{executor_id}",
+        idempotency_key=key,
         actor=actor,
+        payload=body.model_dump(mode="json"),
+        operation=lambda: service.update_orchestration_worker_configuration(
+            executor_kind=executor_kind,
+            executor_id=executor_id,
+            capabilities=tuple(body.capabilities),
+            max_concurrent_tasks=body.max_concurrent_tasks,
+            actor=actor,
+        ),
     )
 
 
@@ -117,12 +125,19 @@ def operate_worker(
     operation: Literal["enable", "disable", "drain"],
     service: Service,
     actor: Actor,
+    key: IdempotencyKey,
 ) -> dict[str, object]:
-    return service.operate_orchestration_worker(
-        executor_kind=executor_kind,
-        executor_id=executor_id,
-        operation=operation,
+    return service.execute_web_command(
+        command_scope=f"orchestration-worker:operate:{executor_kind}:{executor_id}",
+        idempotency_key=key,
         actor=actor,
+        payload={"operation": operation},
+        operation=lambda: service.operate_orchestration_worker(
+            executor_kind=executor_kind,
+            executor_id=executor_id,
+            operation=operation,
+            actor=actor,
+        ),
     )
 
 
@@ -217,10 +232,20 @@ def record_task_result(
 
 @router.post("/{task_id}/requeue")
 def requeue_task(
-    task_id: str, body: OrchestrationTaskRequeue, service: Service, actor: Actor
+    task_id: str,
+    body: OrchestrationTaskRequeue,
+    service: Service,
+    actor: Actor,
+    key: IdempotencyKey,
 ) -> dict[str, object]:
-    return service.requeue_orchestration_task(
-        task_id=task_id, actor=actor, reason=body.reason
+    return service.execute_web_command(
+        command_scope=f"orchestration-task:requeue:{task_id}",
+        idempotency_key=key,
+        actor=actor,
+        payload=body.model_dump(mode="json"),
+        operation=lambda: service.requeue_orchestration_task(
+            task_id=task_id, actor=actor, reason=body.reason
+        ),
     )
 
 
@@ -230,7 +255,14 @@ def update_task_priority(
     body: OrchestrationTaskPriorityUpdate,
     service: Service,
     actor: Actor,
+    key: IdempotencyKey,
 ) -> dict[str, object]:
-    return service.update_orchestration_task_priority(
-        task_id=task_id, priority=body.priority, actor=actor
+    return service.execute_web_command(
+        command_scope=f"orchestration-task:priority:{task_id}",
+        idempotency_key=key,
+        actor=actor,
+        payload=body.model_dump(mode="json"),
+        operation=lambda: service.update_orchestration_task_priority(
+            task_id=task_id, priority=body.priority, actor=actor
+        ),
     )

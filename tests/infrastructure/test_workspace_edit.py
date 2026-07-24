@@ -72,9 +72,7 @@ def test_preedited_workspace_verifier_accepts_only_exact_approved_result(
     tmp_path: Path,
 ) -> None:
     revision = _repository(tmp_path)
-    (tmp_path / "Service.java").write_text(
-        "return search(normalize(status));\n", encoding="utf-8"
-    )
+    (tmp_path / "Service.java").write_text("return search(normalize(status));\n", encoding="utf-8")
 
     result = PreEditedWorkspaceVerifier().apply(
         workspace_root=tmp_path,

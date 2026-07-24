@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -16,10 +17,68 @@ ROOT = Path(__file__).parents[2]
 class FakeService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
+        self.command_receipts: list[dict[str, object]] = []
         self.screenshot: Path | None = None
+
+    def execute_web_command(
+        self,
+        *,
+        command_scope: str,
+        idempotency_key: str,
+        actor: str,
+        payload: dict[str, object],
+        operation: Callable[[], dict[str, object]],
+    ) -> dict[str, object]:
+        self.command_receipts.append(
+            {
+                "command_scope": command_scope,
+                "idempotency_key": idempotency_key,
+                "actor": actor,
+                "payload": payload,
+            }
+        )
+        return operation()
 
     def list_projects(self) -> dict[str, object]:
         return {"projects": [{"project_id": "demo", "name": "Demo"}], "count": 1}
+
+    def code_graph_view(self, **values: object) -> dict[str, object]:
+        self.calls.append(("code-graph-view", values))
+        return {
+            "code_graph_snapshot_id": values["snapshot_id"],
+            "project_id": values["project_id"],
+            "nodes": [],
+            "edges": [],
+            "summary": {"node_count": 0, "edge_count": 0, "truncated": False},
+        }
+
+    def profile_registry(self, *, project_id: str) -> dict[str, object]:
+        self.calls.append(("profile-registry", {"project_id": project_id}))
+        return {
+            "project_id": project_id,
+            "profile_versions": [],
+            "bindings": [],
+            "drift_events": [],
+            "rebuild_requests": [],
+            "open_drift_count": 0,
+            "open_impact_count": 0,
+        }
+
+    def activate_profile(self, **values: object) -> dict[str, object]:
+        self.calls.append(("profile-activate", values))
+        return {
+            "created": True,
+            "activation_event_id": "profile-activation-1",
+            "affected_artifact_count": 2,
+        }
+
+    def request_profile_rebuild(self, **values: object) -> dict[str, object]:
+        self.calls.append(("profile-rebuild", values))
+        return {"created": True, "rebuild_request_id": "profile-rebuild-1"}
+
+    def requeue_profile_rebuild(self, **values: object) -> dict[str, object]:
+        self.calls.append(("profile-rebuild-requeue", values))
+        return {"rebuild_request_id": "profile-rebuild-1", "status": "requested"}
 
     def list_change_requests(self, *, project_id: str) -> dict[str, object]:
         return {"change_requests": [], "count": 0, "project_id": project_id}
@@ -98,6 +157,21 @@ class FakeService:
 
     def change_orchestration(self, request_id: str) -> dict[str, object]:
         return {"request_id": request_id, "bundle": None}
+
+    def change_traceability(self, request_id: str) -> dict[str, object]:
+        return {
+            "change_request_id": request_id,
+            "nodes": [],
+            "edges": [],
+            "gaps": [],
+            "summary": {
+                "node_count": 0,
+                "edge_count": 0,
+                "gap_count": 0,
+                "critical_gap_count": 0,
+                "stage_order": [],
+            },
+        }
 
     def change_automation(self, request_id: str) -> dict[str, object]:
         return {"request_id": request_id, "run": None}
@@ -198,9 +272,7 @@ class FakeService:
         self.calls.append(("orchestration-workers", values))
         return {"workers": [], "count": 0, "project_id": values.get("project_id")}
 
-    def update_orchestration_worker_configuration(
-        self, **values: object
-    ) -> dict[str, object]:
+    def update_orchestration_worker_configuration(self, **values: object) -> dict[str, object]:
         self.calls.append(("orchestration-worker-update", values))
         return {"worker": {"executor_id": values["executor_id"], "status": "online"}}
 
@@ -395,24 +467,44 @@ class FakeService:
         return {"readiness_stage": "p6", "manifest_status": "pending", "gates": []}
 
 
-def client_with_fake(*, bridge_token: str | None = None) -> tuple[TestClient, FakeService]:
+def client_with_fake(
+    *, bridge_token: str | None = None, web_token: str | None = None
+) -> tuple[TestClient, FakeService]:
     fake = FakeService()
     app = create_app(
         repository_root=ROOT,
         database_url="postgresql:///unused",
         bridge_token=bridge_token,
+        web_token=web_token,
     )
     app.dependency_overrides[get_service] = lambda: fake
     return TestClient(app), fake
+
+
+def test_web_token_protects_static_and_api_but_not_health_or_local_bridge_auth() -> None:
+    client, _ = client_with_fake(bridge_token="bridge-secret", web_token="web-secret")
+
+    assert client.get("/health").status_code == 200
+    assert client.get("/").status_code == 401
+    assert client.get("/api/v1/projects").status_code == 401
+    assert client.get("/", auth=("operamind", "web-secret")).status_code == 200
+    assert (
+        client.get("/api/v1/projects", headers={"Authorization": "Bearer web-secret"}).status_code
+        == 200
+    )
+    bridge = client.get(
+        "/api/v1/local-bridge/tasks/next",
+        params={"workspace_root": "/workspace/linked", "consumer_id": "vscode-1"},
+        headers={"Authorization": "Bearer bridge-secret"},
+    )
+    assert bridge.status_code == 200
 
 
 def test_app_keeps_orchestration_parallelism_as_deployment_state() -> None:
     app = create_app(
         repository_root=ROOT,
         database_url="postgresql:///unused",
-        orchestration_scheduling_policy=OrchestrationSchedulingPolicy(
-            max_active_tasks_per_run=4
-        ),
+        orchestration_scheduling_policy=OrchestrationSchedulingPolicy(max_active_tasks_per_run=4),
     )
 
     assert app.state.orchestration_scheduling_policy.max_active_tasks_per_run == 4
@@ -425,34 +517,55 @@ def test_health_static_page_and_read_routes() -> None:
     assert "要件から証跡まで" in client.get("/").text
     assert "テストデータ管理" in client.get("/").text
     assert "テストデータ実行を開始" in client.get("/").text
-    assert "新しい Run で再実行" in client.get("/").text
-    assert "変更クローズ管理" in client.get("/").text
-    assert "生成テスト Case の自然言語一括修正" in client.get("/").text
+    assert "新しい実行として再試行" in client.get("/").text
+    assert "変更完了判定の管理" in client.get("/").text
+    assert "生成テストケースの自然言語一括修正" in client.get("/").text
     assert "testCaseExecutionAuthorization" in client.get("/").text
     assert "versionResultComparison" in client.get("/").text
-    assert "UI Knowledge をレビュー" in client.get("/").text
-    assert "未解決 Evidence 管理" in client.get("/").text
+    assert "画面操作情報をレビュー" in client.get("/").text
+    assert "標準設定プロファイルと設定差異の管理" in client.get("/").text
+    assert "未解決証跡の管理" in client.get("/").text
     assert "候補、欠けている証拠" in client.get("/").text
     assert "自然言語から UI 検証まで一括編成" in client.get("/").text
-    assert "人による Task 実行" in client.get("/").text
-    assert "Claim しただけでは承認になりません" in client.get("/").text
-    assert "OrchestrationTask 管理" in client.get("/").text
-    assert "複数 Run の Ready Queue" in client.get("/").text
-    assert "阻断理由" in client.get("/").text
-    assert "Task 依存関係図" in client.get("/").text
-    assert "Critical Path" in client.get("/").text
+    assert "人による作業実行" in client.get("/").text
+    assert "担当を開始しただけでは承認になりません" in client.get("/").text
+    assert "自動編成作業の管理" in client.get("/").text
+    assert "複数の実行にまたがる待機作業" in client.get("/").text
+    assert "ブロック理由" in client.get("/").text
+    assert "作業依存関係図" in client.get("/").text
+    assert "重要経路" in client.get("/").text
+    assert 'aria-label="ワークスペース"' in client.get("/").text
+    assert 'id="detailDrawer"' in client.get("/").text
+    assert "変更フロー" in client.get("/").text
+    assert "データ・結果・完了判定" in client.get("/").text
+    assert client.get("/ui-copy.js").status_code == 200
+    assert client.get("/graph-canvas.js").status_code == 200
+    assert client.get("/code-graph.js").status_code == 200
+    assert client.get("/layout.js").status_code == 200
     assert client.get("/task-graph.js").status_code == 200
+    assert client.get("/change-management.js").status_code == 200
+    assert client.get("/case-editor.js").status_code == 200
+    assert client.get("/test-data-management.js").status_code == 200
+    assert client.get("/verification-results.js").status_code == 200
+    assert client.get("/traceability-view.js").status_code == 200
+    assert client.get("/profile-registry.js").status_code == 200
     assert "VS Code GitHub Copilot へ送信" in client.get("/").text
     assert "ローカル環境診断" in client.get("/").text
-    assert "Workspace Trust、認証情報、Migration を自動変更しません" in client.get("/").text
+    assert "ワークスペースの信頼、認証情報、データベース構造を自動変更しません" in (
+        client.get("/").text
+    )
     assert client.get("/api/v1/projects").json()["count"] == 1
+    assert client.get("/api/v1/projects/demo/profiles").json()["project_id"] == "demo"
     assert client.get("/api/v1/readiness").json()["readiness_stage"] == "p6"
     assert client.get("/api/v1/change-requests?project_id=demo").status_code == 200
     assert client.get("/api/v1/projects/demo/cases/case-1").status_code == 200
+    graph = client.get(
+        "/api/v1/projects/demo/code-graphs/graph-1?max_nodes=25&max_edges=50"
+    )
+    assert graph.status_code == 200
+    assert graph.json()["code_graph_snapshot_id"] == "graph-1"
     assert client.get("/api/v1/projects/demo/ui-knowledge/reviews").json()["draft_count"] == 1
-    unresolved = client.get(
-        "/api/v1/projects/demo/unresolved-evidence?history_limit=25"
-    ).json()
+    unresolved = client.get("/api/v1/projects/demo/unresolved-evidence?history_limit=25").json()
     assert unresolved["open_count"] == 1
     management = client.get("/api/v1/change-requests/change-1/execution-management").json()
     assert management["change_closure"]["status"] == "blocked"
@@ -462,6 +575,9 @@ def test_health_static_page_and_read_routes() -> None:
     )
     assert client.get("/api/v1/change-requests/change-1/automation").json()["run"] is None
     assert client.get("/api/v1/change-requests/change-1/copilot-task").json()["task"] is None
+    traceability = client.get("/api/v1/change-requests/change-1/traceability").json()
+    assert traceability["change_request_id"] == "change-1"
+    assert traceability["summary"]["gap_count"] == 0
 
 
 def test_local_environment_diagnostics_are_token_protected_and_secret_free() -> None:
@@ -630,7 +746,7 @@ def test_change_automation_start_and_resume_use_trusted_headers() -> None:
     )
     resumed = client.post(
         "/api/v1/change-requests/change-1/automation/automation-1/resume",
-        headers={"X-OperaMind-Actor": "product-owner"},
+        headers={"X-OperaMind-Actor": "product-owner", "Idempotency-Key": "resume-1"},
     )
 
     assert started.status_code == 201
@@ -769,14 +885,15 @@ def test_task_dependency_graph_is_bounded_by_project_and_run() -> None:
 
 def test_worker_operations_use_trusted_actor_and_bounded_configuration() -> None:
     client, fake = client_with_fake()
-    headers = {"X-OperaMind-Actor": "operations-owner"}
+    headers = {
+        "X-OperaMind-Actor": "operations-owner",
+        "Idempotency-Key": "worker-config-1",
+    }
 
-    listed = client.get(
-        "/api/v1/orchestration-tasks/workers", params={"project_id": "demo"}
-    )
+    listed = client.get("/api/v1/orchestration-tasks/workers", params={"project_id": "demo"})
     updated = client.patch(
         "/api/v1/orchestration-tasks/workers/agent/worker-1",
-        headers=headers,
+        headers={**headers, "Idempotency-Key": "worker-drain-1"},
         json={
             "capabilities": ["document_review", "impact_review"],
             "max_concurrent_tasks": 2,
@@ -813,6 +930,7 @@ def test_worker_operations_use_trusted_actor_and_bounded_configuration() -> None
         ),
     ]
 
+
 def test_agent_or_human_can_claim_the_selected_ready_step() -> None:
     client, fake = client_with_fake()
 
@@ -846,7 +964,7 @@ def test_agent_neutral_task_requeue_requires_trusted_actor_and_reason() -> None:
 
     response = client.post(
         "/api/v1/orchestration-tasks/task-1/requeue",
-        headers={"X-OperaMind-Actor": "operator-1"},
+        headers={"X-OperaMind-Actor": "operator-1", "Idempotency-Key": "requeue-1"},
         json={"reason": "外部阻断を解消したため"},
     )
 
@@ -953,6 +1071,77 @@ def test_ui_knowledge_review_uses_actor_reason_and_idempotency_key() -> None:
     )
 
 
+def test_profile_activation_and_rebuild_use_actor_and_idempotency_key() -> None:
+    client, fake = client_with_fake()
+    headers = {
+        "X-OperaMind-Actor": "platform-owner",
+        "Idempotency-Key": "profile-change-key",
+    }
+
+    activation = client.post(
+        "/api/v1/projects/demo/profiles/activate",
+        headers=headers,
+        json={
+            "binding_key": "embedding:documents",
+            "profile_version_id": "embedding-v2",
+            "reason": "Embedding model update",
+        },
+    )
+    rebuild = client.post(
+        "/api/v1/projects/demo/profiles/rebuild-requests",
+        headers={**headers, "Idempotency-Key": "profile-rebuild-key"},
+        json={
+            "drift_event_id": "drift-1",
+            "artifact_type": "SearchIndexBuild",
+            "artifact_id": "index-1",
+        },
+    )
+    requeue = client.post(
+        "/api/v1/projects/demo/profiles/rebuild-requests/profile-rebuild-1/requeue",
+        headers={**headers, "Idempotency-Key": "profile-requeue-key"},
+        json={"reason": "Canonical validation issue was corrected"},
+    )
+
+    assert activation.status_code == 200
+    assert activation.json()["affected_artifact_count"] == 2
+    assert rebuild.status_code == 201
+    assert requeue.status_code == 200
+    assert fake.calls[-3:] == [
+        (
+            "profile-activate",
+            {
+                "project_id": "demo",
+                "binding_key": "embedding:documents",
+                "profile_version_id": "embedding-v2",
+                "reason": "Embedding model update",
+                "idempotency_key": "profile-change-key",
+                "actor": "platform-owner",
+            },
+        ),
+        (
+            "profile-rebuild",
+            {
+                "project_id": "demo",
+                "drift_event_id": "drift-1",
+                "artifact_type": "SearchIndexBuild",
+                "artifact_id": "index-1",
+                "idempotency_key": "profile-rebuild-key",
+                "actor": "platform-owner",
+            },
+        ),
+        (
+            "profile-rebuild-requeue",
+            {
+                "project_id": "demo",
+                "rebuild_request_id": "profile-rebuild-1",
+                "reason": "Canonical validation issue was corrected",
+                "idempotency_key": "profile-requeue-key",
+                "actor": "platform-owner",
+            },
+        ),
+    ]
+
+
 def test_ui_knowledge_review_screenshot_is_project_and_snapshot_scoped(
     tmp_path: Path,
 ) -> None:
@@ -1014,7 +1203,9 @@ def test_change_request_and_review_forward_trusted_headers() -> None:
     }
 
     created = client.post(
-        "/api/v1/change-requests", json=body, headers={"X-OperaMind-Actor": "reviewer"}
+        "/api/v1/change-requests",
+        json=body,
+        headers={"X-OperaMind-Actor": "reviewer", "Idempotency-Key": "create-request-1"},
     )
     reviewed = client.post(
         "/api/v1/change-requests/change-1/document-review",
@@ -1079,16 +1270,32 @@ def test_confirmation_and_grant_require_idempotency_key() -> None:
     assert [call[0] for call in fake.calls] == ["confirm", "grant"]
 
 
-def test_change_request_orchestration_uses_the_authenticated_actor() -> None:
-    client, fake = client_with_fake()
-
+def test_human_write_routes_require_idempotency_key() -> None:
+    client, _ = client_with_fake()
     response = client.post(
         "/api/v1/change-requests/change-1/orchestration",
         headers={"X-OperaMind-Actor": "reviewer"},
     )
 
+    assert response.status_code == 422
+
+
+def test_change_request_orchestration_uses_the_authenticated_actor() -> None:
+    client, fake = client_with_fake()
+
+    response = client.post(
+        "/api/v1/change-requests/change-1/orchestration",
+        headers={"X-OperaMind-Actor": "reviewer", "Idempotency-Key": "orchestration-1"},
+    )
+
     assert response.status_code == 201
     assert response.json()["bundle"]["orchestration"]["status"] == "ready"
+    assert fake.command_receipts[-1] == {
+        "command_scope": "change-orchestration:create:change-1",
+        "idempotency_key": "orchestration-1",
+        "actor": "reviewer",
+        "payload": {},
+    }
     assert fake.calls == [
         (
             "orchestrate",
@@ -1102,12 +1309,12 @@ def test_natural_language_case_change_and_confirmation_use_trusted_actor() -> No
 
     proposed = client.post(
         "/api/v1/change-requests/change-1/test-case-modifications",
-        headers={"X-OperaMind-Actor": "qa-user"},
+        headers={"X-OperaMind-Actor": "qa-user", "Idempotency-Key": "proposal-1"},
         json={"instruction": "期待結果を変更"},
     )
     confirmed = client.post(
         "/api/v1/change-requests/change-1/test-case-modifications/proposal-001/confirm",
-        headers={"X-OperaMind-Actor": "qa-user"},
+        headers={"X-OperaMind-Actor": "qa-user", "Idempotency-Key": "confirm-1"},
         json={"selections": {"ambiguity-1": "option-2"}},
     )
     missing_actor = client.post(
@@ -1146,7 +1353,7 @@ def test_deterministic_case_confirmation_and_undo_are_explicit() -> None:
 
     confirmed = client.post(
         "/api/v1/change-requests/change-1/test-case-modifications/proposal-001/confirm",
-        headers={"X-OperaMind-Actor": "qa-user"},
+        headers={"X-OperaMind-Actor": "qa-user", "Idempotency-Key": "confirm-2"},
         json={"selections": {}},
     )
     undone = client.post(
@@ -1188,7 +1395,7 @@ def test_revised_case_execution_scope_confirmation_uses_trusted_actor() -> None:
 
     response = client.post(
         "/api/v1/change-requests/change-1/test-case-execution-authorization",
-        headers={"X-OperaMind-Actor": "qa-user"},
+        headers={"X-OperaMind-Actor": "qa-user", "Idempotency-Key": "scope-1"},
         json={"approval_grant_id": "grant-001", "target_scope_digest": digest},
     )
 

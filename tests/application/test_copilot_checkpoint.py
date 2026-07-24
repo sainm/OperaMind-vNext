@@ -53,9 +53,7 @@ def test_checkpoint_cli_exposes_codex_rehearsal_attach_and_show() -> None:
             "proposal.json",
         ]
     )
-    shown = parser.parse_args(
-        ["show-rehearsal", "--checkpoint-root", "checkpoint"]
-    )
+    shown = parser.parse_args(["show-rehearsal", "--checkpoint-root", "checkpoint"])
 
     assert attached.proposal_file == Path("proposal.json")
     assert shown.command == "show-rehearsal"

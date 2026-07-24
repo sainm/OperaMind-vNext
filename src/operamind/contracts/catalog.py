@@ -19,6 +19,7 @@ EXPECTED_ARTIFACT_TYPES = frozenset(
         "DocumentIngestionResult",
         "StructuredChange",
         "ContextPackage",
+        "GoldenRagQualityReport",
         "CodeGraphSnapshot",
         "RuntimeRouteEvidence",
         "UnresolvedEvidenceReport",
@@ -34,6 +35,7 @@ EXPECTED_ARTIFACT_TYPES = frozenset(
         "TestDataExecutionResult",
         "AcceptanceCriteria",
         "BusinessCoverageReport",
+        "ChangedLineCoverageReport",
         "ChangeClosureResult",
         "ChangeOrchestrationPlan",
         "TestCaseChangeProposal",
@@ -132,7 +134,7 @@ class ContractCatalog:
         return ValidationReport(tuple(issues))
 
     def validate_examples(self) -> ValidationReport:
-        """Require one valid v1 example for every registered core Artifact."""
+        """Require a valid v1 example and validate every additional versioned example."""
 
         issues: list[ValidationIssue] = []
         for artifact_type, schema_path in sorted(self.schema_paths.items()):
@@ -147,22 +149,25 @@ class ContractCatalog:
                     )
                 )
                 continue
-            try:
-                example = self._load_schema(example_path)
-                self.validate_artifact(example)
-            except (json.JSONDecodeError, ValueError, ArtifactValidationError) as error:
-                message = str(error)
-                if isinstance(error, ArtifactValidationError):
-                    message = "; ".join(
-                        f"{issue.location}: {issue.message}" for issue in error.report.issues
+            stem = schema_path.name.removesuffix(".schema.json")
+            versioned_examples = sorted((self.root / "examples").glob(f"{stem}.v*.example.json"))
+            for versioned_example in versioned_examples:
+                try:
+                    example = self._load_schema(versioned_example)
+                    self.validate_artifact(example)
+                except (json.JSONDecodeError, ValueError, ArtifactValidationError) as error:
+                    message = str(error)
+                    if isinstance(error, ArtifactValidationError):
+                        message = "; ".join(
+                            f"{issue.location}: {issue.message}" for issue in error.report.issues
+                        )
+                    issues.append(
+                        ValidationIssue(
+                            code="contract.invalid_example",
+                            message=message,
+                            location=str(versioned_example.relative_to(self.root)),
+                        )
                     )
-                issues.append(
-                    ValidationIssue(
-                        code="contract.invalid_example",
-                        message=message,
-                        location=str(example_path.relative_to(self.root)),
-                    )
-                )
         return ValidationReport(tuple(issues))
 
     def validate_artifact(self, artifact: dict[str, Any]) -> None:

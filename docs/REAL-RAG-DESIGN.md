@@ -2,7 +2,7 @@
 
 当前可执行实现、命令、验证证据和剩余边界见 `P2-REAL-RAG.md`。
 
-当前主链路已实现到确定性的 Context Package，包括 Profile 驱动的 Relation Build、完整检索请求身份、Artifact SHA-256 读取复核、Golden Dataset 检索质量门和显式 opt-in 的真实 Provider live 合约测试入口。MVP 不依赖模型压缩；实际 Provider 通过记录与冻结 Golden 数据证据仍是 P2 readiness 未完成项。
+当前主链路已实现到确定性的 Context Package，包括 Profile 驱动的 Relation Build、完整检索请求身份、Artifact SHA-256 读取复核、Golden Dataset 真实检索质量报告、Impact fail-closed 门和显式 opt-in 的真实 Provider live 合约测试入口。MVP 不依赖模型压缩；真实 Provider Evidence 与冻结 Golden 数据已经通过各自 readiness gate，冻结 Query 的 PostgreSQL/pgvector 回归也已通过。VisionDemo 运维数据库上的正式质量 Report 仍需在固定 Canonical Snapshot、本地当前 Embedding Profile 和 ready/current Index 可用时采集。
 
 ## 1. 正式主链路
 

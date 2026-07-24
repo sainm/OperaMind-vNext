@@ -1,6 +1,9 @@
 .DS_Store
 .env
+.env.wsl
 .venv/
+.local-tools/
+.operamind-backups/
 node_modules/
 dist/
 build/

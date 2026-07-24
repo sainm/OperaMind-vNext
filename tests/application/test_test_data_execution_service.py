@@ -161,6 +161,27 @@ def test_service_recovers_stale_run_with_fail_closed_artifact(monkeypatch: Any) 
     assert repository.recovered[1].reason == "worker heartbeat stopped"
 
 
+def test_service_publishes_outer_worker_failure_as_canonical_result(monkeypatch: Any) -> None:
+    FakeRepository.instances.clear()
+    monkeypatch.setattr(service_module, "TestDataExecutionRepository", FakeRepository)
+    service = DataExecutionService(
+        connection=object(),  # type: ignore[arg-type]
+        contracts=ContractCatalog.load(ROOT / "contracts"),
+        executors={},
+        clock=lambda: COMPLETED,
+    )
+
+    result = service.fail_reserved(
+        _request(), reason="Background TestDataPlan worker failed before completion (TimeoutError)"
+    )
+
+    repository = FakeRepository.instances[-1]
+    assert result.artifact["status"] == "failed"
+    assert result.artifact["cleanup_status"] == "failed"
+    assert result.artifact["failure_reasons"]
+    assert repository.completed == result.artifact
+
+
 def _request() -> DataExecutionServiceRequest:
     return DataExecutionServiceRequest(
         execution_result_id="result-001",
@@ -174,9 +195,7 @@ def _request() -> DataExecutionServiceRequest:
     )
 
 
-def _record(
-    status: str, completed_at: datetime | None, *, created: bool
-) -> DataExecutionRecord:
+def _record(status: str, completed_at: datetime | None, *, created: bool) -> DataExecutionRecord:
     return DataExecutionRecord(
         created=created,
         run_id="run-001",

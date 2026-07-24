@@ -262,9 +262,7 @@ class ChangeLoopPlanner:
         git: GitRevisionEvidence,
     ) -> dict[str, Any]:
         profile_path = self._root / str(
-            case.repository.get(
-                "code_profile", "profiles/code-framework-profile.example.json"
-            )
+            case.repository.get("code_profile", "profiles/code-framework-profile.example.json")
         )
         profile = _load_object(profile_path)
         self._profiles.validate_profile(profile)
@@ -281,22 +279,24 @@ class ChangeLoopPlanner:
             excluded_globs=tuple(cast(list[str], profile["excluded_globs"])),
             languages=tuple(cast(list[str], profile["languages"])),
         )
-        return CodeGraphScanner().scan(
-            code_graph_snapshot_id=_id("code-graph", request.change_request_id),
-            project_id=request.project_id,
-            repository_id=str(case.repository["repository_id"]),
-            repository_revision=git.head_sha,
-            scan_roots=scan_roots,
-            profile=profile,
-            files=files,
-        ).artifact
+        return (
+            CodeGraphScanner()
+            .scan(
+                code_graph_snapshot_id=_id("code-graph", request.change_request_id),
+                project_id=request.project_id,
+                repository_id=str(case.repository["repository_id"]),
+                repository_revision=git.head_sha,
+                scan_roots=scan_roots,
+                profile=profile,
+                files=files,
+            )
+            .artifact
+        )
 
 
 def _document_operations(payload: dict[str, Any]) -> tuple[DocumentCellChange, ...]:
     operations: list[DocumentCellChange] = []
-    for change_index, change in enumerate(
-        cast(list[dict[str, Any]], payload["changes"]), start=1
-    ):
+    for change_index, change in enumerate(cast(list[dict[str, Any]], payload["changes"]), start=1):
         for field_index, delta in enumerate(
             cast(list[dict[str, object]], change["field_deltas"]), start=1
         ):
@@ -364,8 +364,7 @@ def _accepted_changes(
     target_document_name: str,
 ) -> tuple[dict[str, Any], ...]:
     expected_values = {
-        str(value["stable_key"]): value
-        for value in cast(list[dict[str, Any]], expected["changes"])
+        str(value["stable_key"]): value for value in cast(list[dict[str, Any]], expected["changes"])
     }
     actual_values = {value.stable_key: value for value in result.changes}
     if actual_values.keys() != expected_values.keys():
@@ -456,9 +455,7 @@ def _impact_artifacts(
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     graph_paths = {str(value["path"]) for value in cast(list[dict[str, Any]], graph["files"])}
     missing = sorted(
-        str(value["path"])
-        for value in case.impact_candidates
-        if value["path"] not in graph_paths
+        str(value["path"]) for value in case.impact_candidates if value["path"] not in graph_paths
     )
     if missing:
         raise ChangeLoopBlockedError(f"Code Graph is missing configured paths: {missing}")
@@ -488,9 +485,7 @@ def _impact_artifacts(
                 "unknowns": [],
             }
         )
-    ui_refs = [
-        str(value["test_case_id"]) for value in case.test_cases if value["level"] == "ui"
-    ]
+    ui_refs = [str(value["test_case_id"]) for value in case.test_cases if value["level"] == "ui"]
     impact = {
         "artifact_type": "ImpactReport",
         "schema_version": "v1",
@@ -572,9 +567,7 @@ def _impact_artifacts(
     return impact, confirmation, edit_packet
 
 
-def _acceptance_artifact(
-    request: ChangeLoopPlanRequest, case: ChangeLoopCase
-) -> dict[str, Any]:
+def _acceptance_artifact(request: ChangeLoopPlanRequest, case: ChangeLoopCase) -> dict[str, Any]:
     return {
         "artifact_type": "AcceptanceCriteria",
         "schema_version": "v1",
@@ -592,8 +585,7 @@ def _test_plan_artifact(
 ) -> dict[str, Any]:
     cases = copy.deepcopy(case.test_cases)
     criterion_ids = {
-        str(value["criterion_id"])
-        for value in cast(list[dict[str, Any]], acceptance["criteria"])
+        str(value["criterion_id"]) for value in cast(list[dict[str, Any]], acceptance["criteria"])
     }
     referenced = {
         str(reference)

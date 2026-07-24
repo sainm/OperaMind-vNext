@@ -17,9 +17,7 @@ from operamind.application.change_loop_case import ChangeLoopCase
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Plan a configured dual-entry change candidate"
-    )
+    parser = argparse.ArgumentParser(description="Plan a configured dual-entry change candidate")
     parser.add_argument("--root", type=Path, default=Path.cwd())
     subparsers = parser.add_subparsers(dest="entry", required=True)
     for entry in ("documents", "requirement", "hybrid"):

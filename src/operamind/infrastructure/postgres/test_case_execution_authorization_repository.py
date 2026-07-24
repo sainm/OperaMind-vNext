@@ -43,9 +43,7 @@ class TestCaseExecutionAuthorizationRepository:
         self._artifacts = ArtifactRepository(connection, contracts)
         self._orchestrations = ChangeOrchestrationRepository(connection, contracts)
 
-    def state(
-        self, *, target_orchestration_id: str, at: datetime
-    ) -> dict[str, Any]:
+    def state(self, *, target_orchestration_id: str, at: datetime) -> dict[str, Any]:
         if at.utcoffset() is None:
             raise ValueError("Test Case execution authorization time must include a timezone")
         revision = self._revision(target_orchestration_id)
@@ -107,9 +105,7 @@ class TestCaseExecutionAuthorizationRepository:
                     authorized=False,
                     status="grant_required",
                     grant_id=None,
-                    blocking_reason=(
-                        "No active Approval Grant permits TestDataPlan execution"
-                    ),
+                    blocking_reason=("No active Approval Grant permits TestDataPlan execution"),
                 ),
             }
         if comparison.changed:
@@ -207,9 +203,7 @@ class TestCaseExecutionAuthorizationRepository:
     def _comparison(
         self, revision: dict[str, Any], target_bundle: dict[str, Any]
     ) -> TestCaseExecutionScopeComparison:
-        source_bundle = self._orchestrations.bundle(
-            str(revision["source_orchestration_id"])
-        )
+        source_bundle = self._orchestrations.bundle(str(revision["source_orchestration_id"]))
         return compare_test_case_execution_scope(source_bundle, target_bundle)
 
     def _revision(self, target_orchestration_id: str) -> dict[str, Any] | None:
@@ -268,11 +262,7 @@ class TestCaseExecutionAuthorizationRepository:
             )
             rows = cursor.fetchall()
         expected = tuple(sorted(ui_scenario_ids))
-        return [
-            str(row[0])
-            for row in rows
-            if tuple(sorted(_strings(row[1]))) == expected
-        ]
+        return [str(row[0]) for row in rows if tuple(sorted(_strings(row[1]))) == expected]
 
     def _require_eligible_grant(
         self,

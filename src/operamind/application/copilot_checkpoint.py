@@ -28,8 +28,7 @@ class CopilotCheckpointRequest:
 
     def __post_init__(self) -> None:
         if any(
-            not value.strip()
-            for value in (self.session_id, self.project_id, self.analysis_case_id)
+            not value.strip() for value in (self.session_id, self.project_id, self.analysis_case_id)
         ):
             raise ValueError("Copilot checkpoint identity fields must not be blank")
         if self.phase not in {"draft_generation", "code_edit"}:
@@ -38,9 +37,7 @@ class CopilotCheckpointRequest:
             raise ValueError("Copilot checkpoint requires a full base revision SHA")
         if not self.expected_outputs or any(not value.strip() for value in self.expected_outputs):
             raise ValueError("Copilot checkpoint expected outputs must not be blank")
-        if self.phase == "code_edit" and (
-            not self.approval_grant_id or not self.edit_packet_id
-        ):
+        if self.phase == "code_edit" and (not self.approval_grant_id or not self.edit_packet_id):
             raise ValueError("Code-edit checkpoint requires Approval Grant and Edit Packet IDs")
 
 
@@ -312,8 +309,10 @@ class CopilotCheckpointService:
         validation_steps = proposal["validation_steps"]
         if not isinstance(changes, list) or not isinstance(findings, list):
             raise ValueError("Codex rehearsal changes and findings must be arrays")
-        if not isinstance(validation_steps, list) or not validation_steps or any(
-            not isinstance(step, str) or not step.strip() for step in validation_steps
+        if (
+            not isinstance(validation_steps, list)
+            or not validation_steps
+            or any(not isinstance(step, str) or not step.strip() for step in validation_steps)
         ):
             raise ValueError("Codex rehearsal validation_steps must be non-blank strings")
         if any(not isinstance(finding, str) or not finding.strip() for finding in findings):

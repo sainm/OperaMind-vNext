@@ -49,6 +49,8 @@ class DocumentSnapshotWrite:
     selected_variant_id: str
     status: SnapshotStatus
     snapshot: CanonicalSnapshot
+    selected_variant_ids: tuple[str, ...] = ()
+    fact_variant_ids: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         required = (
@@ -65,6 +67,29 @@ class DocumentSnapshotWrite:
             raise ValueError("Document Snapshot persistence fields must not be blank")
         if not SHA256.fullmatch(self.content_digest):
             raise ValueError("content_digest must be a lowercase SHA-256 digest")
+        selected_variant_ids = self.selected_variant_ids or (self.selected_variant_id,)
+        if (
+            selected_variant_ids[0] != self.selected_variant_id
+            or len(selected_variant_ids) != len(set(selected_variant_ids))
+            or any(not value.strip() for value in selected_variant_ids)
+        ):
+            raise ValueError("Document Snapshot selected Variant provenance is invalid")
+        fact_variant_ids = self.fact_variant_ids or tuple(
+            (snapshot_fact.fact_ref, self.selected_variant_id)
+            for snapshot_fact in self.snapshot.facts
+        )
+        expected_fact_refs = {item.fact_ref for item in self.snapshot.facts}
+        actual_fact_refs = [fact_ref for fact_ref, _variant_id in fact_variant_ids]
+        if (
+            set(actual_fact_refs) != expected_fact_refs
+            or len(actual_fact_refs) != len(set(actual_fact_refs))
+            or any(
+                variant_id not in selected_variant_ids for _fact_ref, variant_id in fact_variant_ids
+            )
+        ):
+            raise ValueError("Document Snapshot Fact Variant provenance is invalid")
+        object.__setattr__(self, "selected_variant_ids", selected_variant_ids)
+        object.__setattr__(self, "fact_variant_ids", fact_variant_ids)
 
 
 class CanonicalRepository:
@@ -84,8 +109,15 @@ class CanonicalRepository:
             self._store_document_version(cursor, write)
             self._store_snapshot_identity(cursor, write)
             self._store_membership(cursor, write)
+            variants_by_fact_ref = dict(write.fact_variant_ids)
             for snapshot_fact in write.snapshot.facts:
                 self._store_fact(cursor, write, snapshot_fact)
+                self._store_fact_variant(
+                    cursor,
+                    write,
+                    snapshot_fact,
+                    variants_by_fact_ref[snapshot_fact.fact_ref],
+                )
 
     def get_snapshot(self, *, project_id: str, snapshot_id: str) -> CanonicalSnapshot | None:
         """Rehydrate one Canonical Snapshot from normalized Fact rows."""
@@ -113,6 +145,25 @@ class CanonicalRepository:
                 (project_id, snapshot_id),
             )
             rows = cursor.fetchall()
+            cursor.execute(
+                """
+                SELECT selected_variant_ids
+                FROM snapshot_memberships
+                WHERE project_id = %s AND document_snapshot_id = %s
+                """,
+                (project_id, snapshot_id),
+            )
+            membership_rows = cursor.fetchall()
+            cursor.execute(
+                """
+                SELECT document_fact_id, selected_variant_id
+                FROM document_fact_variants
+                WHERE project_id = %s AND document_snapshot_id = %s
+                ORDER BY document_fact_id
+                """,
+                (project_id, snapshot_id),
+            )
+            fact_variant_rows = cursor.fetchall()
 
         facts = tuple(
             SnapshotFact(
@@ -127,6 +178,22 @@ class CanonicalRepository:
             )
             for row in rows
         )
+        if len(membership_rows) != 1 or not isinstance(membership_rows[0][0], list):
+            raise PersistenceConflictError(
+                f"Canonical Snapshot Variant membership is invalid: {snapshot_id}"
+            )
+        selected_variant_ids = tuple(str(value) for value in membership_rows[0][0])
+        fact_variants = {str(row[0]): str(row[1]) for row in fact_variant_rows}
+        expected_fact_refs = {item.fact_ref for item in facts}
+        if (
+            not selected_variant_ids
+            or len(selected_variant_ids) != len(set(selected_variant_ids))
+            or set(fact_variants) != expected_fact_refs
+            or any(value not in selected_variant_ids for value in fact_variants.values())
+        ):
+            raise PersistenceConflictError(
+                f"Canonical Snapshot Fact Variant provenance differs: {snapshot_id}"
+            )
         snapshot = CanonicalSnapshot(snapshot_id=snapshot_id, facts=facts)
         nodes = self._nodes.list_indexable(
             project_id=project_id,
@@ -356,8 +423,9 @@ class CanonicalRepository:
                 document_snapshot_id,
                 document_version_id,
                 profile_version_id,
-                selected_variant_id
-            ) VALUES (%s, %s, %s, %s, %s)
+                selected_variant_id,
+                selected_variant_ids
+            ) VALUES (%s, %s, %s, %s, %s, %s::jsonb)
             ON CONFLICT DO NOTHING
             """,
             (
@@ -366,22 +434,76 @@ class CanonicalRepository:
                 write.document_version_id,
                 write.profile_version_id,
                 write.selected_variant_id,
+                _canonical_json(list(write.selected_variant_ids)),
             ),
         )
         cursor.execute(
             """
-            SELECT project_id, profile_version_id, selected_variant_id
+            SELECT project_id, profile_version_id, selected_variant_id,
+                   selected_variant_ids
             FROM snapshot_memberships
             WHERE document_snapshot_id = %s AND document_version_id = %s
             """,
             (write.snapshot.snapshot_id, write.document_version_id),
         )
         row = cursor.fetchone()
-        expected = (write.project_id, write.profile_version_id, write.selected_variant_id)
+        expected = (
+            write.project_id,
+            write.profile_version_id,
+            write.selected_variant_id,
+            list(write.selected_variant_ids),
+        )
         if row is None or tuple(row) != expected:
             raise PersistenceConflictError(
                 "Snapshot membership identity has different content: "
                 f"{write.snapshot.snapshot_id}/{write.document_version_id}"
+            )
+
+    @staticmethod
+    def _store_fact_variant(
+        cursor: Cursor[Any],
+        write: DocumentSnapshotWrite,
+        snapshot_fact: SnapshotFact,
+        variant_id: str,
+    ) -> None:
+        cursor.execute(
+            """
+            INSERT INTO document_fact_variants (
+                project_id,
+                document_snapshot_id,
+                document_version_id,
+                document_fact_id,
+                selected_variant_id
+            ) VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT DO NOTHING
+            """,
+            (
+                write.project_id,
+                write.snapshot.snapshot_id,
+                write.document_version_id,
+                snapshot_fact.fact_ref,
+                variant_id,
+            ),
+        )
+        cursor.execute(
+            """
+            SELECT project_id, document_snapshot_id, document_version_id,
+                   selected_variant_id
+            FROM document_fact_variants
+            WHERE document_fact_id = %s
+            """,
+            (snapshot_fact.fact_ref,),
+        )
+        row = cursor.fetchone()
+        expected = (
+            write.project_id,
+            write.snapshot.snapshot_id,
+            write.document_version_id,
+            variant_id,
+        )
+        if row is None or tuple(row) != expected:
+            raise PersistenceConflictError(
+                f"Document Fact Variant provenance differs: {snapshot_fact.fact_ref}"
             )
 
     @staticmethod

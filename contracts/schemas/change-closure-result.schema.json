@@ -7,7 +7,7 @@
   "required": ["artifact_type", "schema_version", "closure_result_id", "change_request_id", "project_id", "input_mode", "artifact_refs", "structured_change_refs", "modified_paths", "test_results", "ui_status", "business_coverage_percent", "status", "unresolved_items"],
   "properties": {
     "artifact_type": {"const": "ChangeClosureResult"},
-    "schema_version": {"const": "v1"},
+    "schema_version": {"enum": ["v1", "v2"]},
     "closure_result_id": {"type": "string", "minLength": 1},
     "change_request_id": {"type": "string", "minLength": 1},
     "project_id": {"type": "string", "minLength": 1},
@@ -32,7 +32,28 @@
     },
     "ui_status": {"enum": ["passed", "failed", "blocked", "not_impacted"]},
     "business_coverage_percent": {"type": "number", "minimum": 0, "maximum": 100},
+    "changed_line_coverage_percent": {"type": "number", "minimum": 0, "maximum": 100},
+    "changed_line_coverage_status": {"enum": ["passed", "failed", "missing", "not_required"]},
     "status": {"enum": ["passed", "failed", "blocked", "reanalysis_required"]},
     "unresolved_items": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
-  }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"schema_version": {"const": "v1"}}},
+      "then": {
+        "not": {
+          "anyOf": [
+            {"required": ["changed_line_coverage_percent"]},
+            {"required": ["changed_line_coverage_status"]}
+          ]
+        }
+      }
+    },
+    {
+      "if": {"properties": {"schema_version": {"const": "v2"}}},
+      "then": {
+        "required": ["changed_line_coverage_percent", "changed_line_coverage_status"]
+      }
+    }
+  ]
 }

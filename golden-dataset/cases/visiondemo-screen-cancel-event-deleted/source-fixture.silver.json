@@ -1,0 +1,48 @@
+{
+  "case_id": "visiondemo-screen-cancel-event-deleted",
+  "dataset_stage": "silver",
+  "fixture_type": "xlsx_document_diff",
+  "project_id": "visiondemo",
+  "profile": "screen_design",
+  "domain": "ui",
+  "fact_type": "screen_element",
+  "before": {
+    "filename": "02_画面設計書_経費申請一覧_before.xlsx",
+    "sheets": [
+      {
+        "name": "画面概要",
+        "rows": [
+          ["画面ID", "SCREEN_EXPENSE_LIST"],
+          ["画面名", "経費精算申請一覧"]
+        ]
+      },
+      {
+        "name": "イベント一覧",
+        "rows": [
+          ["No", "イベント名", "発生源", "トリガー", "処理内容"],
+          [1, "検索", "expense-search-btn", "クリック", "一覧を更新"],
+          [2, "取消", "expense-cancel-btn", "クリック", "選択した申請を取り消す"]
+        ]
+      }
+    ]
+  },
+  "after": {
+    "filename": "02_画面設計書_経費申請一覧_after.xlsx",
+    "sheets": [
+      {
+        "name": "画面概要",
+        "rows": [
+          ["画面ID", "SCREEN_EXPENSE_LIST"],
+          ["画面名", "経費精算申請一覧"]
+        ]
+      },
+      {
+        "name": "イベント一覧",
+        "rows": [
+          ["No", "イベント名", "発生源", "トリガー", "処理内容"],
+          [1, "検索", "expense-search-btn", "クリック", "一覧を更新"]
+        ]
+      }
+    ]
+  }
+}

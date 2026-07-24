@@ -93,6 +93,12 @@ def test_migrations_apply_once_and_record_checksum() -> None:
         "0048",
         "0049",
         "0050",
+        "0051",
+        "0052",
+        "0053",
+        "0054",
+        "0055",
+        "0056",
     )
     assert second == ()
     assert rows == [
@@ -334,6 +340,36 @@ def test_migrations_apply_once_and_record_checksum() -> None:
             "orchestration_task_priority",
             catalog.migrations[49].checksum,
         ),
+        (
+            "0051",
+            "web_command_idempotency",
+            catalog.migrations[50].checksum,
+        ),
+        (
+            "0052",
+            "changed_line_coverage",
+            catalog.migrations[51].checksum,
+        ),
+        (
+            "0053",
+            "canonical_profile_drift",
+            catalog.migrations[52].checksum,
+        ),
+        (
+            "0054",
+            "profile_rebuild_lifecycle",
+            catalog.migrations[53].checksum,
+        ),
+        (
+            "0055",
+            "golden_rag_quality_gate",
+            catalog.migrations[54].checksum,
+        ),
+        (
+            "0056",
+            "snapshot_variant_provenance",
+            catalog.migrations[55].checksum,
+        ),
     ]
 
 
@@ -529,9 +565,7 @@ def test_applied_migration_checksum_mismatch_is_rejected(tmp_path: Path) -> None
         encoding="utf-8",
     )
     (tmp_path / "0046_unresolved_evidence_reports.sql").write_text(
-        (ROOT / "migrations/0046_unresolved_evidence_reports.sql").read_text(
-            encoding="utf-8"
-        ),
+        (ROOT / "migrations/0046_unresolved_evidence_reports.sql").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     (tmp_path / "0047_agent_neutral_orchestration_tasks.sql").write_text(
@@ -544,6 +578,12 @@ def test_applied_migration_checksum_mismatch_is_rejected(tmp_path: Path) -> None
         "0048_orchestration_worker_registry.sql",
         "0049_orchestration_worker_operations.sql",
         "0050_orchestration_task_priority.sql",
+        "0051_web_command_idempotency.sql",
+        "0052_changed_line_coverage.sql",
+        "0053_canonical_profile_drift.sql",
+        "0054_profile_rebuild_lifecycle.sql",
+        "0055_golden_rag_quality_gate.sql",
+        "0056_snapshot_variant_provenance.sql",
     ):
         (tmp_path / version).write_text(
             (ROOT / "migrations" / version).read_text(encoding="utf-8"),
@@ -937,11 +977,245 @@ def test_locator_observation_migration_upgrades_candidate_identity_with_existing
         "0048",
         "0049",
         "0050",
+        "0051",
+        "0052",
+        "0053",
+        "0054",
+        "0055",
+        "0056",
     )
     assert candidates == [
         ("knowledge-v1", "shared-status-label"),
         ("knowledge-v2", "shared-status-label"),
     ]
+
+
+@pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
+def test_profile_rebuild_lifecycle_migrates_legacy_requests_fail_closed() -> None:
+    assert DATABASE_URL is not None
+    catalog = MigrationCatalog.load(ROOT / "migrations")
+    through_profile_drift = MigrationCatalog(catalog.migrations[:53])
+    with psycopg.connect(DATABASE_URL) as connection:
+        schema_name = create_isolated_schema(connection)
+        MigrationRunner(connection, through_profile_drift).apply()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO projects (project_id, name) VALUES ('legacy-profile', 'Legacy')"
+            )
+            for version_id, version in (("legacy-v1", "1.0.0"), ("legacy-v2", "2.0.0")):
+                cursor.execute(
+                    """
+                    INSERT INTO profile_versions (
+                        profile_version_id, profile_type, profile_id,
+                        semantic_version, payload, payload_digest
+                    ) VALUES (
+                        %s, 'EmbeddingProfile', 'legacy-embedding', %s,
+                        jsonb_build_object(
+                            'profile_type', 'EmbeddingProfile',
+                            'profile_id', 'legacy-embedding',
+                            'profile_version', %s::text
+                        ), repeat('0', 64)
+                    )
+                    """,
+                    (version_id, version, version),
+                )
+            cursor.execute(
+                """
+                INSERT INTO profile_activation_events (
+                    activation_event_id, project_id, binding_key,
+                    previous_profile_version_id, activated_profile_version_id,
+                    activated_by, reason
+                ) VALUES (
+                    'legacy-activation', 'legacy-profile', 'embedding:documents',
+                    'legacy-v1', 'legacy-v2', 'operator', 'Legacy migration fixture'
+                )
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO profile_drift_events (
+                    profile_drift_event_id, activation_event_id, project_id,
+                    binding_key, previous_profile_version_id,
+                    activated_profile_version_id, status
+                ) VALUES (
+                    'legacy-drift', 'legacy-activation', 'legacy-profile',
+                    'embedding:documents', 'legacy-v1', 'legacy-v2', 'open'
+                )
+                """
+            )
+            for index, status in enumerate(
+                ("in_progress", "requested", "completed", "failed"),
+                1,
+            ):
+                cursor.execute(
+                    """
+                    INSERT INTO profile_drift_impacts (
+                        profile_drift_event_id, project_id, affected_layer,
+                        artifact_type, artifact_id, effective_status, reason,
+                        rebuild_action
+                    ) VALUES (
+                        'legacy-drift', 'legacy-profile', 'snapshot',
+                        'SearchIndexBuild', %s, 'stale', 'Legacy Profile Drift',
+                        'rebuild_search_index'
+                    )
+                    """,
+                    (f"legacy-index-{index}",),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO profile_rebuild_requests (
+                        profile_rebuild_request_id, profile_drift_event_id,
+                        project_id, artifact_type, artifact_id, rebuild_action,
+                        status, requested_by, completed_at
+                    ) VALUES (
+                        %s, 'legacy-drift', 'legacy-profile', 'SearchIndexBuild',
+                        %s, 'rebuild_search_index', %s, 'operator',
+                        CASE WHEN %s IN ('in_progress', 'requested') THEN NULL ELSE now() END
+                    )
+                    """,
+                    (f"legacy-request-{index}", f"legacy-index-{index}", status, status),
+                )
+        assert MigrationRunner(connection, catalog).apply() == ("0054", "0055", "0056")
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT profile_rebuild_request_id, status, last_error
+                FROM profile_rebuild_requests
+                WHERE project_id = 'legacy-profile'
+                ORDER BY profile_rebuild_request_id
+                """
+            )
+            requests = cursor.fetchall()
+            cursor.execute(
+                """
+                SELECT profile_rebuild_batch_id, status
+                FROM profile_rebuild_batches
+                WHERE project_id = 'legacy-profile'
+                ORDER BY profile_rebuild_batch_id
+                """
+            )
+            batches = cursor.fetchall()
+        drop_isolated_schema(connection, schema_name)
+
+    assert requests == [
+        ("legacy-request-1", "requested", None),
+        ("legacy-request-2", "requested", None),
+        (
+            "legacy-request-3",
+            "blocked",
+            "Legacy completion requires Canonical replacement validation",
+        ),
+        (
+            "legacy-request-4",
+            "failed",
+            "Legacy rebuild failure imported during lifecycle migration",
+        ),
+    ]
+    assert batches == [
+        ("legacy-request-1", "requested"),
+    ]
+
+
+@pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
+def test_snapshot_variant_provenance_migration_backfills_legacy_facts() -> None:
+    assert DATABASE_URL is not None
+    catalog = MigrationCatalog.load(ROOT / "migrations")
+    before_variant_provenance = MigrationCatalog(catalog.migrations[:55])
+    with psycopg.connect(DATABASE_URL) as connection:
+        schema_name = create_isolated_schema(connection)
+        MigrationRunner(connection, before_variant_provenance).apply()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO projects (project_id, name) VALUES ('legacy-doc', 'Legacy')"
+            )
+            cursor.execute(
+                """
+                INSERT INTO profile_versions (
+                    profile_version_id, profile_type, profile_id,
+                    semantic_version, payload, payload_digest
+                ) VALUES (
+                    'legacy-document-profile', 'DocumentConventionProfile',
+                    'legacy-document', '1.0.0',
+                    jsonb_build_object(
+                        'profile_type', 'DocumentConventionProfile',
+                        'profile_id', 'legacy-document',
+                        'profile_version', '1.0.0'
+                    ),
+                    repeat('0', 64)
+                )
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO documents (document_id, project_id, logical_name)
+                VALUES ('legacy-document', 'legacy-doc', 'Legacy.xlsx')
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO document_versions (
+                    document_version_id, project_id, document_id, source_ref,
+                    content_digest, extractor_ref
+                ) VALUES (
+                    'legacy-version', 'legacy-doc', 'legacy-document',
+                    'Legacy.xlsx', repeat('1', 64), 'xlsx-openpyxl@1'
+                )
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO document_snapshots (
+                    document_snapshot_id, project_id, status, committed_at
+                ) VALUES ('legacy-snapshot', 'legacy-doc', 'committed', now())
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO snapshot_memberships (
+                    project_id, document_snapshot_id, document_version_id,
+                    profile_version_id, selected_variant_id
+                ) VALUES (
+                    'legacy-doc', 'legacy-snapshot', 'legacy-version',
+                    'legacy-document-profile', 'legacy-table'
+                )
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO document_facts (
+                    document_fact_id, project_id, document_snapshot_id,
+                    document_version_id, stable_key, fact_type, values_json,
+                    source_refs, field_evidence
+                ) VALUES (
+                    'legacy-fact', 'legacy-doc', 'legacy-snapshot',
+                    'legacy-version', 'screen_element:legacy', 'screen_element',
+                    '{"name": "Legacy"}', '["Legacy.xlsx#Sheet1!A1"]', '[]'
+                )
+                """
+            )
+
+        assert MigrationRunner(connection, catalog).apply() == ("0056",)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT selected_variant_id, selected_variant_ids
+                FROM snapshot_memberships
+                WHERE document_snapshot_id = 'legacy-snapshot'
+                """
+            )
+            membership = cursor.fetchone()
+            cursor.execute(
+                """
+                SELECT document_fact_id, selected_variant_id
+                FROM document_fact_variants
+                WHERE document_snapshot_id = 'legacy-snapshot'
+                """
+            )
+            fact_variant = cursor.fetchone()
+        drop_isolated_schema(connection, schema_name)
+
+    assert membership == ("legacy-table", ["legacy-table"])
+    assert fact_variant == ("legacy-fact", "legacy-table")
 
 
 @pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")

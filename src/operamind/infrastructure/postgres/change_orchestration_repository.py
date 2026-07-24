@@ -102,9 +102,7 @@ class ChangeOrchestrationRepository:
 
         request = self._required_artifact(change_request_id, "ChangeRequest")
         report = self._required_artifact(report_id, "ImpactReport")
-        confirmation = self._required_artifact(
-            str(confirmation_row[0]), "ImpactConfirmation"
-        )
+        confirmation = self._required_artifact(str(confirmation_row[0]), "ImpactConfirmation")
         change_refs = sorted(
             {
                 str(reference)
@@ -113,8 +111,7 @@ class ChangeOrchestrationRepository:
             }
         )
         changes = tuple(
-            self._required_artifact(reference, "StructuredChange")
-            for reference in change_refs
+            self._required_artifact(reference, "StructuredChange") for reference in change_refs
         )
         with self._connection.cursor() as cursor:
             cursor.execute(
@@ -144,9 +141,7 @@ class ChangeOrchestrationRepository:
             analysis_case_id=case_id,
             structured_changes=changes,
             accepted_structured_change_refs=frozenset(
-                change_id
-                for change_id, status in effective_reviews.items()
-                if status == "accepted"
+                change_id for change_id, status in effective_reviews.items() if status == "accepted"
             ),
             impact_report=report,
             impact_report_state="confirmed",
@@ -276,9 +271,7 @@ class ChangeOrchestrationRepository:
                 refs["acceptance_criteria_id"], "AcceptanceCriteria"
             ),
             "test_plan": self._required_artifact(refs["test_plan_id"], "TestPlan"),
-            "test_data_plan": self._required_artifact(
-                refs["test_data_plan_id"], "TestDataPlan"
-            ),
+            "test_data_plan": self._required_artifact(refs["test_data_plan_id"], "TestDataPlan"),
             "coverage_report": self._required_artifact(
                 refs["coverage_report_id"], "BusinessCoverageReport"
             ),

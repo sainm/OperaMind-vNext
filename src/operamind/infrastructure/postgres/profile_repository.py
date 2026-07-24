@@ -151,6 +151,19 @@ class ProfileRepository:
 
             cursor.execute(
                 """
+                SELECT profile_type FROM profile_versions
+                WHERE profile_version_id = %s
+                FOR SHARE
+                """,
+                (profile_version_id,),
+            )
+            target_version = cursor.fetchone()
+            if target_version is None:
+                raise ValueError("Profile version does not exist")
+            target_profile_type = str(target_version[0])
+
+            cursor.execute(
+                """
                 SELECT active_profile_version_id
                 FROM project_profile_bindings
                 WHERE project_id = %s AND binding_key = %s
@@ -160,6 +173,18 @@ class ProfileRepository:
             )
             binding = cursor.fetchone()
             previous_profile_version_id = str(binding[0]) if binding is not None else None
+            if previous_profile_version_id is not None:
+                cursor.execute(
+                    """
+                    SELECT profile_type FROM profile_versions
+                    WHERE profile_version_id = %s
+                    FOR SHARE
+                    """,
+                    (previous_profile_version_id,),
+                )
+                previous_version = cursor.fetchone()
+                if previous_version is None or str(previous_version[0]) != target_profile_type:
+                    raise ValueError("Profile binding cannot change Profile type")
             cursor.execute(
                 """
                 INSERT INTO profile_activation_events (
@@ -196,6 +221,14 @@ class ProfileRepository:
                     activated_at = now()
                 """,
                 (project_id, binding_key, profile_version_id, activated_by),
+            )
+            from operamind.infrastructure.postgres.profile_drift_repository import (
+                ProfileDriftRepository,
+            )
+
+            ProfileDriftRepository(self._connection).detect_activation(
+                activation_event_id=activation_event_id,
+                cursor=cursor,
             )
         return True
 

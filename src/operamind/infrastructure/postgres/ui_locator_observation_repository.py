@@ -211,9 +211,7 @@ class UiLocatorObservationRepository:
             }
             for evidence in result.evidence:
                 if observation_targets.get(evidence.observation_id) != evidence.target_ref:
-                    raise ValueError(
-                        "UI Locator Observation Evidence differs from its Observation"
-                    )
+                    raise ValueError("UI Locator Observation Evidence differs from its Observation")
                 cursor.execute(
                     """
                     INSERT INTO ui_locator_observation_evidence (

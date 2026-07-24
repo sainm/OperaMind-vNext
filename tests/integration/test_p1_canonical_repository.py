@@ -29,7 +29,10 @@ from operamind.infrastructure.postgres import (
     DocumentSnapshotWrite,
     MigrationCatalog,
     MigrationRunner,
+    OrchestrationTaskRepository,
     PersistenceConflictError,
+    ProfileDriftRepository,
+    ProfileRebuildTaskQueue,
     ProfileRepository,
     SearchIndexRepository,
     SnapshotStatus,
@@ -156,6 +159,377 @@ def test_profile_version_activation_and_audit_round_trip() -> None:
             )
             audit = cursor.fetchall()
         assert audit == [(None, first_version_id), (first_version_id, second_version_id)]
+        connection.rollback()
+
+
+@pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
+def test_profile_activation_records_snapshot_drift_and_rebuild_request() -> None:
+    assert DATABASE_URL is not None
+    suffix = uuid4().hex
+    project_id = f"project-drift-{suffix}"
+    first_version_id = f"profile-drift-v1-{suffix}"
+    second_version_id = f"profile-drift-v2-{suffix}"
+    snapshot_id = f"snapshot-drift-{suffix}"
+    with psycopg.connect(DATABASE_URL) as connection:
+        MigrationRunner(connection, MigrationCatalog.load(ROOT / "migrations")).apply()
+        insert_project(connection, project_id)
+        profiles = ProfileRepository(connection, ProfileCatalog.load(ROOT / "profiles"))
+        first = load_profile()
+        second = copy.deepcopy(first)
+        second["profile_version"] = "1.0.1"
+        profiles.store_version(profile_version_id=first_version_id, profile=first)
+        profiles.store_version(profile_version_id=second_version_id, profile=second)
+        profiles.activate(
+            activation_event_id=f"activation-drift-v1-{suffix}",
+            project_id=project_id,
+            binding_key="document:screen_design",
+            profile_version_id=first_version_id,
+            activated_by="reviewer@example.invalid",
+            reason="Initial Profile",
+        )
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO documents (document_id, project_id, logical_name) VALUES (%s, %s, %s)",
+                (f"document-{suffix}", project_id, "screen-design.xlsx"),
+            )
+            cursor.execute(
+                """
+                INSERT INTO document_versions (
+                    document_version_id, project_id, document_id,
+                    source_ref, content_digest, extractor_ref
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    f"document-version-{suffix}",
+                    project_id,
+                    f"document-{suffix}",
+                    "immutable://screen-design.xlsx",
+                    hashlib.sha256(b"screen design").hexdigest(),
+                    "test-fixture@1",
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO document_snapshots (
+                    document_snapshot_id, project_id, status, committed_at
+                ) VALUES (%s, %s, 'committed', now())
+                """,
+                (snapshot_id, project_id),
+            )
+            cursor.execute(
+                """
+                INSERT INTO snapshot_memberships (
+                    project_id, document_snapshot_id, document_version_id,
+                    profile_version_id, selected_variant_id, selected_variant_ids
+                ) VALUES (%s, %s, %s, %s, %s, jsonb_build_array(%s::text))
+                """,
+                (
+                    project_id,
+                    snapshot_id,
+                    f"document-version-{suffix}",
+                    first_version_id,
+                    "screen-item-table-ja",
+                    "screen-item-table-ja",
+                ),
+            )
+
+        profiles.activate(
+            activation_event_id=f"activation-drift-v2-{suffix}",
+            project_id=project_id,
+            binding_key="document:screen_design",
+            profile_version_id=second_version_id,
+            activated_by="reviewer@example.invalid",
+            reason="Updated extraction convention",
+        )
+        drift = ProfileDriftRepository(connection)
+        registry = drift.management_view(project_id=project_id)
+        event = registry["drift_events"][0]
+        impact = event["impacts"][0]
+
+        assert event["status"] == "open"
+        assert impact == {
+            "affected_layer": "snapshot",
+            "artifact_type": "DocumentSnapshot",
+            "artifact_id": snapshot_id,
+            "effective_status": "stale",
+            "reason": (f"文書ルール Profile {first_version_id} → {second_version_id}"),
+            "rebuild_action": "rebuild_document_snapshot",
+            "resolved": False,
+        }
+        scheduled = drift.request_rebuild(
+            rebuild_request_id=f"rebuild-{suffix}",
+            project_id=project_id,
+            drift_event_id=event["drift_event_id"],
+            artifact_type="DocumentSnapshot",
+            artifact_id=snapshot_id,
+            requested_by="reviewer@example.invalid",
+        )
+        assert scheduled.created is True
+        assert scheduled.request_ids == (f"rebuild-{suffix}",)
+        assert (
+            drift.management_view(project_id=project_id)["rebuild_requests"][0]["status"]
+            == "requested"
+        )
+
+        invalid_snapshot_id = f"snapshot-drift-wrong-profile-{suffix}"
+        replacement_snapshot_id = f"snapshot-drift-rebuilt-{suffix}"
+        with connection.cursor() as cursor:
+            for rebuilt_snapshot_id, profile_version_id in (
+                (invalid_snapshot_id, first_version_id),
+                (replacement_snapshot_id, second_version_id),
+            ):
+                cursor.execute(
+                    """
+                    INSERT INTO document_snapshots (
+                        document_snapshot_id, project_id, status, committed_at
+                    ) VALUES (%s, %s, 'committed', now())
+                    """,
+                    (rebuilt_snapshot_id, project_id),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO snapshot_memberships (
+                        project_id, document_snapshot_id, document_version_id,
+                        profile_version_id, selected_variant_id, selected_variant_ids
+                    ) VALUES (%s, %s, %s, %s, %s, jsonb_build_array(%s::text))
+                    """,
+                    (
+                        project_id,
+                        rebuilt_snapshot_id,
+                        f"document-version-{suffix}",
+                        profile_version_id,
+                        "screen-item-table-ja",
+                        "screen-item-table-ja",
+                    ),
+                )
+        registry_repository = OrchestrationTaskRepository(connection)
+        registration = registry_repository.register_worker(
+            executor_kind="agent",
+            executor_id=f"profile-worker-{suffix}",
+            capabilities=("rebuild_document_snapshot",),
+            project_id=project_id,
+        )
+        queue = ProfileRebuildTaskQueue(connection)
+        assert [
+            task["orchestration_task_id"]
+            for task in queue.list_ready(
+                executor_kind="agent",
+                capabilities=("rebuild_document_snapshot",),
+                project_id=project_id,
+            )
+        ] == [f"rebuild-{suffix}"]
+        claimed = queue.claim(
+            task_id=f"rebuild-{suffix}",
+            executor_kind="agent",
+            executor_id=f"profile-worker-{suffix}",
+            capabilities=("rebuild_document_snapshot",),
+            worker_token=str(registration["worker_token"]),
+            project_id=project_id,
+        )
+        queue.heartbeat(
+            task_id=f"rebuild-{suffix}",
+            executor_id=f"profile-worker-{suffix}",
+            lease_token=str(claimed["lease_token"]),
+        )
+        rejected = queue.record_result(
+            task_id=f"rebuild-{suffix}",
+            executor_id=f"profile-worker-{suffix}",
+            lease_token=str(claimed["lease_token"]),
+            outcome="completed",
+            summary="Generated with a stale Profile by mistake.",
+            artifact_refs=(invalid_snapshot_id,),
+            evidence={"artifact_type": "DocumentSnapshot"},
+        )
+        assert rejected["status"] == "blocked"
+        assert rejected["replacement"] is None
+        assert drift.management_view(project_id=project_id)["open_impact_count"] == 1
+        queue.requeue(
+            task_id=f"rebuild-{suffix}",
+            project_id=project_id,
+            actor="reviewer@example.invalid",
+            reason="Regenerate with the activated Profile version",
+        )
+        claimed = queue.claim(
+            task_id=f"rebuild-{suffix}",
+            executor_kind="agent",
+            executor_id=f"profile-worker-{suffix}",
+            capabilities=("rebuild_document_snapshot",),
+            worker_token=str(registration["worker_token"]),
+            project_id=project_id,
+        )
+        completed = queue.record_result(
+            task_id=f"rebuild-{suffix}",
+            executor_id=f"profile-worker-{suffix}",
+            lease_token=str(claimed["lease_token"]),
+            outcome="completed",
+            summary="Rebuilt with the active Document Convention Profile.",
+            artifact_refs=(replacement_snapshot_id,),
+            evidence={"artifact_type": "DocumentSnapshot"},
+        )
+        assert completed["status"] == "completed"
+        assert completed["replacement"]["artifact_id"] == replacement_snapshot_id
+        resolved = drift.management_view(project_id=project_id)
+        assert resolved["drift_events"][0]["status"] == "resolved"
+        assert resolved["open_impact_count"] == 0
+        connection.rollback()
+
+
+@pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
+def test_profile_rebuild_batch_enforces_phase_barriers_and_requeues_failures() -> None:
+    assert DATABASE_URL is not None
+    suffix = uuid4().hex
+    project_id = f"project-rebuild-phases-{suffix}"
+    first_version_id = f"profile-rebuild-v1-{suffix}"
+    second_version_id = f"profile-rebuild-v2-{suffix}"
+    impacts = (
+        ("snapshot", "DocumentSnapshot", f"snapshot-old-{suffix}", "rebuild_snapshot"),
+        ("impact", "ImpactReport", f"impact-old-{suffix}", "rebuild_impact"),
+        ("test_plan", "TestPlan", f"plan-old-{suffix}", "rebuild_plan"),
+        ("evidence", "Evidence", f"evidence-old-{suffix}", "rebuild_evidence"),
+        ("closure", "ChangeClosureResult", f"closure-old-{suffix}", "rebuild_closure"),
+    )
+    capabilities = tuple(row[3] for row in impacts)
+    with psycopg.connect(DATABASE_URL) as connection:
+        MigrationRunner(connection, MigrationCatalog.load(ROOT / "migrations")).apply()
+        insert_project(connection, project_id)
+        profiles = ProfileRepository(connection, ProfileCatalog.load(ROOT / "profiles"))
+        first = load_profile()
+        second = copy.deepcopy(first)
+        second["profile_version"] = "1.0.1"
+        profiles.store_version(profile_version_id=first_version_id, profile=first)
+        profiles.store_version(profile_version_id=second_version_id, profile=second)
+        profiles.activate(
+            activation_event_id=f"activation-phases-v1-{suffix}",
+            project_id=project_id,
+            binding_key="document:screen_design",
+            profile_version_id=first_version_id,
+            activated_by="reviewer@example.invalid",
+            reason="Initial Profile",
+        )
+        profiles.activate(
+            activation_event_id=f"activation-phases-v2-{suffix}",
+            project_id=project_id,
+            binding_key="document:screen_design",
+            profile_version_id=second_version_id,
+            activated_by="reviewer@example.invalid",
+            reason="New extraction convention",
+        )
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT profile_drift_event_id FROM profile_drift_events
+                WHERE project_id = %s ORDER BY detected_at DESC LIMIT 1
+                """,
+                (project_id,),
+            )
+            drift_event_id = str(cursor.fetchone()[0])
+            cursor.execute(
+                """
+                UPDATE profile_drift_events
+                SET status = 'open', resolved_at = NULL
+                WHERE profile_drift_event_id = %s
+                """,
+                (drift_event_id,),
+            )
+            for layer, artifact_type, artifact_id, action in impacts:
+                cursor.execute(
+                    """
+                    INSERT INTO profile_drift_impacts (
+                        profile_drift_event_id, project_id, affected_layer,
+                        artifact_type, artifact_id, effective_status, reason,
+                        rebuild_action
+                    ) VALUES (%s, %s, %s, %s, %s, 'blocked', %s, %s)
+                    """,
+                    (
+                        drift_event_id,
+                        project_id,
+                        layer,
+                        artifact_type,
+                        artifact_id,
+                        "Profile phase barrier test",
+                        action,
+                    ),
+                )
+        drift = ProfileDriftRepository(connection)
+        scheduled = drift.request_rebuild(
+            rebuild_request_id=f"rebuild-root-{suffix}",
+            project_id=project_id,
+            drift_event_id=drift_event_id,
+            artifact_type="DocumentSnapshot",
+            artifact_id=f"snapshot-old-{suffix}",
+            requested_by="reviewer@example.invalid",
+        )
+        assert len(scheduled.request_ids) == 5
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT request.phase_order, count(dependency.depends_on_request_id)
+                FROM profile_rebuild_requests AS request
+                LEFT JOIN profile_rebuild_request_dependencies AS dependency
+                  ON dependency.profile_rebuild_request_id =
+                     request.profile_rebuild_request_id
+                WHERE request.profile_rebuild_batch_id = %s
+                GROUP BY request.profile_rebuild_request_id, request.phase_order
+                ORDER BY request.phase_order
+                """,
+                (scheduled.batch_id,),
+            )
+            assert cursor.fetchall() == [(10, 0), (20, 1), (30, 2), (40, 3), (50, 4)]
+
+        registry_repository = OrchestrationTaskRepository(connection)
+        registration = registry_repository.register_worker(
+            executor_kind="agent",
+            executor_id=f"phase-worker-{suffix}",
+            capabilities=capabilities,
+            project_id=project_id,
+        )
+        queue = ProfileRebuildTaskQueue(connection)
+        ready = queue.list_ready(
+            executor_kind="agent", capabilities=capabilities, project_id=project_id
+        )
+        assert [(task["phase_order"], task["artifact_type"]) for task in ready] == [
+            (10, "DocumentSnapshot")
+        ]
+        claimed = queue.claim(
+            task_id=f"rebuild-root-{suffix}",
+            executor_kind="agent",
+            executor_id=f"phase-worker-{suffix}",
+            capabilities=capabilities,
+            worker_token=str(registration["worker_token"]),
+            project_id=project_id,
+        )
+        failed = queue.record_result(
+            task_id=f"rebuild-root-{suffix}",
+            executor_id=f"phase-worker-{suffix}",
+            lease_token=str(claimed["lease_token"]),
+            outcome="failed",
+            summary="Snapshot generation failed before Canonical publication.",
+            artifact_refs=(),
+            evidence={"error_kind": "generation_failed"},
+        )
+        assert failed["status"] == "failed"
+        assert drift.management_view(project_id=project_id)["open_impact_count"] == 5
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT status, count(*) FROM profile_rebuild_requests
+                WHERE profile_rebuild_batch_id = %s GROUP BY status ORDER BY status
+                """,
+                (scheduled.batch_id,),
+            )
+            assert cursor.fetchall() == [("blocked", 4), ("failed", 1)]
+        queue.requeue(
+            task_id=f"rebuild-root-{suffix}",
+            project_id=project_id,
+            actor="reviewer@example.invalid",
+            reason="Generator configuration was corrected",
+        )
+        retried = queue.list_ready(
+            executor_kind="agent", capabilities=capabilities, project_id=project_id
+        )
+        assert [(task["phase_order"], task["artifact_type"]) for task in retried] == [
+            (10, "DocumentSnapshot")
+        ]
         connection.rollback()
 
 

@@ -22,6 +22,14 @@ def _profile() -> dict[str, Any]:
     return value
 
 
+def _polyglot_profile() -> dict[str, Any]:
+    value = json.loads(
+        (ROOT / "profiles/polyglot-code-framework-profile.example.json").read_text(encoding="utf-8")
+    )
+    assert isinstance(value, dict)
+    return value
+
+
 def _write_project(root: Path) -> None:
     main = root / "src/main/java/example"
     test = root / "src/test/java/example"
@@ -600,6 +608,287 @@ import org.springframework.stereotype.Service;
     assert actual["edges"] == expected["edges"]
     assert actual["scan_status"] == expected["scan_status"]
     assert actual["diagnostics"] == expected["diagnostics"]
+
+
+def test_incremental_python_adapter_matches_full_graph_after_call_change(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "src/python/app"
+    tests = tmp_path / "tests/python"
+    source.mkdir(parents=True)
+    tests.mkdir(parents=True)
+    (source / "repo.py").write_text(
+        "def normalize_original(value: str) -> str:\n"
+        "    return value.strip()\n\n"
+        "def normalize_updated(value: str) -> str:\n"
+        "    return value.casefold()\n",
+        encoding="utf-8",
+    )
+    service_path = "src/python/app/service.py"
+    service = tmp_path / service_path
+    service.write_text(
+        "from app.repo import normalize_original\n\n"
+        "def search_employee(value: str) -> str:\n"
+        "    return normalize_original(value)\n",
+        encoding="utf-8",
+    )
+    (tests / "test_service.py").write_text(
+        "from app.service import search_employee\n\n"
+        "def test_search_employee() -> None:\n"
+        "    assert search_employee(' A ') == 'A'\n",
+        encoding="utf-8",
+    )
+    profile = _polyglot_profile()
+    workspace = WorkspaceScanner()
+    scanner = CodeGraphScanner()
+    incremental = IncrementalCodeGraphScanner()
+    roots = ("src", "tests")
+    exclusions = tuple(cast(list[str], profile["excluded_globs"]))
+    languages = tuple(cast(list[str], profile["languages"]))
+    initial_files = workspace.discover(
+        workspace_root=tmp_path,
+        scan_roots=roots,
+        excluded_globs=exclusions,
+        languages=languages,
+    )
+    base = scanner.scan(
+        code_graph_snapshot_id="graph-polyglot-base",
+        project_id="project",
+        repository_id="repository",
+        repository_revision="a" * 40,
+        scan_roots=roots,
+        profile=profile,
+        files=initial_files,
+    ).artifact
+    service.write_text(
+        "from app.repo import normalize_updated\n\n"
+        "def search_employee(value: str) -> str:\n"
+        "    return normalize_updated(value)\n",
+        encoding="utf-8",
+    )
+    current_paths = frozenset(file.path for file in initial_files)
+    changed_files = workspace.discover(
+        workspace_root=tmp_path,
+        scan_roots=roots,
+        excluded_globs=exclusions,
+        languages=languages,
+        allowed_paths=frozenset({service_path}),
+    )
+    plan = incremental.plan(
+        previous_artifact=base,
+        changes=(GitPathChange("M", (service_path,)),),
+        changed_files=changed_files,
+        profile=profile,
+        current_tracked_paths=current_paths,
+    )
+    affected_files = workspace.discover(
+        workspace_root=tmp_path,
+        scan_roots=roots,
+        excluded_globs=exclusions,
+        languages=languages,
+        allowed_paths=frozenset(plan.affected_paths),
+    )
+    actual = incremental.scan(
+        code_graph_snapshot_id="graph-polyglot-incremental",
+        project_id="project",
+        repository_id="repository",
+        repository_revision="b" * 40,
+        scan_roots=roots,
+        profile=profile,
+        previous_artifact=base,
+        plan=plan,
+        affected_files=affected_files,
+        current_tracked_paths=current_paths,
+    ).artifact
+    expected = scanner.scan(
+        code_graph_snapshot_id="graph-polyglot-full",
+        project_id="project",
+        repository_id="repository",
+        repository_revision="b" * 40,
+        scan_roots=roots,
+        profile=profile,
+        files=workspace.discover(
+            workspace_root=tmp_path,
+            scan_roots=roots,
+            excluded_globs=exclusions,
+            languages=languages,
+        ),
+    ).artifact
+
+    assert plan.affected_paths == tuple(sorted(current_paths))
+    assert actual["files"] == expected["files"]
+    assert actual["edges"] == expected["edges"]
+    assert actual["diagnostics"] == expected["diagnostics"] == []
+
+
+@pytest.mark.parametrize(
+    (
+        "language",
+        "extension",
+        "repository_content",
+        "service_before",
+        "service_after",
+        "test_content",
+    ),
+    [
+        pytest.param(
+            "javascript",
+            "js",
+            (
+                "export function normalizeOriginal(value) { return value.trim(); }\n"
+                "export function normalizeUpdated(value) { return value.toLowerCase(); }\n"
+            ),
+            (
+                "import { normalizeOriginal } from './repo.js';\n"
+                "export function searchEmployee(value) { return normalizeOriginal(value); }\n"
+            ),
+            (
+                "import { normalizeUpdated } from './repo.js';\n"
+                "export function searchEmployee(value) { return normalizeUpdated(value); }\n"
+            ),
+            (
+                "import { searchEmployee } from '../../src/javascript/app/service.js';\n"
+                "export function verifyEmployee() { return searchEmployee(' A '); }\n"
+            ),
+            id="javascript",
+        ),
+        pytest.param(
+            "typescript",
+            "ts",
+            (
+                "export function normalizeOriginal(value: string): string "
+                "{ return value.trim(); }\n"
+                "export function normalizeUpdated(value: string): string "
+                "{ return value.toLowerCase(); }\n"
+            ),
+            (
+                "import { normalizeOriginal } from './repo';\n"
+                "export function searchEmployee(value: string): string "
+                "{ return normalizeOriginal(value); }\n"
+            ),
+            (
+                "import { normalizeUpdated } from './repo';\n"
+                "export function searchEmployee(value: string): string "
+                "{ return normalizeUpdated(value); }\n"
+            ),
+            (
+                "import { searchEmployee } from '../../src/typescript/app/service';\n"
+                "export function verifyEmployee(): string { return searchEmployee(' A '); }\n"
+            ),
+            id="typescript",
+        ),
+        pytest.param(
+            "kotlin",
+            "kt",
+            (
+                "package demo\n"
+                "fun normalizeOriginal(value: String): String = value.trim()\n"
+                "fun normalizeUpdated(value: String): String = value.lowercase()\n"
+            ),
+            (
+                "package demo\n"
+                "fun searchEmployee(value: String): String = normalizeOriginal(value)\n"
+            ),
+            ("package demo\nfun searchEmployee(value: String): String = normalizeUpdated(value)\n"),
+            ('package demo\nfun verifyEmployee(): String = searchEmployee(" A ")\n'),
+            id="kotlin",
+        ),
+    ],
+)
+def test_incremental_semantic_adapters_match_full_graph_after_call_change(
+    tmp_path: Path,
+    language: str,
+    extension: str,
+    repository_content: str,
+    service_before: str,
+    service_after: str,
+    test_content: str,
+) -> None:
+    source = tmp_path / "src" / language / "app"
+    tests = tmp_path / "tests" / language
+    source.mkdir(parents=True)
+    tests.mkdir(parents=True)
+    (source / f"repo.{extension}").write_text(repository_content, encoding="utf-8")
+    service_path = f"src/{language}/app/service.{extension}"
+    service = tmp_path / service_path
+    service.write_text(service_before, encoding="utf-8")
+    (tests / f"service.test.{extension}").write_text(test_content, encoding="utf-8")
+    profile = _polyglot_profile()
+    workspace = WorkspaceScanner()
+    scanner = CodeGraphScanner()
+    incremental = IncrementalCodeGraphScanner()
+    roots = ("src", "tests")
+    exclusions = tuple(cast(list[str], profile["excluded_globs"]))
+    languages = tuple(cast(list[str], profile["languages"]))
+    initial_files = workspace.discover(
+        workspace_root=tmp_path,
+        scan_roots=roots,
+        excluded_globs=exclusions,
+        languages=languages,
+    )
+    base = scanner.scan(
+        code_graph_snapshot_id=f"graph-{language}-base",
+        project_id="project",
+        repository_id="repository",
+        repository_revision="a" * 40,
+        scan_roots=roots,
+        profile=profile,
+        files=initial_files,
+    ).artifact
+    service.write_text(service_after, encoding="utf-8")
+    current_paths = frozenset(file.path for file in initial_files)
+    changed_files = workspace.discover(
+        workspace_root=tmp_path,
+        scan_roots=roots,
+        excluded_globs=exclusions,
+        languages=languages,
+        allowed_paths=frozenset({service_path}),
+    )
+    plan = incremental.plan(
+        previous_artifact=base,
+        changes=(GitPathChange("M", (service_path,)),),
+        changed_files=changed_files,
+        profile=profile,
+        current_tracked_paths=current_paths,
+    )
+    affected_files = workspace.discover(
+        workspace_root=tmp_path,
+        scan_roots=roots,
+        excluded_globs=exclusions,
+        languages=languages,
+        allowed_paths=frozenset(plan.affected_paths),
+    )
+    actual = incremental.scan(
+        code_graph_snapshot_id=f"graph-{language}-incremental",
+        project_id="project",
+        repository_id="repository",
+        repository_revision="b" * 40,
+        scan_roots=roots,
+        profile=profile,
+        previous_artifact=base,
+        plan=plan,
+        affected_files=affected_files,
+        current_tracked_paths=current_paths,
+    ).artifact
+    expected = scanner.scan(
+        code_graph_snapshot_id=f"graph-{language}-full",
+        project_id="project",
+        repository_id="repository",
+        repository_revision="b" * 40,
+        scan_roots=roots,
+        profile=profile,
+        files=workspace.discover(
+            workspace_root=tmp_path,
+            scan_roots=roots,
+            excluded_globs=exclusions,
+            languages=languages,
+        ),
+    ).artifact
+
+    assert plan.affected_paths == tuple(sorted(current_paths))
+    assert actual["files"] == expected["files"]
+    assert actual["edges"] == expected["edges"]
+    assert actual["diagnostics"] == expected["diagnostics"] == []
 
 
 def test_incremental_body_change_reparses_one_file_in_large_fixture(tmp_path: Path) -> None:

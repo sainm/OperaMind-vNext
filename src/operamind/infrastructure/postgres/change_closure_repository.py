@@ -10,7 +10,7 @@ from typing import Any, cast
 
 from psycopg import Connection
 
-from operamind.contracts import ContractCatalog
+from operamind.contracts import ContractCatalog, project_change_closure_result
 from operamind.infrastructure.postgres.artifact_repository import ArtifactRepository
 from operamind.infrastructure.postgres.errors import PersistenceConflictError
 
@@ -23,6 +23,7 @@ class ChangeClosureEvidence:
     test_data_plan: dict[str, Any]
     coverage_report: dict[str, Any]
     edit_result: dict[str, Any] | None
+    changed_line_coverage: dict[str, Any] | None
     test_data_result: dict[str, Any] | None
     ui_result: dict[str, Any] | None
     ui_test_case_refs: tuple[tuple[str, tuple[str, ...]], ...]
@@ -41,7 +42,42 @@ class ChangeClosureRepository:
 
     def __init__(self, connection: Connection[Any], contracts: ContractCatalog) -> None:
         self._connection = connection
+        self._contracts = contracts
         self._artifacts = ArtifactRepository(connection, contracts)
+
+    def latest_changed_line_coverage(
+        self,
+        *,
+        project_id: str,
+        analysis_case_id: str,
+        orchestration_id: str,
+    ) -> dict[str, Any] | None:
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT result.changed_line_coverage
+                FROM edit_results AS result
+                JOIN edit_packets AS packet
+                  ON packet.edit_packet_id = result.edit_packet_id
+                 AND packet.project_id = result.project_id
+                JOIN change_orchestrations AS orchestration
+                  ON orchestration.impact_report_id = packet.impact_report_id
+                 AND orchestration.project_id = packet.project_id
+                 AND orchestration.analysis_case_id = packet.analysis_case_id
+                WHERE result.project_id = %s
+                  AND result.analysis_case_id = %s
+                  AND orchestration.orchestration_id = %s
+                ORDER BY result.recorded_at DESC, result.edit_result_id DESC
+                LIMIT 1
+                """,
+                (project_id, analysis_case_id, orchestration_id),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        value = cast(dict[str, Any], row[0])
+        self._contracts.validate_artifact(value)
+        return value
 
     def load_evidence(self, orchestration_id: str) -> ChangeClosureEvidence:
         with self._connection.cursor() as cursor:
@@ -64,15 +100,28 @@ class ChangeClosureRepository:
             orchestration_created_at = cast(datetime, row[6])
             cursor.execute(
                 """
-                SELECT edit_result_id, project_id, analysis_case_id,
-                       validation_mode, status, changed_paths, out_of_scope_files,
-                       test_result_refs, tests_passed, command_evidence_status
-                FROM edit_results
-                WHERE project_id = %s AND analysis_case_id = %s
-                ORDER BY recorded_at DESC, edit_result_id DESC
+                SELECT result.edit_result_id, result.project_id,
+                       result.analysis_case_id, result.validation_mode, result.status,
+                       result.base_repository_revision,
+                       result.result_repository_revision,
+                       result.changed_paths, result.out_of_scope_files,
+                       result.test_result_refs, result.tests_passed,
+                       result.command_evidence_status, result.changed_line_coverage
+                FROM edit_results AS result
+                JOIN edit_packets AS packet
+                  ON packet.edit_packet_id = result.edit_packet_id
+                 AND packet.project_id = result.project_id
+                JOIN change_orchestrations AS orchestration
+                  ON orchestration.impact_report_id = packet.impact_report_id
+                 AND orchestration.project_id = packet.project_id
+                 AND orchestration.analysis_case_id = packet.analysis_case_id
+                WHERE result.project_id = %s
+                  AND result.analysis_case_id = %s
+                  AND orchestration.orchestration_id = %s
+                ORDER BY result.recorded_at DESC, result.edit_result_id DESC
                 LIMIT 1
                 """,
-                (project_id, case_id),
+                (project_id, case_id, orchestration_id),
             )
             edit_row = cursor.fetchone()
             cursor.execute(
@@ -128,35 +177,34 @@ class ChangeClosureRepository:
                 "analysis_case_id": str(edit_row[2]),
                 "validation_mode": str(edit_row[3]),
                 "status": str(edit_row[4]),
-                "changed_paths": [str(value) for value in cast(list[object], edit_row[5])],
-                "out_of_scope_files": [
-                    str(value) for value in cast(list[object], edit_row[6])
-                ],
-                "test_result_refs": [
-                    str(value) for value in cast(list[object], edit_row[7])
-                ],
-                "tests_passed": edit_row[8],
-                "command_evidence_status": str(edit_row[9]),
+                "base_repository_revision": str(edit_row[5]),
+                "result_repository_revision": (
+                    str(edit_row[6]) if edit_row[6] is not None else None
+                ),
+                "changed_paths": [str(value) for value in cast(list[object], edit_row[7])],
+                "out_of_scope_files": [str(value) for value in cast(list[object], edit_row[8])],
+                "test_result_refs": [str(value) for value in cast(list[object], edit_row[9])],
+                "tests_passed": edit_row[10],
+                "command_evidence_status": str(edit_row[11]),
             }
+            changed_line_coverage = cast(dict[str, Any], edit_row[12])
+            self._contracts.validate_artifact(changed_line_coverage)
+        else:
+            changed_line_coverage = None
         data_result = None
         if data_row is not None and data_row[0] is not None:
-            data_result = self._required_artifact(
-                str(data_row[0]), "TestDataExecutionResult"
-            )
+            data_result = self._required_artifact(str(data_row[0]), "TestDataExecutionResult")
         ui_result = None
         if ui_row is not None:
             ui_result = self._required_artifact(str(ui_row[0]), "UiVerificationResult")
         return ChangeClosureEvidence(
             change_request=self._required_artifact(request_id, "ChangeRequest"),
-            orchestration=self._required_artifact(
-                orchestration_id, "ChangeOrchestrationPlan"
-            ),
+            orchestration=self._required_artifact(orchestration_id, "ChangeOrchestrationPlan"),
             test_plan=self._required_artifact(test_plan_id, "TestPlan"),
             test_data_plan=self._required_artifact(data_plan_id, "TestDataPlan"),
-            coverage_report=self._required_artifact(
-                coverage_id, "BusinessCoverageReport"
-            ),
+            coverage_report=self._required_artifact(coverage_id, "BusinessCoverageReport"),
             edit_result=edit_result,
+            changed_line_coverage=changed_line_coverage,
             test_data_result=data_result,
             ui_result=ui_result,
             ui_test_case_refs=ui_test_case_refs,
@@ -302,4 +350,31 @@ class ChangeClosureRepository:
             raise PersistenceConflictError(
                 f"Required {artifact_type} Artifact is missing: {artifact_id}"
             )
-        return artifact
+        if artifact_type != "ChangeClosureResult":
+            return artifact
+        projected = project_change_closure_result(artifact)
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT reason FROM profile_drift_impacts
+                WHERE project_id = %s
+                  AND artifact_type = 'ChangeClosureResult'
+                  AND artifact_id = %s
+                  AND resolved_at IS NULL
+                ORDER BY profile_drift_event_id
+                """,
+                (artifact.get("project_id"), artifact_id),
+            )
+            reasons = [str(row[0]) for row in cursor.fetchall()]
+        if not reasons:
+            return projected
+        unresolved = {
+            str(value) for value in cast(list[object], projected.get("unresolved_items", []))
+        }
+        unresolved.update(f"Profile drift: {reason}" for reason in reasons)
+        return {
+            **projected,
+            "compatibility_status": "stale",
+            "status": "blocked",
+            "unresolved_items": sorted(unresolved),
+        }

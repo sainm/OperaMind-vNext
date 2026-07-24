@@ -78,6 +78,89 @@ def test_deterministic_natural_language_change_regenerates_dependent_artifacts()
     assert planned.revision["stale_closure_result_ids"] == ["closure-v1"]
 
 
+def test_expected_result_alone_regenerates_assertion_data_cleanup_and_coverage() -> None:
+    bundle = _bundle()
+    flow = bundle["test_data_plan"]["generation_flows"][0]
+    data_set = bundle["test_data_plan"]["data_sets"][0]
+    flow["cleanup_policy"] = "delete_after_run"
+    data_set["cleanup_policy"] = "delete_after_run"
+    flow["cleanup_steps"] = [
+        {
+            "step_id": "cleanup-expense-data",
+            "sequence": 1,
+            "channel": "fixture",
+            "business_action": "テストデータを削除する",
+            "target": "visiondemo.default-seed",
+            "inputs": {},
+            "depends_on": ["setup-expense-data"],
+            "output_bindings": [],
+            "postconditions": [
+                {
+                    "assertion_id": "cleanup-expense-data-removed",
+                    "observe_via": "fixture",
+                    "subject": "removed",
+                    "operator": "equals",
+                    "expected": True,
+                }
+            ],
+        }
+    ]
+    proposal = (
+        ChangeAnalyzer(repository_root=ROOT)
+        .analyze(
+            bundle=bundle,
+            instruction=(
+                "ケース「経費一覧を確認」の期待結果「4 件を表示する」を「5 件を表示する」に変更"
+            ),
+        )
+        .proposal
+    )
+
+    planned = (
+        RevisionPlanner(repository_root=ROOT)
+        .plan(
+            source_bundle=bundle,
+            proposal=proposal,
+            operations=proposal["operations"],
+            applied_by="qa-user",
+        )
+        .orchestration
+    )
+
+    regenerated_flow = planned.test_data_plan["generation_flows"][0]
+    assert regenerated_flow["final_assertions"][0]["expected"] == "5 件を表示する"
+    assert regenerated_flow["cleanup_steps"] == flow["cleanup_steps"]
+    assert planned.test_data_plan["test_data_plan_id"] != "test-data-plan-v1"
+    assert planned.acceptance_criteria["acceptance_criteria_id"] != "acceptance-v1"
+    assert planned.coverage_report["coverage_report_id"] != "coverage-v1"
+    assert planned.coverage_report["coverage_percent"] == 100
+
+
+def test_japanese_ordinal_can_modify_a_business_visible_step() -> None:
+    bundle = _bundle()
+    proposal = (
+        ChangeAnalyzer(repository_root=ROOT)
+        .analyze(
+            bundle=bundle,
+            instruction=(
+                "ケース「経費一覧を確認」の１番目のステップを「経費一覧画面を開く」に変更"
+            ),
+        )
+        .proposal
+    )
+
+    assert proposal["analysis_status"] == "deterministic"
+    assert proposal["operations"][0]["index"] == 0
+    assert proposal["operations"][0]["before"] == "一覧を開く"
+    planned = RevisionPlanner(repository_root=ROOT).plan(
+        source_bundle=bundle,
+        proposal=proposal,
+        operations=proposal["operations"],
+        applied_by="qa-user",
+    )
+    assert planned.orchestration.test_plan["test_cases"][0]["steps"][0] == ("経費一覧画面を開く")
+
+
 def test_ambiguous_case_target_requires_one_explicit_option() -> None:
     bundle = _bundle(two_cases=True)
     proposal = (
@@ -212,8 +295,7 @@ def test_undo_planner_restores_prior_content_as_a_new_immutable_version() -> Non
     proposal = analyzer.analyze(
         bundle=source,
         instruction=(
-            "ケース「経費一覧を確認」のステップ「一覧を開く」を"
-            "「経費一覧画面を開く」に変更"
+            "ケース「経費一覧を確認」のステップ「一覧を開く」を「経費一覧画面を開く」に変更"
         ),
     ).proposal
     changed = planner.plan(
@@ -245,9 +327,7 @@ def test_undo_planner_restores_prior_content_as_a_new_immutable_version() -> Non
     assert undo_proposal["proposal_kind"] == "undo"
     assert restored.revision["revision_kind"] == "undo"
     assert restored.revision["undo_of_revision_id"] == changed.revision["revision_id"]
-    assert restored.orchestration.test_plan["test_cases"] == source["test_plan"][
-        "test_cases"
-    ]
+    assert restored.orchestration.test_plan["test_cases"] == source["test_plan"]["test_cases"]
     assert restored.orchestration.orchestration["orchestration_id"] not in {
         source["orchestration"]["orchestration_id"],
         current["orchestration"]["orchestration_id"],

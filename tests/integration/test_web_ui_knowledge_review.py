@@ -28,10 +28,12 @@ from operamind.domain import (
 from operamind.infrastructure.postgres import (
     MigrationCatalog,
     MigrationRunner,
+    ProfileRepository,
     UiKnowledgeRepository,
     UiKnowledgeReviewQueryRepository,
     UiLocatorObservationRepository,
 )
+from operamind.profiles import ProfileCatalog
 
 ROOT = Path(__file__).parents[2]
 DATABASE_URL = os.getenv("OPERAMIND_TEST_DATABASE_URL")
@@ -87,8 +89,7 @@ def test_ui_knowledge_review_queue_preserves_observation_evidence_and_versions()
                         observation_id=observation_id,
                         target_ref="expense.status-filter",
                         evidence_ref=(
-                            f"evidence://visiondemo/{run_id}/"
-                            f"knowledge-evidence-{suffix}"
+                            f"evidence://visiondemo/{run_id}/knowledge-evidence-{suffix}"
                         ),
                         content_digest=("a" if suffix == "approved" else "b") * 64,
                     ),
@@ -104,8 +105,7 @@ def test_ui_knowledge_review_queue_preserves_observation_evidence_and_versions()
         queue = query.review_queue(project_id="visiondemo")
         assert queue["draft_count"] == 2
         drafts = {
-            str(item["snapshot_id"]): item
-            for item in cast(list[dict[str, Any]], queue["drafts"])
+            str(item["snapshot_id"]): item for item in cast(list[dict[str, Any]], queue["drafts"])
         }
         approved_target = drafts["knowledge-draft-approved"]["targets"][0]
         assert approved_target["business_name"] == "ステータス絞り込み"
@@ -118,7 +118,11 @@ def test_ui_knowledge_review_queue_preserves_observation_evidence_and_versions()
         }
         assert approved_target["evidence"]["content_digest"] == "a" * 64
 
-        reviewer = UiKnowledgeReviewService(connection=connection)
+        profile_catalog = ProfileCatalog.load(ROOT / "profiles")
+        reviewer = UiKnowledgeReviewService(
+            connection=connection,
+            profiles=profile_catalog,
+        )
         approved = reviewer.review(
             UiKnowledgeReviewRequest(
                 project_id="visiondemo",
@@ -149,13 +153,20 @@ def test_ui_knowledge_review_queue_preserves_observation_evidence_and_versions()
         after = query.review_queue(project_id="visiondemo")
         assert after["draft_count"] == 0
         versions = {
-            str(item["snapshot_id"]): item
-            for item in cast(list[dict[str, Any]], after["versions"])
+            str(item["snapshot_id"]): item for item in cast(list[dict[str, Any]], after["versions"])
         }
         assert versions["knowledge-reviewed-approved"]["reason"] == (
             "一意性、表示状態、証跡を確認しました"
         )
         assert versions["knowledge-reviewed-rejected"]["review_status"] == "rejected"
+        active_locator = ProfileRepository(connection, profile_catalog).get_active(
+            project_id="visiondemo",
+            binding_key="ui-locator:visiondemo-local:visiondemo-revision",
+        )
+        assert active_locator is not None
+        assert active_locator.profile["profile_type"] == "UiLocatorProfile"
+        assert active_locator.profile["ui_knowledge_snapshot_id"] == "knowledge-reviewed-approved"
+        assert active_locator.profile["target_refs"] == ["expense.status-filter"]
 
         with connection.cursor() as cursor:
             cursor.execute("SET search_path TO public")

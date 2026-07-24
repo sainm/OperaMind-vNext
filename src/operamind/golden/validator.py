@@ -21,7 +21,7 @@ CASE_JSON_REFERENCES = (
     "expected_code_scope",
     "expected_ui_scenarios",
 )
-OPTIONAL_CASE_JSON_REFERENCES = ("test_data_plan",)
+OPTIONAL_CASE_JSON_REFERENCES = ("test_data_plan", "source_fixture")
 CASE_FILE_REFERENCES = (*CASE_JSON_REFERENCES, *OPTIONAL_CASE_JSON_REFERENCES, "review")
 GOLDEN_DATASET_DIGEST_ALGORITHM = "operamind-golden-dataset-v1"
 GOLDEN_DATASET_SCHEMA_FILES = (
@@ -47,9 +47,18 @@ class GoldenDatasetValidator:
         root = self.dataset_root.resolve()
         manifest = self._load_object(manifest_path)
         schema = self._load_object(root / "manifest.schema.json")
+        raw_cases = manifest.get("cases")
+        if isinstance(raw_cases, list) and any(
+            isinstance(case, dict) and "source_fixture" in case for case in raw_cases
+        ):
+            case_schema = schema.get("$defs", {}).get("case", {})
+            properties = case_schema.get("properties", {})
+            if isinstance(properties, dict):
+                properties["source_fixture"] = {"type": "string", "minLength": 1}
         rag_expectation_schema = self._load_object(root / "expected-rag-context.schema.json")
         ui_expectation_schema = self._load_object(root / "expected-ui-scenarios.schema.json")
         review_schema = self._load_object(root / "review.schema.json")
+        source_fixture_schema = self._load_object(root / "source-fixture.schema.json")
         issues = self._schema_issues(manifest, schema, manifest_path)
         if issues:
             return ValidationReport(tuple(issues))
@@ -79,6 +88,7 @@ class GoldenDatasetValidator:
                     rag_expectation_schema=rag_expectation_schema,
                     ui_expectation_schema=ui_expectation_schema,
                     review_schema=review_schema,
+                    source_fixture_schema=source_fixture_schema,
                 )
             )
 
@@ -101,6 +111,8 @@ class GoldenDatasetValidator:
         if not isinstance(raw_cases, list) or not all(isinstance(case, dict) for case in raw_cases):
             raise ValueError("Golden Dataset manifest cases must be a list of objects")
         selected = {path, *(root / name for name in GOLDEN_DATASET_SCHEMA_FILES)}
+        if any("source_fixture" in case for case in raw_cases):
+            selected.add(root / "source-fixture.schema.json")
         for case in raw_cases:
             for key in CASE_FILE_REFERENCES:
                 raw_reference = case.get(key)
@@ -142,6 +154,7 @@ class GoldenDatasetValidator:
         rag_expectation_schema: dict[str, Any],
         ui_expectation_schema: dict[str, Any],
         review_schema: dict[str, Any],
+        source_fixture_schema: dict[str, Any],
     ) -> list[ValidationIssue]:
         issues: list[ValidationIssue] = []
         case_id = str(case["case_id"])
@@ -195,6 +208,22 @@ class GoldenDatasetValidator:
                             payload=payload,
                             case=case,
                             location=f"{location}/{key}",
+                        )
+                    )
+                elif key == "source_fixture":
+                    validator = Draft202012Validator(source_fixture_schema)
+                    issues.extend(
+                        ValidationIssue(
+                            code="golden.source_fixture_schema_violation",
+                            message=error.message,
+                            location=(
+                                f"{location}/{key}/"
+                                + "/".join(str(part) for part in error.absolute_path)
+                            ).rstrip("/"),
+                        )
+                        for error in sorted(
+                            validator.iter_errors(payload),
+                            key=lambda item: list(item.path),
                         )
                     )
                 elif key == "expected_rag_context":
@@ -289,10 +318,7 @@ class GoldenDatasetValidator:
     ) -> list[ValidationIssue]:
         schema_path = root.parent / "contracts/schemas/test-data-plan.schema.json"
         if not schema_path.is_file():
-            schema_path = (
-                Path(__file__).parents[3]
-                / "contracts/schemas/test-data-plan.schema.json"
-            )
+            schema_path = Path(__file__).parents[3] / "contracts/schemas/test-data-plan.schema.json"
         schema = GoldenDatasetValidator._load_object(schema_path)
         issues = [
             ValidationIssue(

@@ -1,0 +1,22 @@
+{
+  "case_id": "visiondemo-screen-approval-note-added",
+  "dataset_stage": "silver",
+  "base_repository_revision": "ad23d0a7a54ce196c0ea6c41445e5f5492ae1ea6",
+  "must_include_candidates": [
+    {
+      "path": "VisionDemo/src/main/webapp/WEB-INF/jsp/fragments/expense-list.jsp",
+      "symbols": ["approval-note"],
+      "expected_action": "add_candidate",
+      "reason": "追加項目を表示する画面テンプレート"
+    }
+  ],
+  "required_test_scope": [
+    {
+      "target": "承認者向け補足の表示",
+      "expected": "経費精算申請一覧に補足項目が表示される",
+      "acceptable_test_layers": ["browser"]
+    }
+  ],
+  "must_not_modify_paths": ["VisionDemo/pom.xml"],
+  "review_status": "needs_developer_review"
+}

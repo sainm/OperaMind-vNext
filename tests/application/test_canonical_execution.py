@@ -56,8 +56,7 @@ def _plan(artifacts: dict[str, dict[str, Any]]) -> ChangeLoopPlan:
         git=None,
         document_diff=None,
         artifacts=tuple(
-            artifacts[value]
-            for value in ("packet-1", "impact-1", "confirmation-1", "graph-1")
+            artifacts[value] for value in ("packet-1", "impact-1", "confirmation-1", "graph-1")
         ),
         replacements=(TextReplacement("src/App.java", "before", "after"),),
         allowed_edit_paths=frozenset({"src/App.java"}),
@@ -83,13 +82,9 @@ def _authorizer(
     packet_repository = SimpleNamespace(
         get=lambda _: SimpleNamespace(status="active", impact_report_status="confirmed")
     )
-    impact_repository = SimpleNamespace(
-        get_state=lambda _: SimpleNamespace(status="confirmed")
-    )
+    impact_repository = SimpleNamespace(get_state=lambda _: SimpleNamespace(status="confirmed"))
     monkeypatch.setattr(canonical_module, "ArtifactRepository", lambda *_: artifact_repository)
-    monkeypatch.setattr(
-        canonical_module, "ApprovalGrantRepository", lambda *_: grant_repository
-    )
+    monkeypatch.setattr(canonical_module, "ApprovalGrantRepository", lambda *_: grant_repository)
     monkeypatch.setattr(canonical_module, "EditPacketRepository", lambda *_: packet_repository)
     monkeypatch.setattr(canonical_module, "ImpactRepository", lambda *_: impact_repository)
     return PostgresCanonicalExecutionAuthorizer(

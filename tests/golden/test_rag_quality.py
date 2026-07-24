@@ -126,3 +126,46 @@ def test_rag_quality_rejects_missing_query_purpose() -> None:
 
     with pytest.raises(ValueError, match="all three query purposes"):
         RagQualityEvaluator().evaluate(expected=expectation(), observed=observed)
+
+
+def test_rag_quality_counts_reviewed_semantic_ref_for_physical_node() -> None:
+    expected = expectation()
+    cast_expectations = expected["query_expectations"]
+    assert isinstance(cast_expectations, list)
+    for index, target_id in enumerate(("semantic-a", "semantic-c", "semantic-d")):
+        item = cast_expectations[index]
+        assert isinstance(item, dict)
+        item["required_candidate_refs"] = [target_id]
+        item["irrelevant_candidate_refs"] = []
+    expected["quality_thresholds"] = {
+        "min_recall_at_5": 1.0,
+        "min_recall_at_10": 1.0,
+        "min_mrr": 1.0,
+        "max_irrelevant_rate": 0.0,
+        "max_cross_project_leaks": 0,
+    }
+    observed = {
+        "case_id": "case-1",
+        "project_id": "project-1",
+        "query_results": [
+            {
+                "query_purpose": purpose,
+                "candidates": [
+                    {
+                        "target_id": f"node-{index}",
+                        "project_id": "project-1",
+                        "semantic_refs": [semantic_ref],
+                    }
+                ],
+            }
+            for index, (purpose, semantic_ref) in enumerate(
+                zip(PURPOSES, ("semantic-a", "semantic-c", "semantic-d"), strict=True)
+            )
+        ],
+    }
+
+    result = RagQualityEvaluator().evaluate(expected=expected, observed=observed)
+
+    assert result.passed
+    assert result.metrics.recall_at_5 == 1.0
+    assert result.metrics.mrr == 1.0

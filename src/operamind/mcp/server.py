@@ -15,6 +15,7 @@ from psycopg import Connection
 from operamind.application import (
     ApprovedCommandRequest,
     ApprovedCommandService,
+    ChangedLineCoverageEvidence,
     ControlPlaneQueryService,
     CopilotCodingTaskService,
     CopilotHandoffRequest,
@@ -53,6 +54,42 @@ def _schema(properties: Mapping[str, object], required: tuple[str, ...]) -> dict
         "additionalProperties": False,
         "properties": dict(properties),
         "required": list(required),
+    }
+
+
+def _changed_line_coverage_schema() -> dict[str, object]:
+    line_map = {
+        "type": "object",
+        "additionalProperties": {
+            "type": "array",
+            "items": {"type": "integer", "minimum": 1},
+            "uniqueItems": True,
+        },
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "evidence_refs": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": True,
+                "items": _string(),
+            },
+            "executable_lines": line_map,
+            "covered_lines": line_map,
+            "minimum_coverage_percent": {
+                "type": "number",
+                "minimum": 80,
+                "maximum": 100,
+            },
+        },
+        "required": [
+            "evidence_refs",
+            "executable_lines",
+            "covered_lines",
+            "minimum_coverage_percent",
+        ],
     }
 
 
@@ -178,7 +215,8 @@ TOOLS: tuple[dict[str, object], ...] = (
         "title": "Record committed edit result",
         "description": (
             "Validate a clean committed worktree and bind the result to audited command "
-            "execution IDs from the same Grant and Packet."
+            "execution IDs from the same Grant and Packet. For source changes, provide "
+            "changed_line_coverage or Closure will remain blocked."
         ),
         "inputSchema": _schema(
             {
@@ -191,6 +229,7 @@ TOOLS: tuple[dict[str, object], ...] = (
                     "items": _string(),
                 },
                 "tests_passed": {"type": "boolean"},
+                "changed_line_coverage": _changed_line_coverage_schema(),
             },
             (
                 *COMMON_SCOPE_PROPERTIES,
@@ -279,7 +318,8 @@ TOOLS: tuple[dict[str, object], ...] = (
         "title": "Record the committed Coding Task result",
         "description": (
             "Validate the committed Diff, bind the Task command evidence, and publish the "
-            "final result to OperaMind Web without a response file."
+            "final result to OperaMind Web without a response file. Source changes require "
+            "changed_line_coverage evidence before Closure can pass."
         ),
         "inputSchema": _schema(
             {
@@ -293,6 +333,7 @@ TOOLS: tuple[dict[str, object], ...] = (
                     "items": _string(),
                 },
                 "tests_passed": {"type": "boolean"},
+                "changed_line_coverage": _changed_line_coverage_schema(),
             },
             (
                 "coding_task_id",
@@ -466,6 +507,7 @@ class CopilotToolDispatcher:
                     str(value) for value in cast(list[object], args["test_result_refs"])
                 ),
                 tests_passed=cast(bool, args["tests_passed"]),
+                changed_line_coverage=_changed_line_coverage(args),
             )
         if name == "verification_get_ui_plan":
             return queries.get_ui_plan(
@@ -524,6 +566,7 @@ class CopilotToolDispatcher:
                     mode=mode,
                     test_result_refs=refs,
                     tests_passed=tests_passed,
+                    changed_line_coverage=_changed_line_coverage(args),
                 )
             )
             .to_dict()
@@ -669,6 +712,17 @@ def _handoff_request(args: dict[str, object]) -> CopilotHandoffRequest:
         approval_grant_id=_text(args, "approval_grant_id"),
         workspace_root=Path(_text(args, "workspace_root")),
     )
+
+
+def _changed_line_coverage(
+    args: dict[str, object],
+) -> ChangedLineCoverageEvidence | None:
+    value = args.get("changed_line_coverage")
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("changed_line_coverage must be an object")
+    return ChangedLineCoverageEvidence.from_dict(cast(dict[str, Any], value))
 
 
 def _text(args: dict[str, object], key: str) -> str:

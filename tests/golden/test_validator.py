@@ -99,6 +99,45 @@ def test_dataset_digest_binds_every_referenced_case_file(tmp_path: Path) -> None
     assert sha256(manifest_path.read_bytes()).hexdigest() == manifest_digest
 
 
+def test_silver_dataset_digest_binds_portable_source_fixtures(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "golden-dataset"
+    shutil.copytree(ROOT / "golden-dataset", dataset_root)
+    manifest_path = dataset_root / "manifest.silver.json"
+    validator = GoldenDatasetValidator(dataset_root)
+    before = validator.dataset_digest(manifest_path)
+    fixture_path = dataset_root / (
+        "cases/visiondemo-screen-approval-note-added/source-fixture.silver.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    fixture["after"]["sheets"][1]["rows"][2][3] = "変更された候補値"
+    fixture_path.write_text(
+        json.dumps(fixture, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    after = validator.dataset_digest(manifest_path)
+
+    assert before != after
+
+
+def test_source_fixture_schema_only_affects_manifests_that_reference_it(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "golden-dataset"
+    shutil.copytree(ROOT / "golden-dataset", dataset_root)
+    validator = GoldenDatasetValidator(dataset_root)
+    golden_path = dataset_root / "manifest.golden.json"
+    silver_path = dataset_root / "manifest.silver.json"
+    golden_before = validator.dataset_digest(golden_path)
+    silver_before = validator.dataset_digest(silver_path)
+    schema_path = dataset_root / "source-fixture.schema.json"
+    schema_path.write_text(
+        schema_path.read_text(encoding="utf-8") + "\n",
+        encoding="utf-8",
+    )
+
+    assert validator.dataset_digest(golden_path) == golden_before
+    assert validator.dataset_digest(silver_path) != silver_before
+
+
 def test_ui_expectation_schema_and_cross_references_are_enforced(tmp_path: Path) -> None:
     dataset_root = tmp_path / "golden-dataset"
     shutil.copytree(ROOT / "golden-dataset", dataset_root)
@@ -139,11 +178,7 @@ def test_silver_test_data_plan_schema_and_execution_semantics_are_enforced(
         encoding="utf-8",
     )
 
-    report = GoldenDatasetValidator(dataset_root).validate(
-        dataset_root / "manifest.silver.json"
-    )
+    report = GoldenDatasetValidator(dataset_root).validate(dataset_root / "manifest.silver.json")
 
     assert not report.is_valid
-    assert "golden.test_data_plan_semantic_violation" in {
-        issue.code for issue in report.issues
-    }
+    assert "golden.test_data_plan_semantic_violation" in {issue.code for issue in report.issues}

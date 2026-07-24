@@ -40,9 +40,9 @@ def test_change_cases_cli_exposes_productized_operations() -> None:
 
 
 def test_catalog_discovers_all_cases_and_reports_missing_external_documents() -> None:
-    discovered = ChangeLoopCaseCatalog(
-        repository_root=ROOT, cases_root=CASES
-    ).discover(require_after=True)
+    discovered = ChangeLoopCaseCatalog(repository_root=ROOT, cases_root=CASES).discover(
+        require_after=True
+    )
 
     assert {case.case_id for case in discovered} == {
         "visiondemo-employee-blank-name",
@@ -51,8 +51,7 @@ def test_catalog_discovers_all_cases_and_reports_missing_external_documents() ->
     }
     assert all(case.case is not None for case in discovered)
     assert all(
-        "before_document_missing" in {issue.code for issue in case.issues}
-        for case in discovered
+        "before_document_missing" in {issue.code for issue in case.issues} for case in discovered
     )
     assert {
         case.case_id
@@ -111,27 +110,17 @@ def test_catalog_detects_manifest_identity_mismatch(tmp_path: Path) -> None:
         json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
     )
 
-    discovered = ChangeLoopCaseCatalog(
-        repository_root=ROOT, cases_root=cases_root
-    ).discover()
+    discovered = ChangeLoopCaseCatalog(repository_root=ROOT, cases_root=cases_root).discover()
 
     assert len(discovered) == 1
-    assert "manifest_identity_mismatch" in {
-        issue.code for issue in discovered[0].issues
-    }
+    assert "manifest_identity_mismatch" in {issue.code for issue in discovered[0].issues}
 
 
 def test_failure_classification_has_four_explicit_outcomes() -> None:
     assert classify_blocked_error("Requirement needs confirmation") == "needs_confirmation"
     assert classify_blocked_error("Workspace revision mismatch") == "reanalysis_required"
-    assert (
-        classify_validation_issues(("before_document_missing",))
-        == "environment_failed"
-    )
-    assert (
-        classify_closure({"status": "failed", "unresolved_items": []})
-        == "business_failed"
-    )
+    assert classify_validation_issues(("before_document_missing",)) == "environment_failed"
+    assert classify_closure({"status": "failed", "unresolved_items": []}) == "business_failed"
 
 
 def test_batch_runner_writes_schema_valid_failure_summary(tmp_path: Path) -> None:
@@ -183,9 +172,7 @@ def test_isolated_git_worktree_is_removed_after_use(tmp_path: Path) -> None:
     revision = _git(repository, "rev-parse", "HEAD").stdout.strip()
     worktree = tmp_path / "worktree"
 
-    with IsolatedGitWorktree(
-        repository=repository, path=worktree, revision=revision
-    ) as isolated:
+    with IsolatedGitWorktree(repository=repository, path=worktree, revision=revision) as isolated:
         assert (isolated / "tracked.txt").read_text(encoding="utf-8") == "base\n"
 
     assert not worktree.exists()

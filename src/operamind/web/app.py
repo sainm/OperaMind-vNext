@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
+import secrets
 import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -42,6 +45,7 @@ def create_app(
     repository_root: Path,
     database_url: str,
     bridge_token: str | None = None,
+    web_token: str | None = None,
     orchestration_scheduling_policy: OrchestrationSchedulingPolicy | None = None,
     test_data_executor_factory: TestDataExecutorFactory = default_test_data_executor_factory,
 ) -> FastAPI:
@@ -54,6 +58,7 @@ def create_app(
     app.state.database_url = database_url
     app.state.test_data_executor_factory = test_data_executor_factory
     app.state.bridge_token = bridge_token
+    app.state.web_token = web_token
     app.state.orchestration_scheduling_policy = (
         orchestration_scheduling_policy or OrchestrationSchedulingPolicy()
     )
@@ -62,6 +67,28 @@ def create_app(
         database_url=database_url,
         bridge_enabled=bool(bridge_token),
     )
+
+    @app.middleware("http")
+    async def authenticate_local_web(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        if (
+            web_token
+            and request.url.path != "/health"
+            and not request.url.path.startswith("/api/v1/local-bridge")
+            and not _web_token_matches(request, web_token)
+        ):
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "code": "web_authentication_required",
+                    "message": "OperaMind Web の認証が必要です",
+                    "details": None,
+                    "trace_id": getattr(request.state, "trace_id", "unavailable"),
+                },
+                headers={"WWW-Authenticate": 'Basic realm="OperaMind Web", charset="UTF-8"'},
+            )
+        return await call_next(request)
 
     @app.middleware("http")
     async def trace_request(
@@ -121,6 +148,29 @@ def create_app(
     app.include_router(orchestration_tasks.router)
     app.mount("/", StaticFiles(directory=static_root, html=True), name="web")
     return app
+
+
+def _web_token_matches(request: Request, expected: str) -> bool:
+    authorization = request.headers.get("Authorization", "")
+    bearer_prefix = "Bearer "
+    if authorization.startswith(bearer_prefix):
+        supplied = authorization[len(bearer_prefix) :]
+        return bool(supplied) and secrets.compare_digest(supplied, expected)
+    basic_prefix = "Basic "
+    if not authorization.startswith(basic_prefix):
+        return False
+    try:
+        decoded = base64.b64decode(authorization[len(basic_prefix) :], validate=True).decode(
+            "utf-8"
+        )
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    username, separator, supplied = decoded.partition(":")
+    return (
+        separator == ":"
+        and secrets.compare_digest(username, "operamind")
+        and secrets.compare_digest(supplied, expected)
+    )
 
 
 def _error(

@@ -53,6 +53,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "passed": result.passed,
                     "metrics": asdict(result.metrics),
                     "failures": list(result.failures),
+                    "queries": [asdict(query) for query in result.queries],
                 },
                 ensure_ascii=False,
                 indent=2,

@@ -77,9 +77,7 @@ def validate_test_data_plan_flows(
         available_variables: set[str] = set()
         for step in steps:
             step_id = str(step.get("step_id", "<unknown>"))
-            dependencies = {
-                str(value) for value in cast(list[object], step.get("depends_on", []))
-            }
+            dependencies = {str(value) for value in cast(list[object], step.get("depends_on", []))}
             if not dependencies.issubset(available_steps):
                 reasons.append(f"{flow_id}/{step_id}: depends_on must reference earlier steps")
             referenced_variables = _variables_in(step.get("inputs", {})) | _variables_in(
@@ -125,13 +123,9 @@ def validate_test_data_plan_flows(
         cleanup_step_ids: set[str] = set()
         for step in cleanup_steps:
             step_id = str(step.get("step_id", "<unknown>"))
-            dependencies = {
-                str(value) for value in cast(list[object], step.get("depends_on", []))
-            }
+            dependencies = {str(value) for value in cast(list[object], step.get("depends_on", []))}
             if not dependencies.issubset(available_steps | cleanup_step_ids):
-                reasons.append(
-                    f"{flow_id}/{step_id}: cleanup depends_on references unknown steps"
-                )
+                reasons.append(f"{flow_id}/{step_id}: cleanup depends_on references unknown steps")
             referenced_variables = _variables_in(step.get("inputs", {})) | _variables_in(
                 step.get("target", "")
             )
@@ -269,9 +263,7 @@ def _legacy_step(
     }
 
 
-def _setup_request(
-    case: ChangeLoopCase, target: str
-) -> dict[str, Any] | None:
+def _setup_request(case: ChangeLoopCase, target: str) -> dict[str, Any] | None:
     normalized = target.strip().upper()
     for setup in cast(list[dict[str, Any]], case.execution["setup_requests"]):
         request = cast(dict[str, Any], setup["request"])
@@ -292,9 +284,7 @@ def _setup_request_assertions(setup: dict[str, Any] | None) -> list[dict[str, An
             "operator": str(value["operator"]),
             "expected": value.get("expected"),
         }
-        for index, value in enumerate(
-            cast(list[dict[str, Any]], setup["assertions"]), start=1
-        )
+        for index, value in enumerate(cast(list[dict[str, Any]], setup["assertions"]), start=1)
     ]
 
 

@@ -126,7 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
     observation.add_argument(
         "--browser-name", choices=("chromium", "firefox", "webkit"), default="chromium"
     )
-    observation.add_argument("--browser-channel", choices=("chrome", "msedge"), default="chrome")
+    observation.add_argument("--browser-channel", choices=("chrome", "msedge"), default="msedge")
     observation.add_argument("--headed", action="store_true")
     observation.add_argument("--viewport-width", type=int, default=1280)
     observation.add_argument("--viewport-height", type=int, default=720)
@@ -237,9 +237,7 @@ def _dispatch(
                 review_status=args.review_status,
                 activate=args.activate,
                 test_case_refs=(
-                    _strings(raw, "test_case_refs")
-                    if "test_case_refs" in raw
-                    else (scenario_id,)
+                    _strings(raw, "test_case_refs") if "test_case_refs" in raw else (scenario_id,)
                 ),
             )
         )
@@ -368,9 +366,7 @@ def _dispatch_browser(
             viewport_height=args.viewport_height,
             timeout_ms=args.timeout_ms,
             navigation_timeout_ms=args.navigation_timeout_ms,
-            evidence_store=LocalEvidenceStore(
-                root / "readiness" / "evidence" / "test-data"
-            ),
+            evidence_store=LocalEvidenceStore(root / "readiness" / "evidence" / "test-data"),
         )
         observation_service = UiRuntimeObservationService(
             connection=connection,

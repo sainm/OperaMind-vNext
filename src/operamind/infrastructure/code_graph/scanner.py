@@ -19,6 +19,12 @@ from operamind.infrastructure.code_graph.java import (
     code_edge_id,
     code_file_id,
 )
+from operamind.infrastructure.code_graph.semantic import (
+    SEMANTIC_EXTRACTOR_BY_LANGUAGE,
+    SemanticAdapterRegistry,
+    SemanticFileExtraction,
+    resolve_semantic_relations,
+)
 from operamind.infrastructure.code_graph.workspace import DiscoveredCodeFile
 
 
@@ -36,6 +42,7 @@ class CodeGraphScanner:
 
     def __init__(self) -> None:
         self._java = JavaTreeSitterExtractor()
+        self._semantic = SemanticAdapterRegistry()
 
     def scan(
         self,
@@ -96,6 +103,7 @@ class CodeGraphScanner:
             diagnostics.append("no_supported_files")
 
         java_extractions: list[JavaFileExtraction] = []
+        semantic_extractions: list[SemanticFileExtraction] = []
         symbols_by_path: dict[str, list[dict[str, object]]] = {file.path: [] for file in files}
         all_java_symbols: list[JavaSymbol] = []
         all_java_types: list[JavaType] = []
@@ -119,6 +127,17 @@ class CodeGraphScanner:
                 symbols_by_path[file.path].extend(
                     symbol.to_artifact() for symbol in extraction.symbols
                 )
+            if file.language in self._semantic.languages:
+                semantic_extraction = self._semantic.extract(
+                    file=file,
+                    enabled_extractors=enabled_extractors,
+                )
+                semantic_extractions.append(semantic_extraction)
+                diagnostics.extend(semantic_extraction.diagnostics)
+                symbols_by_path[file.path].extend(
+                    symbol.to_artifact() for symbol in semantic_extraction.symbols
+                )
+                direct_edges.extend(semantic_extraction.direct_edges)
             if file.language == "properties" and "config_key" in enabled_extractors:
                 lexical_symbols, lexical_edges = _extract_properties(file)
                 symbols_by_path[file.path].extend(lexical_symbols)
@@ -138,6 +157,19 @@ class CodeGraphScanner:
                 junit_enabled="junit_test" in enabled_extractors,
             )
         )
+        resolved_edges.extend(
+            resolve_semantic_relations(
+                relations=tuple(
+                    relation
+                    for extraction in semantic_extractions
+                    for relation in extraction.relations
+                ),
+                symbols=tuple(
+                    symbol for extraction in semantic_extractions for symbol in extraction.symbols
+                ),
+                files=tuple(file for file in files if file.language in self._semantic.languages),
+            )
+        )
         framework = extract_framework_graph(
             files=files,
             java_symbols=tuple(all_java_symbols),
@@ -147,6 +179,7 @@ class CodeGraphScanner:
             edges=tuple(resolved_edges),
             enabled_extractors=enabled_extractors,
         )
+        diagnostics.extend(framework.diagnostics)
         resolved_edges = list(framework.edges)
         edge_artifacts: dict[str, dict[str, object]] = {}
         for edge in resolved_edges:
@@ -213,22 +246,29 @@ _SUPPORTED_EXTRACTORS = frozenset(
         "config_key",
         "java_field_access",
         "java_symbol",
+        "javascript_symbol",
         "junit_test",
+        "kotlin_symbol",
+        "python_symbol",
         "spring_config_binding",
         "spring_data_access",
         "spring_endpoint",
+        "struts1_mvc",
         "sql_table",
         "web_ui_route",
+        "typescript_symbol",
     }
 )
 _REQUIRED_EXTRACTOR_BY_LANGUAGE = {
-    "javascript": "web_ui_route",
+    **SEMANTIC_EXTRACTOR_BY_LANGUAGE,
     "java": "java_symbol",
     "properties": "config_key",
     "sql": "sql_table",
     "xml": "web_ui_route",
 }
-_SEMANTIC_CODE_LANGUAGES = frozenset({"java", "javascript", "properties", "sql", "xml"})
+_SEMANTIC_CODE_LANGUAGES = frozenset(
+    {"java", "properties", "sql", "xml", *SEMANTIC_EXTRACTOR_BY_LANGUAGE}
+)
 _SQL_TABLE = re.compile(
     r"\b(?P<operation>CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|INSERT\s+INTO|UPDATE|FROM|JOIN)\s+"
     r"(?P<table>[A-Za-z_][A-Za-z0-9_.$\"]*)",

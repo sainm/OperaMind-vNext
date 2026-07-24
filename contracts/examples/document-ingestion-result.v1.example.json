@@ -20,6 +20,16 @@
   "target_content_digest": "2222222222222222222222222222222222222222222222222222222222222222",
   "source_extractor_ref": "operamind-xlsx-structural@1+openpyxl-3.1.5",
   "target_extractor_ref": "operamind-xlsx-structural@1+openpyxl-3.1.5",
+  "source_variant_ids": ["screen-item-table-ja"],
+  "target_variant_ids": ["screen-item-table-ja"],
+  "source_fact_variant_ids": {
+    "fact-screen-status-before-001": "screen-item-table-ja"
+  },
+  "target_fact_variant_ids": {
+    "fact-screen-status-after-001": "screen-item-table-ja"
+  },
+  "source_ignored_sections": [],
+  "target_ignored_sections": [],
   "uploaded_document_count": 27,
   "changed_document_count": 1,
   "structured_change_count": 1,

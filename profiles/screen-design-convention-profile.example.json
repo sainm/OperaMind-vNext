@@ -38,6 +38,47 @@
         "screen_id": "casefold",
         "element_id": "casefold"
       }
+    },
+    {
+      "variant_id": "screen-event-table-ja",
+      "signals": [
+        {"type": "sheet_name", "values": ["イベント一覧", "Events"], "weight": 0.35},
+        {"type": "headers", "values": ["イベント名", "発生源", "トリガー"], "weight": 0.45},
+        {"type": "filename_token", "values": ["画面設計書", "Screen Design"], "weight": 0.2}
+      ],
+      "field_aliases": {
+        "screen_id": ["画面ID", "Screen ID"],
+        "event_name": ["イベント名", "Event Name", "操作"],
+        "source": ["発生源", "Source"],
+        "trigger": ["トリガー", "Trigger"],
+        "target": ["遷移先", "対象", "Target"],
+        "description": ["処理内容", "備考", "説明", "Description"],
+        "api_call": ["呼出API", "API Call"],
+        "error_handling": ["エラーハンドリング", "Error Handling"]
+      },
+      "stable_key_fields": ["screen_id", "event_name"],
+      "stable_key_normalizers": {
+        "screen_id": "casefold",
+        "event_name": "preserve"
+      }
+    },
+    {
+      "variant_id": "screen-overview-table-ja",
+      "signals": [
+        {"type": "sheet_name", "values": ["画面概要", "Screen Overview"], "weight": 0.35},
+        {"type": "headers", "values": ["画面ID", "画面名"], "weight": 0.45},
+        {"type": "filename_token", "values": ["画面設計書", "Screen Design"], "weight": 0.2}
+      ],
+      "field_aliases": {
+        "screen_id": ["画面ID", "Screen ID"],
+        "screen_name": ["画面名", "Screen Name"],
+        "description": ["画面概要", "概要", "Description"]
+      },
+      "stable_key_fields": ["screen_id", "screen_name"],
+      "stable_key_normalizers": {
+        "screen_id": "casefold",
+        "screen_name": "preserve"
+      }
     }
   ],
   "unmatched_policy": "canonical_text_needs_review"

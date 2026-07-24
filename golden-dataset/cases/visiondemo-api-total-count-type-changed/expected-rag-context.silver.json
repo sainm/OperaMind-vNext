@@ -1,0 +1,20 @@
+{
+  "case_id": "visiondemo-api-total-count-type-changed",
+  "project_id": "visiondemo",
+  "dataset_stage": "silver",
+  "required_contexts": [
+    {
+      "document": "04_API詳細設計書_経費検索_after.xlsx",
+      "locations": ["searchExpense!A1:D7", "API一覧!A1:C2"],
+      "reason": "API Operation、レスポンス Section、変更項目を同時に特定するため"
+    }
+  ],
+  "expected_query_concepts": [
+    "GET /expense/api/search",
+    "totalCount Long",
+    "検索件数 レスポンス型"
+  ],
+  "must_exclude_as_primary_context": ["画面取消イベント", "承認者向け補足"],
+  "canonical_id_status": "to_be_filled_after_vnext_ingestion",
+  "review_status": "needs_review"
+}

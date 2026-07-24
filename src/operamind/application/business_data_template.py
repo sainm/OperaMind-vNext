@@ -158,8 +158,7 @@ def validate_business_data_template(template: Mapping[str, object]) -> list[str]
             if dependency not in entity_by_ref:
                 reasons.append(f"{entity_ref}: entity dependency {dependency} is unknown")
             elif (
-                entity.get("role") == "master"
-                and entity_by_ref[dependency].get("role") == "detail"
+                entity.get("role") == "master" and entity_by_ref[dependency].get("role") == "detail"
             ):
                 reasons.append(f"{entity_ref}: master entity cannot depend on a detail entity")
             elif order_index.get(dependency, -1) >= order_index.get(entity_ref, -1):

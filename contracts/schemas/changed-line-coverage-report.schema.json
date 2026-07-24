@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/changed-line-coverage-report.schema.json",
+  "title": "ChangedLineCoverageReport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_type", "schema_version", "changed_line_coverage_report_id",
+    "edit_result_id", "project_id", "base_repository_revision",
+    "result_repository_revision", "minimum_coverage_percent",
+    "changed_line_count", "covered_changed_line_count", "coverage_percent",
+    "files", "evidence_refs", "status", "blocking_reasons"
+  ],
+  "properties": {
+    "artifact_type": {"const": "ChangedLineCoverageReport"},
+    "schema_version": {"const": "v1"},
+    "changed_line_coverage_report_id": {"type": "string", "minLength": 1},
+    "edit_result_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "base_repository_revision": {"type": "string", "minLength": 1},
+    "result_repository_revision": {"type": "string", "minLength": 1},
+    "minimum_coverage_percent": {"type": "number", "minimum": 80, "maximum": 100},
+    "changed_line_count": {"type": "integer", "minimum": 0},
+    "covered_changed_line_count": {"type": "integer", "minimum": 0},
+    "coverage_percent": {"type": "number", "minimum": 0, "maximum": 100},
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path", "changed_line_count", "covered_changed_line_count",
+          "changed_lines", "covered_changed_lines", "uncovered_changed_lines"
+        ],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "changed_line_count": {"type": "integer", "minimum": 0},
+          "covered_changed_line_count": {"type": "integer", "minimum": 0},
+          "changed_lines": {"type": "array", "items": {"type": "integer", "minimum": 1}, "uniqueItems": true},
+          "covered_changed_lines": {"type": "array", "items": {"type": "integer", "minimum": 1}, "uniqueItems": true},
+          "uncovered_changed_lines": {"type": "array", "items": {"type": "integer", "minimum": 1}, "uniqueItems": true}
+        }
+      }
+    },
+    "evidence_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "status": {"enum": ["passed", "failed", "missing", "not_required"]},
+    "blocking_reasons": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "passed"}}},
+      "then": {"properties": {"blocking_reasons": {"maxItems": 0}, "evidence_refs": {"minItems": 1}}}
+    },
+    {
+      "if": {"properties": {"status": {"enum": ["failed", "missing"]}}},
+      "then": {"properties": {"blocking_reasons": {"minItems": 1}}}
+    }
+  ]
+}

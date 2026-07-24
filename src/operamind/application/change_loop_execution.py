@@ -17,7 +17,7 @@ class ChangeLoopExecutionRequest:
     """Legacy request retained only so old callers receive a fail-closed migration error."""
 
     output_root: Path
-    browser_channel: str | None = "chrome"
+    browser_channel: str | None = "msedge"
     headless: bool = True
     application_port: int | None = None
     command_timeout_seconds: int = 240
@@ -58,6 +58,7 @@ class CanonicalExecutionBinding:
             raise ValueError("Canonical execution identities must not be blank")
         if re.fullmatch(r"[0-9a-f]{40}", self.base_revision) is None:
             raise ValueError("Canonical execution requires a full base revision SHA")
+
 
 class CanonicalExecutionAuthorizer(Protocol):
     """Re-read and authorize the complete RAG/Impact/Grant chain."""

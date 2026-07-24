@@ -1,0 +1,25 @@
+{
+  "artifact_type": "ChangeClosureResult",
+  "schema_version": "v2",
+  "closure_result_id": "closure-expense-status-v2",
+  "change_request_id": "change-request-expense-status",
+  "project_id": "visiondemo",
+  "input_mode": "natural_language",
+  "artifact_refs": ["proposal-expense-status", "test-plan-expense-status", "coverage-expense-status"],
+  "structured_change_refs": ["change-expense-status"],
+  "modified_paths": ["VisionDemo/src/main/java/com/visiondemo/service/ExpenseService.java"],
+  "test_results": [
+    {
+      "test_case_id": "expense-empty-status-api",
+      "status": "passed",
+      "evidence_refs": ["evidence-api-expense-status"],
+      "summary": "Blank status returned all four seeded expenses."
+    }
+  ],
+  "ui_status": "passed",
+  "business_coverage_percent": 100,
+  "changed_line_coverage_percent": 100,
+  "changed_line_coverage_status": "passed",
+  "status": "passed",
+  "unresolved_items": []
+}

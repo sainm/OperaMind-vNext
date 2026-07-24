@@ -30,6 +30,11 @@ from operamind.infrastructure.code_graph.scanner import (
     _resolve_java_relations,
     _symbol_artifact_id,
 )
+from operamind.infrastructure.code_graph.semantic import (
+    SemanticAdapterRegistry,
+    SemanticFileExtraction,
+    resolve_semantic_relations,
+)
 from operamind.infrastructure.code_graph.workspace import DiscoveredCodeFile
 
 
@@ -46,6 +51,7 @@ class IncrementalCodeGraphScanner:
 
     def __init__(self) -> None:
         self._java = JavaTreeSitterExtractor()
+        self._semantic = SemanticAdapterRegistry()
 
     def plan(
         self,
@@ -69,6 +75,14 @@ class IncrementalCodeGraphScanner:
             for file in changed_files
             if file.language == "java"
         }
+        changed_semantic_extractions = {
+            file.path: self._semantic.extract(
+                file=file,
+                enabled_extractors=enabled,
+            )
+            for file in changed_files
+            if file.language in self._semantic.languages
+        }
         old_declarations = {
             (str(symbol["symbol_type"]), str(symbol["signature"]))
             for path in old_touched
@@ -78,12 +92,35 @@ class IncrementalCodeGraphScanner:
             (symbol.symbol_type, symbol.signature)
             for extraction in changed_extractions.values()
             for symbol in extraction.symbols
+        } | {
+            (symbol.symbol_type, symbol.signature)
+            for extraction in changed_semantic_extractions.values()
+            for symbol in extraction.symbols
         }
         path_identity_changed = any(change.status.startswith("R") for change in changes)
         declaration_changed = old_declarations != new_declarations or path_identity_changed
         affected = {file.path for file in changed_files} | (
             set(current_changed) & set(previous_files)
         )
+        generic_semantic_changed = any(
+            file.language in self._semantic.languages for file in changed_files
+        ) or any(
+            previous_files[path]["language"] in self._semantic.languages
+            for path in old_touched
+            if path in previous_files
+        )
+        if generic_semantic_changed:
+            # Generic import and call relations may cross the four supported
+            # languages. Re-scan that bounded semantic subset until a persisted
+            # dependency ledger can select a smaller closure safely.
+            affected.update(
+                path
+                for path, value in previous_files.items()
+                if value["language"] in self._semantic.languages and path in current_tracked_paths
+            )
+            affected.update(
+                file.path for file in changed_files if file.language in self._semantic.languages
+            )
         if declaration_changed:
             old_symbol_ids = {
                 str(symbol["symbol_id"])
@@ -152,6 +189,7 @@ class IncrementalCodeGraphScanner:
             path: [] for path in affected_by_path
         }
         java_extractions: list[JavaFileExtraction] = []
+        semantic_extractions: list[SemanticFileExtraction] = []
         direct_edges: list[JavaDirectEdge] = []
         for file in affected_files:
             if file.language == "java":
@@ -166,6 +204,17 @@ class IncrementalCodeGraphScanner:
                     symbol.to_artifact() for symbol in extraction.symbols
                 )
                 direct_edges.extend(extraction.direct_edges)
+            elif file.language in self._semantic.languages:
+                semantic_extraction = self._semantic.extract(
+                    file=file,
+                    enabled_extractors=enabled,
+                )
+                semantic_extractions.append(semantic_extraction)
+                diagnostics.extend(semantic_extraction.diagnostics)
+                symbols_by_path[file.path].extend(
+                    symbol.to_artifact() for symbol in semantic_extraction.symbols
+                )
+                direct_edges.extend(semantic_extraction.direct_edges)
             elif file.language == "properties" and "config_key" in enabled:
                 symbols, edges = _extract_properties(file)
                 symbols_by_path[file.path].extend(symbols)
@@ -201,6 +250,21 @@ class IncrementalCodeGraphScanner:
                 junit_enabled="junit_test" in enabled,
             )
         )
+        direct_edges.extend(
+            resolve_semantic_relations(
+                relations=tuple(
+                    relation
+                    for extraction in semantic_extractions
+                    for relation in extraction.relations
+                ),
+                symbols=tuple(
+                    symbol for extraction in semantic_extractions for symbol in extraction.symbols
+                ),
+                files=tuple(
+                    file for file in affected_files if file.language in self._semantic.languages
+                ),
+            )
+        )
         framework = extract_framework_graph(
             files=affected_files,
             java_symbols=tuple(current_symbols),
@@ -210,6 +274,7 @@ class IncrementalCodeGraphScanner:
             edges=tuple(direct_edges),
             enabled_extractors=enabled,
         )
+        diagnostics.extend(framework.diagnostics)
         direct_edges = list(framework.edges)
         reused_edges = [
             _static_edge_artifact(edge)

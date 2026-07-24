@@ -37,9 +37,9 @@ class _RecordingTransport:
         headers: Mapping[str, str],
         timeout_seconds: float,
     ) -> HttpResponse:
-        del method, url, headers, timeout_seconds
+        del method, headers, timeout_seconds
         self.body = body
-        return HttpResponse(status_code=200, headers={}, body=b"{}")
+        return HttpResponse(status_code=200, headers={}, body=b"{}", final_url=url)
 
 
 class _RecordingExecutor:
@@ -147,9 +147,7 @@ def test_deployment_config_rejects_credentials_in_base_url(
     java = tmp_path / "java"
     h2_jar.touch()
     java.touch()
-    monkeypatch.setenv(
-        "OPERAMIND_VISIONDEMO_BASE_URL", "http://operator:secret@127.0.0.1:18082"
-    )
+    monkeypatch.setenv("OPERAMIND_VISIONDEMO_BASE_URL", "http://operator:secret@127.0.0.1:18082")
     monkeypatch.setenv(
         "OPERAMIND_VISIONDEMO_JDBC_URL",
         "jdbc:h2:file:/tmp/visiondemo;AUTO_SERVER=TRUE",
@@ -165,9 +163,7 @@ def test_deployment_config_rejects_credentials_in_base_url(
 def test_cross_screen_plan_matches_contract_and_always_defines_cleanup(
     force_business_failure: bool,
 ) -> None:
-    plan = build_visiondemo_cross_screen_plan(
-        force_business_failure=force_business_failure
-    )
+    plan = build_visiondemo_cross_screen_plan(force_business_failure=force_business_failure)
 
     ContractCatalog.load(ROOT / "contracts").validate_artifact(plan)
     flow = plan["generation_flows"][0]

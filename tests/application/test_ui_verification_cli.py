@@ -127,6 +127,7 @@ def test_ui_cli_exposes_browser_manifest_and_execution_subcommands() -> None:
     assert preflight.timeout_ms == 5_000
     assert observation.operation == "observe-ui-knowledge"
     assert observation.browser_name == "chromium"
+    assert observation.browser_channel == "msedge"
     assert review.operation == "review-ui-knowledge"
     assert review.decision == "approved"
     assert review.activate

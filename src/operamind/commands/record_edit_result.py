@@ -12,6 +12,7 @@ from pathlib import Path
 import psycopg
 
 from operamind.application import (
+    ChangedLineCoverageEvidence,
     EditResultRequest,
     EditResultService,
     EditValidationMode,
@@ -34,6 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[value.value for value in EditValidationMode],
     )
     parser.add_argument("--test-result-ref", action="append", default=[])
+    parser.add_argument(
+        "--changed-line-coverage",
+        type=Path,
+        help="JSON evidence with executable_lines, covered_lines, threshold and evidence_refs",
+    )
     outcome = parser.add_mutually_exclusive_group()
     outcome.add_argument("--tests-passed", action="store_true")
     outcome.add_argument("--tests-failed", action="store_true")
@@ -48,6 +54,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     try:
         tests_passed = True if args.tests_passed else False if args.tests_failed else None
+        coverage = (
+            ChangedLineCoverageEvidence.from_dict(
+                json.loads(args.changed_line_coverage.read_text(encoding="utf-8"))
+            )
+            if args.changed_line_coverage
+            else None
+        )
         with psycopg.connect(database_url) as connection:
             result = EditResultService(
                 connection=connection,
@@ -63,6 +76,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     mode=EditValidationMode(args.mode),
                     test_result_refs=tuple(args.test_result_ref),
                     tests_passed=tests_passed,
+                    changed_line_coverage=coverage,
                 )
             )
         print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))

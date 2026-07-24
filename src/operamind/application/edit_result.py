@@ -9,6 +9,10 @@ from typing import Any
 
 from psycopg import Connection
 
+from operamind.application.change_coverage import (
+    ChangedLineCoverageEvidence,
+    evaluate_changed_line_coverage,
+)
 from operamind.contracts import ContractCatalog
 from operamind.infrastructure.code_graph import GitWorktreeDiffInspector
 from operamind.infrastructure.postgres import (
@@ -34,6 +38,7 @@ class EditResultRequest:
     mode: EditValidationMode
     test_result_refs: tuple[str, ...] = ()
     tests_passed: bool | None = None
+    changed_line_coverage: ChangedLineCoverageEvidence | None = None
 
     def __post_init__(self) -> None:
         required = (
@@ -50,10 +55,20 @@ class EditResultRequest:
         ):
             raise ValueError("Edit Result test refs must be unique and non-blank")
         if self.mode is EditValidationMode.WORKING:
-            if self.tests_passed is not None or self.test_result_refs:
+            if (
+                self.tests_passed is not None
+                or self.test_result_refs
+                or self.changed_line_coverage is not None
+            ):
                 raise ValueError("Working validation cannot claim test results")
         elif self.tests_passed is None or not self.test_result_refs:
             raise ValueError("Committed Edit Result requires test outcome evidence")
+        if self.changed_line_coverage is not None and not set(
+            self.changed_line_coverage.evidence_refs
+        ).issubset(self.test_result_refs):
+            raise ValueError(
+                "Changed-line coverage evidence must reference approved test command results"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +77,7 @@ class EditResultServiceResult:
     changed_paths: tuple[str, ...]
     out_of_scope_files: tuple[str, ...]
     result_repository_revision: str | None
+    changed_line_coverage: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -73,6 +89,7 @@ class EditResultServiceResult:
             "changed_paths": list(self.changed_paths),
             "out_of_scope_files": list(self.out_of_scope_files),
             "result_repository_revision": self.result_repository_revision,
+            "changed_line_coverage": self.changed_line_coverage,
         }
 
 
@@ -81,6 +98,7 @@ class EditResultService:
 
     def __init__(self, *, connection: Connection[Any], contracts: ContractCatalog) -> None:
         self._repository = EditResultRepository(connection, contracts)
+        self._contracts = contracts
         self._git = GitWorktreeDiffInspector()
 
     def run(self, request: EditResultRequest) -> EditResultServiceResult:
@@ -117,6 +135,16 @@ class EditResultService:
             if evidence.changed_paths
             else "no_changes"
         )
+        coverage = evaluate_changed_line_coverage(
+            edit_result_id=request.edit_result_id,
+            project_id=request.project_id,
+            base_repository_revision=scope.base_repository_revision,
+            result_repository_revision=evidence.result_sha or scope.base_repository_revision,
+            changed_lines=evidence.changed_lines,
+            changed_paths=evidence.changed_paths,
+            evidence=request.changed_line_coverage,
+        )
+        self._contracts.validate_artifact(coverage)
         write = EditResultWrite(
             edit_result_id=request.edit_result_id,
             validation_mode=request.mode.value,
@@ -127,10 +155,12 @@ class EditResultService:
             out_of_scope_files=out_of_scope,
             test_result_refs=request.test_result_refs,
             tests_passed=request.tests_passed,
+            changed_line_coverage=coverage,
         )
         return EditResultServiceResult(
             record=self._repository.record(scope=scope, write=write),
             changed_paths=evidence.changed_paths,
             out_of_scope_files=out_of_scope,
             result_repository_revision=evidence.result_sha,
+            changed_line_coverage=coverage,
         )

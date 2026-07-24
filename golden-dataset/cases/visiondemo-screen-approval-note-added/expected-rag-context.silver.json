@@ -1,0 +1,20 @@
+{
+  "case_id": "visiondemo-screen-approval-note-added",
+  "project_id": "visiondemo",
+  "dataset_stage": "silver",
+  "required_contexts": [
+    {
+      "document": "02_画面設計書_経費承認一覧_after.xlsx",
+      "locations": ["画面概要!A1:B2", "画面項目一覧!A1:D3"],
+      "reason": "追加された画面項目と所属画面を特定するため"
+    }
+  ],
+  "expected_query_concepts": [
+    "経費承認 補足項目 追加",
+    "approval-note",
+    "SCREEN_EXPENSE_LIST"
+  ],
+  "must_exclude_as_primary_context": ["取消イベント", "API totalCount"],
+  "canonical_id_status": "to_be_filled_after_vnext_ingestion",
+  "review_status": "needs_review"
+}

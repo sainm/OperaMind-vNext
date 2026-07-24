@@ -26,6 +26,21 @@ class RagQualityEvaluation:
     metrics: RagQualityMetrics
     passed: bool
     failures: tuple[str, ...]
+    queries: tuple[RagQueryQualityEvaluation, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RagQueryQualityEvaluation:
+    """Per-query hits and explicit defects retained in the formal report."""
+
+    purpose: RagQueryPurpose
+    required_hits_at_5: tuple[str, ...]
+    required_hits_at_10: tuple[str, ...]
+    missing_required_refs: tuple[str, ...]
+    irrelevant_hits: tuple[str, ...]
+    cross_project_leaks: tuple[str, ...]
+    reciprocal_rank: float
+    failure_reasons: tuple[str, ...]
 
 
 class RagQualityEvaluator:
@@ -56,29 +71,60 @@ class RagQualityEvaluator:
         irrelevant_hits = 0
         evaluated_hits = 0
         cross_project_leaks = 0
+        query_evaluations: list[RagQueryQualityEvaluation] = []
         for purpose in RagQueryPurpose:
             expectation = expectations[purpose]
             result = results[purpose]
             required = _string_set(expectation, "required_candidate_refs", non_empty=True)
             irrelevant = _string_set(expectation, "irrelevant_candidate_refs", non_empty=False)
             candidates = _candidates(result)
-            candidate_ids = [candidate[0] for candidate in candidates]
-            recalls_at_5.append(len(required.intersection(candidate_ids[:5])) / len(required))
-            recalls_at_10.append(len(required.intersection(candidate_ids[:10])) / len(required))
+            refs_at_5 = _ranked_refs(candidates[:5])
+            refs_at_10 = _ranked_refs(candidates[:10])
+            recalls_at_5.append(len(required.intersection(refs_at_5)) / len(required))
+            recalls_at_10.append(len(required.intersection(refs_at_10)) / len(required))
             first_rank = next(
                 (
                     rank
-                    for rank, candidate_id in enumerate(candidate_ids, start=1)
-                    if candidate_id in required
+                    for rank, (_, _, candidate_refs) in enumerate(candidates, start=1)
+                    if required.intersection(candidate_refs)
                 ),
                 None,
             )
             reciprocal_ranks.append(0.0 if first_rank is None else 1.0 / first_rank)
             top_ten = candidates[:10]
+            required_at_5 = required.intersection(refs_at_5)
+            required_at_10 = required.intersection(refs_at_10)
+            missing_required = required.difference(refs_at_10)
+            query_irrelevant = irrelevant.intersection(_ranked_refs(top_ten))
+            query_leaks = {
+                candidate_id
+                for candidate_id, candidate_project_id, _ in top_ten
+                if candidate_project_id != project_id
+            }
             evaluated_hits += len(top_ten)
-            irrelevant_hits += sum(candidate_id in irrelevant for candidate_id, _ in top_ten)
-            cross_project_leaks += sum(
-                candidate_project_id != project_id for _, candidate_project_id in top_ten
+            irrelevant_hits += len(query_irrelevant)
+            cross_project_leaks += len(query_leaks)
+            query_failures = tuple(
+                reason
+                for reason, failed in (
+                    ("required_candidate_missing_at_5", len(required_at_5) < len(required)),
+                    ("required_candidate_missing_at_10", bool(missing_required)),
+                    ("irrelevant_candidate_retrieved", bool(query_irrelevant)),
+                    ("cross_project_candidate_retrieved", bool(query_leaks)),
+                )
+                if failed
+            )
+            query_evaluations.append(
+                RagQueryQualityEvaluation(
+                    purpose=purpose,
+                    required_hits_at_5=tuple(sorted(required_at_5)),
+                    required_hits_at_10=tuple(sorted(required_at_10)),
+                    missing_required_refs=tuple(sorted(missing_required)),
+                    irrelevant_hits=tuple(sorted(query_irrelevant)),
+                    cross_project_leaks=tuple(sorted(query_leaks)),
+                    reciprocal_rank=0.0 if first_rank is None else 1.0 / first_rank,
+                    failure_reasons=query_failures,
+                )
             )
 
         metrics = RagQualityMetrics(
@@ -111,7 +157,12 @@ class RagQualityEvaluator:
             )
             if not passed
         )
-        return RagQualityEvaluation(metrics=metrics, passed=not failures, failures=failures)
+        return RagQualityEvaluation(
+            metrics=metrics,
+            passed=not failures,
+            failures=failures,
+            queries=tuple(query_evaluations),
+        )
 
 
 def _by_purpose(value: object, *, candidates: bool) -> dict[RagQueryPurpose, dict[str, Any]]:
@@ -128,20 +179,36 @@ def _by_purpose(value: object, *, candidates: bool) -> dict[RagQueryPurpose, dic
     return result
 
 
-def _candidates(value: dict[str, Any]) -> list[tuple[str, str]]:
+def _candidates(value: dict[str, Any]) -> list[tuple[str, str, frozenset[str]]]:
     raw = value.get("candidates")
     if not isinstance(raw, list) or not all(isinstance(item, dict) for item in raw):
         raise ValueError("Observed RAG candidates must be a list of objects")
-    candidates = [
-        (
-            _required_string(cast(dict[str, Any], item), "target_id"),
-            _required_string(cast(dict[str, Any], item), "project_id"),
+    candidates: list[tuple[str, str, frozenset[str]]] = []
+    for raw_item in raw:
+        item = cast(dict[str, Any], raw_item)
+        target_id = _required_string(item, "target_id")
+        raw_semantic_refs = item.get("semantic_refs", [])
+        if not isinstance(raw_semantic_refs, list) or not all(
+            isinstance(ref, str) and ref.strip() for ref in raw_semantic_refs
+        ):
+            raise ValueError("Observed RAG semantic_refs must be non-blank strings")
+        semantic_refs = set(raw_semantic_refs)
+        if len(semantic_refs) != len(raw_semantic_refs):
+            raise ValueError("Observed RAG semantic_refs must be unique")
+        candidates.append(
+            (
+                target_id,
+                _required_string(item, "project_id"),
+                frozenset({target_id, *semantic_refs}),
+            )
         )
-        for item in raw
-    ]
-    if len({candidate_id for candidate_id, _ in candidates}) != len(candidates):
+    if len({candidate_id for candidate_id, _, _ in candidates}) != len(candidates):
         raise ValueError("Observed RAG candidate IDs must be unique per query")
     return candidates
+
+
+def _ranked_refs(candidates: list[tuple[str, str, frozenset[str]]]) -> set[str]:
+    return {ref for _, _, refs in candidates for ref in refs}
 
 
 def _required_string(value: dict[str, Any], key: str) -> str:

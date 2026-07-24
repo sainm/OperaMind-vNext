@@ -69,10 +69,7 @@ class ChangeOrchestrationPlanner:
             raise ChangeOrchestrationBlockedError("Reviewed case Project does not match")
         if str(report.get("analysis_case_id")) != value.analysis_case_id:
             raise ChangeOrchestrationBlockedError("Impact Report Case does not match")
-        if (
-            str(report.get("project_id")) != project_id
-            or value.impact_report_state != "confirmed"
-        ):
+        if str(report.get("project_id")) != project_id or value.impact_report_state != "confirmed":
             raise ChangeOrchestrationBlockedError("Current confirmed Impact Report is required")
         if cast(list[object], report.get("blocking_unknowns", [])):
             raise ChangeOrchestrationBlockedError("Impact Report still has blocking unknowns")
@@ -180,9 +177,7 @@ class ChangeOrchestrationPlanner:
         orchestration: dict[str, Any] = {
             "artifact_type": "ChangeOrchestrationPlan",
             "schema_version": "v1",
-            "orchestration_id": _id(
-                "orchestration", request_id, value.analysis_case_id, basis
-            ),
+            "orchestration_id": _id("orchestration", request_id, value.analysis_case_id, basis),
             "change_request_id": request_id,
             "project_id": project_id,
             "analysis_case_id": value.analysis_case_id,
@@ -217,10 +212,7 @@ class ChangeOrchestrationPlanner:
 def _expected_stable_keys(case: ChangeLoopCase) -> set[str]:
     path = case.root / "expected-changes.json"
     payload = cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
-    return {
-        str(value["stable_key"])
-        for value in cast(list[dict[str, Any]], payload["changes"])
-    }
+    return {str(value["stable_key"]) for value in cast(list[dict[str, Any]], payload["changes"])}
 
 
 def _map_business_rules(
@@ -235,15 +227,12 @@ def _map_business_rules(
         matches = [
             str(rule["business_rule_id"])
             for rule in requested
-            if source_refs
-            & {str(value) for value in cast(list[object], rule["source_refs"])}
+            if source_refs & {str(value) for value in cast(list[object], rule["source_refs"])}
         ]
         if len(matches) == 1:
             mapping[str(template["business_rule_id"])] = (matches[0],)
         elif not matches and len(requested) == 1:
-            mapping[str(template["business_rule_id"])] = (
-                str(requested[0]["business_rule_id"]),
-            )
+            mapping[str(template["business_rule_id"])] = (str(requested[0]["business_rule_id"]),)
         else:
             raise ChangeOrchestrationBlockedError(
                 f"Business rule mapping is ambiguous: {template['business_rule_id']}"

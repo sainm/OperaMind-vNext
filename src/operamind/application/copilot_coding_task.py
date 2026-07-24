@@ -9,6 +9,7 @@ from typing import Any, Protocol, cast
 
 from psycopg import Connection
 
+from operamind.application.change_coverage import ChangedLineCoverageEvidence
 from operamind.application.command_execution import (
     ApprovedCommandRequest,
     ApprovedCommandService,
@@ -274,9 +275,7 @@ class CopilotCodingTaskService:
             raise ValueError("Copilot Coding Task is outside requested Change Request")
         if previous.state not in {"cancelled", "failed"}:
             raise ValueError("Only a cancelled or failed Copilot Coding Task can be retried")
-        previous_artifact = cast(
-            dict[str, object], self._tasks.view(coding_task_id)["task"]
-        )
+        previous_artifact = cast(dict[str, object], self._tasks.view(coding_task_id)["task"])
         return self.publish(
             CopilotCodingTaskPublishRequest(
                 coding_task_id=retry_coding_task_id,
@@ -390,6 +389,7 @@ class CopilotCodingTaskService:
         workspace_root: Path,
         test_result_refs: tuple[str, ...],
         tests_passed: bool,
+        changed_line_coverage: ChangedLineCoverageEvidence | None = None,
     ) -> dict[str, object]:
         return self._record_edit_result(
             coding_task_id=coding_task_id,
@@ -398,6 +398,7 @@ class CopilotCodingTaskService:
             mode=EditValidationMode.COMMITTED,
             test_result_refs=test_result_refs,
             tests_passed=tests_passed,
+            changed_line_coverage=changed_line_coverage,
         )
 
     def _record_edit_result(
@@ -409,6 +410,7 @@ class CopilotCodingTaskService:
         mode: EditValidationMode,
         test_result_refs: tuple[str, ...],
         tests_passed: bool | None,
+        changed_line_coverage: ChangedLineCoverageEvidence | None = None,
     ) -> dict[str, object]:
         task = self._tasks.get(coding_task_id)
         result = (
@@ -424,6 +426,7 @@ class CopilotCodingTaskService:
                     mode=mode,
                     test_result_refs=test_result_refs,
                     tests_passed=tests_passed,
+                    changed_line_coverage=changed_line_coverage,
                 )
             )
             .to_dict()

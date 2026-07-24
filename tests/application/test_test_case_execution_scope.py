@@ -113,15 +113,12 @@ def _run(run_id: str, status: str, evidence_count: int) -> dict[str, object]:
     }
 
 
-def _closure(
-    closure_id: str, status: str, passed_count: int
-) -> dict[str, object]:
+def _closure(closure_id: str, status: str, passed_count: int) -> dict[str, object]:
     return {
         "closure_result_id": closure_id,
         "status": status,
         "ui_status": status,
         "test_results": [
-            {"status": "passed" if index < passed_count else "failed"}
-            for index in range(1)
+            {"status": "passed" if index < passed_count else "failed"} for index in range(1)
         ],
     }

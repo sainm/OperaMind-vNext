@@ -111,16 +111,20 @@ def _snapshot_repository(
     connection = MagicMock()
     cursor = connection.cursor.return_value.__enter__.return_value
     cursor.fetchone.return_value = (1,)
-    cursor.fetchall.return_value = [
-        (
-            fact.fact_ref,
-            fact.fact.stable_key,
-            fact.fact.fact_type,
-            values or dict(fact.fact.values),
-            list(fact.fact.source_refs),
-            [],
-            "document-version-001",
-        )
+    cursor.fetchall.side_effect = [
+        [
+            (
+                fact.fact_ref,
+                fact.fact.stable_key,
+                fact.fact.fact_type,
+                values or dict(fact.fact.values),
+                list(fact.fact.source_refs),
+                [],
+                "document-version-001",
+            )
+        ],
+        [(["screen-item-table-ja"],)],
+        [(fact.fact_ref, "screen-item-table-ja")],
     ]
     repository = CanonicalRepository(
         cast(Connection[Any], connection),

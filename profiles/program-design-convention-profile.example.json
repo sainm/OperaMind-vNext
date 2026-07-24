@@ -1,0 +1,41 @@
+{
+  "profile_type": "DocumentConventionProfile",
+  "profile_id": "program-design-conventions-example",
+  "profile_version": "1.0.0",
+  "document_type": "program_design",
+  "minimum_auto_match_score": 0.8,
+  "variants": [
+    {
+      "variant_id": "method-list-ja",
+      "signals": [
+        {
+          "type": "sheet_name",
+          "values": ["メソッド一覧", "Method List"],
+          "weight": 0.35
+        },
+        {
+          "type": "headers",
+          "values": ["メソッド名", "引数", "戻り値", "処理概要"],
+          "weight": 0.45
+        },
+        {
+          "type": "filename_token",
+          "values": ["プログラム設計書", "Program Design"],
+          "weight": 0.2
+        }
+      ],
+      "field_aliases": {
+        "method_name": ["メソッド名", "Method Name"],
+        "arguments": ["引数", "Arguments"],
+        "return_type": ["戻り値", "Return Type"],
+        "summary": ["処理概要", "Summary"],
+        "exceptions": ["例外", "Exceptions"]
+      },
+      "stable_key_fields": ["method_name"],
+      "stable_key_normalizers": {
+        "method_name": "casefold"
+      }
+    }
+  ],
+  "unmatched_policy": "canonical_text_needs_review"
+}

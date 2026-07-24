@@ -53,9 +53,7 @@ class OrchestrationTaskDefinition:
         if any(not isinstance(value, str) or not value.strip() for value in required_text.values()):
             raise ValueError("Orchestration Task definition text must not be blank")
         if self.eligible_executor_kinds != EXECUTOR_KINDS:
-            raise ValueError(
-                "Orchestration Task must be claimable by agent, subagent, and human"
-            )
+            raise ValueError("Orchestration Task must be claimable by agent, subagent, and human")
         if self.task_kind not in {
             "deterministic_action",
             "judgment",
@@ -103,9 +101,7 @@ def parse_orchestration_scheduling_policy(
     try:
         maximum = int(normalized)
     except ValueError as error:
-        raise ValueError(
-            f"{ORCHESTRATION_MAX_ACTIVE_TASKS_ENV} must be an integer"
-        ) from error
+        raise ValueError(f"{ORCHESTRATION_MAX_ACTIVE_TASKS_ENV} must be an integer") from error
     return OrchestrationSchedulingPolicy(max_active_tasks_per_run=maximum)
 
 
