@@ -162,6 +162,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Manifest status: {summary.manifest_status}")
         print(f"Passed gates: {', '.join(summary.passed_gates) or '(none)'}")
         print(f"Pending gates: {', '.join(summary.pending_gates) or '(none)'}")
+        print(f"Validation issues: {', '.join(summary.validation_issues) or '(none)'}")
     if args.print_readiness_json and summary is not None:
         print(
             json.dumps(
@@ -170,6 +171,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "manifest_status": summary.manifest_status,
                     "passed_gates": list(summary.passed_gates),
                     "pending_gates": list(summary.pending_gates),
+                    "validation_issues": list(summary.validation_issues),
                     "gates": [
                         {
                             "gate_id": gate.gate_id,
@@ -178,6 +180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             "evidence_template": gate.evidence_template,
                             "evidence_count": gate.evidence_count,
                             "blocking_reason": gate.blocking_reason,
+                            "validation_issues": list(gate.validation_issues),
                         }
                         for gate in summary.gates
                     ],

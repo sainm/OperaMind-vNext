@@ -6,6 +6,7 @@
 
 - P0-P6 的 MVP 主链路已经实现：文档导入／Diff、真实 RAG、Code Graph、Impact／Approval、VS Code GitHub Copilot handoff、测试数据、Playwright UI 验证和 Change Closure 均有代码与自动测试。
 - Golden Dataset 已冻结 1 个 VisionDemo 案例；真实 Embedding Provider、人工 Approval 和 target Deployment E2E 有既存通过证据。
+- 自动质量流水线已建立：Ruff、Mypy、PostgreSQL 集成回归、总体覆盖率 80% 和关键文件逐项 80% 均为强制门禁。规则见 `docs/QUALITY-BASELINE.md`。
 - Web 已完成全站视觉系统、变更工作台、复杂表单分组、危险操作确认、响应式适配和主要页面视觉回归。本轮实现统一收敛到一个 Git 源码基线；后续 readiness Evidence 必须绑定该基线或其明确后继提交，不在文档中手工固定尚未生成的 commit SHA。
 - 健壮性修改后的 source tree 已使旧 `full_local_regression` Evidence 失效；必须在 WSL + Podman + Microsoft Edge 中重新生成。`github_copilot_live` 仍为外部阻断 gate。因此当前不能宣称 repository-wide readiness stage 有效或达到 `mvp_ready`。
 
@@ -44,7 +45,7 @@
 
 ### B1. 生成正式 Golden RAG 质量观测
 
-**现状**：`0055`、`GoldenRagQualityReport`、`operamind-run-golden-rag`、逐 Query 结果、质量指标和 Impact 双重 fail-closed 门禁已经实现；冻结 Query 的 PostgreSQL 18 + pgvector 集成回归已通过。当前工作区没有已填充 VisionDemo Canonical Snapshot 的运维数据库和正在运行的本地 Embedding Provider，因此尚未生成该实际环境的正式 Report。
+**现状**：`0055`、`GoldenRagQualityReport`、`operamind-run-golden-rag`、逐 Query 结果、质量指标和 Impact 双重 fail-closed 门禁已经实现；冻结 Query 的 PostgreSQL 18 + pgvector 集成回归已通过。Golden RAG 的唯一状态源是 Canonical PostgreSQL 中同一 Snapshot／Embedding Profile／current Search Index 的最新 Report；README 或对话中的历史数值不构成状态。当前工作区没有已填充 VisionDemo Canonical Snapshot 的运维数据库和正在运行的本地 Embedding Provider，因此尚未生成该实际环境的正式 Report。
 
 **完成标准**：在 VisionDemo 的固定 Snapshot、当前 Embedding Profile 和 current/ready Search Index 上运行 `operamind-run-golden-rag`，持久化 `GoldenRagQualityReport`，全部阈值通过且无跨项目泄漏；该 Report 必须来自真实本地 Embedding Provider，不能用确定性测试 Provider 作为运维 Evidence。
 

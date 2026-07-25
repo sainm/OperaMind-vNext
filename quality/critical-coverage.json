@@ -1,0 +1,35 @@
+{
+  "schema_version": "operamind-critical-coverage-v1",
+  "overall_minimum_percent": 80,
+  "file_minimum_percent": 80,
+  "capabilities": {
+    "readiness_and_golden_rag": [
+      "src/operamind/readiness.py",
+      "src/operamind/application/readiness_evidence.py",
+      "src/operamind/application/golden_rag_quality.py",
+      "src/operamind/infrastructure/postgres/rag_quality_repository.py"
+    ],
+    "approval": [
+      "src/operamind/application/approval_grant.py",
+      "src/operamind/infrastructure/postgres/approval_grant_repository.py"
+    ],
+    "copilot": [
+      "src/operamind/application/copilot_checkpoint.py",
+      "src/operamind/application/copilot_coding_task.py",
+      "src/operamind/application/copilot_handoff.py",
+      "src/operamind/infrastructure/postgres/copilot_coding_task_repository.py"
+    ],
+    "task_scheduling": [
+      "src/operamind/application/orchestration_task.py",
+      "src/operamind/application/orchestration_worker.py",
+      "src/operamind/infrastructure/orchestration_worker.py",
+      "src/operamind/infrastructure/postgres/orchestration_task_repository.py"
+    ],
+    "recovery": [
+      "src/operamind/application/failure_management.py",
+      "src/operamind/application/search_index_recovery.py",
+      "src/operamind/application/test_data_execution_service.py",
+      "src/operamind/infrastructure/postgres/profile_rebuild_repository.py"
+    ]
+  }
+}

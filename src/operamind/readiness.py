@@ -50,18 +50,34 @@ FULL_LOCAL_REGRESSION_COMMAND = (
     *(f"--ignore={path}" for path in FULL_LOCAL_REGRESSION_EXCLUDED_TESTS),
 )
 _SOURCE_TREE_FILE_RULES = (
+    (".github", frozenset({".yaml", ".yml"})),
     ("contracts", frozenset({".json"})),
     ("drafts", frozenset({".json"})),
     ("migrations", frozenset({".sql"})),
     ("profiles", frozenset({".json"})),
+    ("quality", frozenset({".json"})),
+    ("scripts", frozenset({".py", ".sh"})),
     ("src", frozenset({".css", ".html", ".js", ".py", ".typed"})),
     ("tests", frozenset({".py"})),
 )
 _SOURCE_TREE_EXACT_FILES = (
     "pyproject.toml",
+    "requirements.lock",
     "readiness/mvp-evidence.schema.json",
     "readiness/mvp-readiness.schema.json",
 )
+_EFFECTIVE_BLOCKING_REASON_BY_ISSUE = {
+    "readiness.source_tree_digest_mismatch": (
+        "No verified fixed-command regression result binds the current OperaMind source tree."
+    ),
+}
+
+
+def _invalid_evidence_reason(issue_codes: list[str]) -> str:
+    for code in issue_codes:
+        if code in _EFFECTIVE_BLOCKING_REASON_BY_ISSUE:
+            return _EFFECTIVE_BLOCKING_REASON_BY_ISSUE[code]
+    return "Referenced readiness Evidence is invalid for the current repository state."
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +90,7 @@ class MvpGateSummary:
     evidence_template: str | None
     evidence_count: int
     blocking_reason: str | None
+    validation_issues: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +102,7 @@ class MvpReadinessSummary:
     passed_gates: tuple[str, ...]
     pending_gates: tuple[str, ...]
     gates: tuple[MvpGateSummary, ...]
+    validation_issues: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -450,40 +468,70 @@ class MvpReadinessValidator:
         return ValidationReport(tuple(issues))
 
     def summarize(self, manifest_path: Path) -> MvpReadinessSummary:
-        """Return a compact stage summary for operators and CLI output."""
+        """Return one effective status derived from manifest and Evidence validation."""
 
         root = self.repository_root.resolve()
-        manifest = self._load_object(manifest_path.resolve())
+        path = manifest_path.resolve()
+        if not path.is_relative_to(root):
+            raise ValueError("MVP readiness manifest must stay within the repository")
+        manifest = self._load_object(path)
+        schema = self._load_object(root / "readiness/mvp-readiness.schema.json")
+        schema_issues = self._schema_issues(
+            manifest,
+            schema,
+            path.relative_to(root).as_posix(),
+        )
+        if schema_issues:
+            raise ValueError(
+                "; ".join(f"{issue.code}: {issue.location}" for issue in schema_issues)
+            )
         gates = self._objects(manifest["gates"])
+        report = self.validate(path)
+        issues_by_gate: dict[int, list[str]] = {}
+        for issue in report.issues:
+            parts = issue.location.split("/")
+            if len(parts) >= 2 and parts[0] == "gates" and parts[1].isdigit():
+                gate_index = int(parts[1])
+                if gate_index < len(gates):
+                    issues_by_gate.setdefault(gate_index, []).append(issue.code)
         gate_summaries = tuple(
             MvpGateSummary(
                 gate_id=str(gate["gate_id"]),
-                status=str(gate["status"]),
+                status="pending" if index in issues_by_gate else str(gate["status"]),
                 expected_evidence_type=REQUIRED_EVIDENCE_TYPE_BY_GATE[str(gate["gate_id"])],
                 evidence_template=EVIDENCE_TEMPLATE_BY_GATE[str(gate["gate_id"])],
-                evidence_count=len(self._objects(gate["evidence_refs"])),
-                blocking_reason=(
-                    str(gate["blocking_reason"]) if gate.get("blocking_reason") else None
+                evidence_count=(
+                    0 if index in issues_by_gate else len(self._objects(gate["evidence_refs"]))
                 ),
+                blocking_reason=(
+                    _invalid_evidence_reason(issues_by_gate[index])
+                    if index in issues_by_gate
+                    else str(gate["blocking_reason"])
+                    if gate.get("blocking_reason")
+                    else None
+                ),
+                validation_issues=tuple(issues_by_gate.get(index, ())),
             )
-            for gate in gates
+            for index, gate in enumerate(gates)
         )
         passed = tuple(gate.gate_id for gate in gate_summaries if gate.status == "passed")
         pending = tuple(gate.gate_id for gate in gate_summaries if gate.status == "pending")
-        if str(manifest["status"]) == "ready" and not pending:
+        manifest_status = str(manifest["status"]) if report.is_valid else "stale"
+        if manifest_status == "ready" and not pending:
             stage = "mvp_ready"
         elif "golden_dataset" in passed:
             stage = "golden_ready_partial"
-        elif not passed and manifest_path.resolve().is_relative_to(root):
+        elif not passed:
             stage = "dev_silver"
         else:
             stage = "partial_ready"
         return MvpReadinessSummary(
-            manifest_status=str(manifest["status"]),
+            manifest_status=manifest_status,
             readiness_stage=stage,
             passed_gates=passed,
             pending_gates=pending,
             gates=gate_summaries,
+            validation_issues=tuple(issue.code for issue in report.issues),
         )
 
     @staticmethod

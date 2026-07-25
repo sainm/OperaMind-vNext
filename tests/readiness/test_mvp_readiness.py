@@ -114,6 +114,31 @@ def _promote_golden_fixture(dataset_root: Path) -> Path:
     return dataset_root / "manifest.golden.json"
 
 
+def _repository_with_current_readiness(tmp_path: Path) -> Path:
+    repository = tmp_path / "repository"
+    for directory in ("contracts", "golden-dataset", "profiles", "readiness"):
+        shutil.copytree(ROOT / directory, repository / directory)
+    source_root = repository / "src"
+    source_root.mkdir()
+    (source_root / "baseline.py").write_text("VALUE = 'tested'\n", encoding="utf-8")
+
+    manifest_path = repository / "readiness/mvp-readiness.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    gate = next(
+        item for item in manifest["gates"] if item["gate_id"] == "full_local_regression"
+    )
+    evidence_ref = gate["evidence_refs"][0]
+    evidence_path = repository / evidence_ref["path"]
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    evidence["subject"]["source_tree_sha256"] = MvpReadinessValidator.source_tree_digest(
+        repository
+    )
+    evidence_path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+    evidence_ref["sha256"] = sha256(evidence_path.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return repository
+
+
 def test_pending_manifest_is_valid_but_not_mvp_ready() -> None:
     validator = MvpReadinessValidator(ROOT)
     path = ROOT / "readiness/mvp-readiness.silver.json"
@@ -148,7 +173,8 @@ def test_repository_manifest_records_finalized_local_gates() -> None:
     )
     summary = validator.summarize(path)
 
-    assert structural.is_valid, structural.issues
+    issue_codes = {issue.code for issue in structural.issues}
+    assert issue_codes <= {"readiness.source_tree_digest_mismatch"}
     assert not ready.is_valid
     assert summary.readiness_stage == "golden_ready_partial"
     assert summary.passed_gates[:4] == (
@@ -157,7 +183,15 @@ def test_repository_manifest_records_finalized_local_gates() -> None:
         "human_approval_e2e",
         "target_deployment_e2e",
     )
-    assert set(summary.passed_gates[4:]) <= {"full_local_regression"}
+    if structural.is_valid:
+        assert summary.manifest_status == "pending"
+        assert summary.passed_gates[4:] == ("full_local_regression",)
+        assert summary.validation_issues == ()
+    else:
+        assert summary.manifest_status == "stale"
+        assert summary.passed_gates[4:] == ()
+        assert "full_local_regression" in summary.pending_gates
+        assert summary.validation_issues == ("readiness.source_tree_digest_mismatch",)
     assert "github_copilot_live" in summary.pending_gates
     assert "target_deployment_e2e" not in summary.pending_gates
     assert "golden_dataset" not in {issue.message.rsplit(": ", 1)[-1] for issue in ready.issues}
@@ -338,6 +372,35 @@ def test_source_tree_digest_includes_web_static_assets(tmp_path: Path) -> None:
     page_changed = MvpReadinessValidator.source_tree_digest(tmp_path)
 
     assert len({original, script_changed, stylesheet_changed, page_changed}) == 4
+
+
+def test_source_tree_digest_includes_quality_pipeline_inputs(tmp_path: Path) -> None:
+    workflow = tmp_path / ".github/workflows/quality.yml"
+    script = tmp_path / "scripts/check_critical_coverage.py"
+    policy = tmp_path / "quality/critical-coverage.json"
+    lock = tmp_path / "requirements.lock"
+    for path in (workflow, script, policy):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    workflow.write_text("name: quality\n", encoding="utf-8")
+    script.write_text("MINIMUM = 80\n", encoding="utf-8")
+    policy.write_text('{"minimum": 80}\n', encoding="utf-8")
+    lock.write_text("pytest==8.4.2\n", encoding="utf-8")
+    original = MvpReadinessValidator.source_tree_digest(tmp_path)
+    changed: set[str] = set()
+
+    for path, replacement in (
+        (workflow, "name: relaxed\n"),
+        (script, "MINIMUM = 0\n"),
+        (policy, '{"minimum": 0}\n'),
+        (lock, "pytest==8.4.1\n"),
+    ):
+        before = path.read_text(encoding="utf-8")
+        path.write_text(replacement, encoding="utf-8")
+        changed.add(MvpReadinessValidator.source_tree_digest(tmp_path))
+        path.write_text(before, encoding="utf-8")
+
+    assert original not in changed
+    assert len(changed) == 4
 
 
 def test_full_regression_evidence_uses_fixed_scope_and_complete_counts() -> None:
@@ -958,13 +1021,15 @@ def test_repository_baseline_cannot_claim_mvp_ready(
 
 
 def test_repository_baseline_accepts_reviewed_golden_readiness(
+    tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    repository = _repository_with_current_readiness(tmp_path)
     assert (
         baseline_main(
             [
                 "--root",
-                str(ROOT),
+                str(repository),
                 "--manifest",
                 "golden-dataset/manifest.golden.json",
                 "--readiness-manifest",
@@ -1021,13 +1086,15 @@ def test_repository_with_reviewed_golden_still_cannot_claim_mvp_ready(
 
 
 def test_baseline_prints_readiness_status_for_selected_manifest(
+    tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    repository = _repository_with_current_readiness(tmp_path)
     assert (
         baseline_main(
             [
                 "--root",
-                str(ROOT),
+                str(repository),
                 "--manifest",
                 "golden-dataset/manifest.golden.json",
                 "--readiness-manifest",
@@ -1048,13 +1115,15 @@ def test_baseline_prints_readiness_status_for_selected_manifest(
 
 
 def test_baseline_prints_machine_readable_readiness_status(
+    tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    repository = _repository_with_current_readiness(tmp_path)
     assert (
         baseline_main(
             [
                 "--root",
-                str(ROOT),
+                str(repository),
                 "--manifest",
                 "golden-dataset/manifest.golden.json",
                 "--readiness-manifest",
@@ -1085,6 +1154,7 @@ def test_baseline_prints_machine_readable_readiness_status(
         "expected_evidence_type": "golden_manifest",
         "gate_id": "golden_dataset",
         "status": "passed",
+        "validation_issues": [],
     }
     provider_gate = next(
         gate for gate in payload["gates"] if gate["gate_id"] == "embedding_provider_live"
@@ -1097,13 +1167,15 @@ def test_baseline_prints_machine_readable_readiness_status(
 
 
 def test_baseline_can_require_selected_readiness_stage(
+    tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    repository = _repository_with_current_readiness(tmp_path)
     assert (
         baseline_main(
             [
                 "--root",
-                str(ROOT),
+                str(repository),
                 "--manifest",
                 "golden-dataset/manifest.golden.json",
                 "--readiness-manifest",

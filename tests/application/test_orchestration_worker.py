@@ -3,6 +3,8 @@ from __future__ import annotations
 import threading
 from collections.abc import Mapping
 
+import pytest
+
 from operamind.application.orchestration_worker import (
     OrchestrationTaskExecutionCancelled,
     OrchestrationTaskExecutionContext,
@@ -10,6 +12,56 @@ from operamind.application.orchestration_worker import (
     OrchestrationTaskWorker,
     OrchestrationWorkerConfiguration,
 )
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"executor_id": " "}, "executor_id"),
+        ({"capabilities": ()}, "capabilities"),
+        ({"capabilities": ("change_planning", "change_planning")}, "unique"),
+        ({"worker_token": ""}, "worker token"),
+        ({"heartbeat_interval_seconds": 0}, "heartbeat interval"),
+        ({"idle_poll_seconds": 3601}, "idle poll interval"),
+    ],
+)
+def test_worker_configuration_rejects_unsafe_values(
+    override: dict[str, object], message: str
+) -> None:
+    values: dict[str, object] = {
+        "executor_kind": "agent",
+        "executor_id": "worker-1",
+        "capabilities": ("change_planning",),
+        "worker_token": "worker-test-token",
+    }
+    values.update(override)
+
+    with pytest.raises(ValueError, match=message):
+        OrchestrationWorkerConfiguration(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"outcome": "unknown"},
+        {"summary": " "},
+        {"artifact_refs": ("",)},
+        {"artifact_refs": ("artifact-1", "artifact-1")},
+        {"artifact_refs": ()},
+        {"evidence": {}},
+    ],
+)
+def test_worker_result_rejects_noncanonical_values(values: dict[str, object]) -> None:
+    result: dict[str, object] = {
+        "outcome": "completed",
+        "summary": "done",
+        "artifact_refs": ("artifact-1",),
+        "evidence": {"accepted": True},
+    }
+    result.update(values)
+
+    with pytest.raises(ValueError):
+        OrchestrationTaskExecutionResult(**result)  # type: ignore[arg-type]
 
 
 class FakeQueue:
@@ -292,6 +344,22 @@ def test_worker_records_bounded_failure_without_exception_text() -> None:
     assert queue.results[0]["summary"] == "Task handler failed with RuntimeError"
     assert queue.results[0]["evidence"] == {"error_kind": "handler_exception"}
     assert "password" not in str(queue.results[0])
+
+
+def test_worker_returns_idle_after_stop() -> None:
+    worker = OrchestrationTaskWorker(
+        queue=FakeQueue(),
+        handlers={"generate_plan": SuccessfulHandler()},
+        configuration=_configuration(),
+    )
+
+    worker.stop()
+
+    assert worker.run_once().to_dict() == {
+        "status": "idle",
+        "recovered_expired_lease": False,
+        "detail": "worker is stopping",
+    }
 
 
 def _configuration() -> OrchestrationWorkerConfiguration:

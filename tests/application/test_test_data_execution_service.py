@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
+import pytest
+
 from operamind.application import test_data_execution_service as service_module
 from operamind.application.test_data_execution import (
     TestDataExecutionEvidence as DataExecutionEvidence,
@@ -45,6 +47,9 @@ COMPLETED = datetime(2026, 7, 18, 12, 1, tzinfo=UTC)
 
 class FakeRepository:
     instances: ClassVar[list[FakeRepository]] = []
+    reservation: ClassVar[DataExecutionReservation | None] = None
+    record: ClassVar[DataExecutionRecord | None] = None
+    result: ClassVar[dict[str, Any] | None] = None
 
     def __init__(self, connection: object, contracts: ContractCatalog) -> None:
         del connection, contracts
@@ -55,7 +60,9 @@ class FakeRepository:
 
     def reserve(self, write: DataExecutionRunWrite) -> DataExecutionReservation:
         self.reserved = write
-        return DataExecutionReservation(True, _record("running", None, created=False))
+        return self.__class__.reservation or DataExecutionReservation(
+            True, _record("running", None, created=False)
+        )
 
     def load_plan(self, *, orchestration_id: str, project_id: str) -> dict[str, Any]:
         assert (orchestration_id, project_id) == ("orchestration-001", "visiondemo")
@@ -67,11 +74,11 @@ class FakeRepository:
 
     def get_result(self, run_id: str) -> dict[str, Any] | None:
         del run_id
-        return self.completed
+        return self.__class__.result if self.__class__.result is not None else self.completed
 
     def get_record(self, run_id: str) -> DataExecutionRecord | None:
         assert run_id == "run-001"
-        return _record("running", None, created=False)
+        return self.__class__.record or _record("running", None, created=False)
 
     def recover(
         self,
@@ -111,8 +118,61 @@ class FixtureExecutor:
         )
 
 
-def test_service_reserves_executes_and_persists_canonical_plan(monkeypatch: Any) -> None:
+@pytest.fixture(autouse=True)
+def reset_fake_repository() -> None:
     FakeRepository.instances.clear()
+    FakeRepository.reservation = None
+    FakeRepository.record = None
+    FakeRepository.result = None
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"actor": " "},
+        {"started_at": datetime(2026, 7, 18, 12, 0)},
+        {"replay_of_run_id": " "},
+    ],
+)
+def test_execution_service_request_rejects_invalid_values(values: dict[str, object]) -> None:
+    request: dict[str, object] = {
+        "execution_result_id": "result-001",
+        "run_id": "run-001",
+        "orchestration_id": "orchestration-001",
+        "test_data_plan_id": "test-data-plan-001",
+        "approval_grant_id": "grant-001",
+        "project_id": "visiondemo",
+        "actor": "tester@example.invalid",
+    }
+    request.update(values)
+
+    with pytest.raises(ValueError):
+        DataExecutionServiceRequest(**request)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"reason": ""},
+        {"stale_before": datetime(2026, 7, 18, 12, 0)},
+    ],
+)
+def test_recovery_request_rejects_invalid_values(values: dict[str, object]) -> None:
+    request: dict[str, object] = {
+        "recovery_id": "recovery-001",
+        "run_id": "run-001",
+        "project_id": "visiondemo",
+        "actor": "operator@example.invalid",
+        "reason": "worker stopped",
+        "stale_before": COMPLETED,
+    }
+    request.update(values)
+
+    with pytest.raises(ValueError):
+        DataExecutionRecoveryRequest(**request)  # type: ignore[arg-type]
+
+
+def test_service_reserves_executes_and_persists_canonical_plan(monkeypatch: Any) -> None:
     monkeypatch.setattr(service_module, "TestDataExecutionRepository", FakeRepository)
     service = DataExecutionService(
         connection=object(),  # type: ignore[arg-type]
@@ -134,7 +194,6 @@ def test_service_reserves_executes_and_persists_canonical_plan(monkeypatch: Any)
 
 
 def test_service_recovers_stale_run_with_fail_closed_artifact(monkeypatch: Any) -> None:
-    FakeRepository.instances.clear()
     monkeypatch.setattr(service_module, "TestDataExecutionRepository", FakeRepository)
     service = DataExecutionService(
         connection=object(),  # type: ignore[arg-type]
@@ -162,7 +221,6 @@ def test_service_recovers_stale_run_with_fail_closed_artifact(monkeypatch: Any) 
 
 
 def test_service_publishes_outer_worker_failure_as_canonical_result(monkeypatch: Any) -> None:
-    FakeRepository.instances.clear()
     monkeypatch.setattr(service_module, "TestDataExecutionRepository", FakeRepository)
     service = DataExecutionService(
         connection=object(),  # type: ignore[arg-type]
@@ -182,6 +240,67 @@ def test_service_publishes_outer_worker_failure_as_canonical_result(monkeypatch:
     assert repository.completed == result.artifact
 
 
+def test_service_rejects_duplicate_running_reservation(monkeypatch: Any) -> None:
+    FakeRepository.reservation = DataExecutionReservation(
+        False, _record("running", None, created=False)
+    )
+    service = _service(monkeypatch)
+
+    with pytest.raises(ValueError, match="already running"):
+        service.execute(_request())
+
+
+def test_service_returns_existing_completed_reservation(monkeypatch: Any) -> None:
+    completed_record = _record("passed", COMPLETED, created=False)
+    FakeRepository.reservation = DataExecutionReservation(False, completed_record)
+    FakeRepository.result = {"artifact_type": "TestDataExecutionResult", "status": "passed"}
+    service = _service(monkeypatch)
+
+    result = service.execute(_request())
+
+    assert result.created is False
+    assert result.record == completed_record
+    assert result.artifact["status"] == "passed"
+
+
+def test_service_fails_closed_when_completed_reservation_has_no_artifact(
+    monkeypatch: Any,
+) -> None:
+    FakeRepository.reservation = DataExecutionReservation(
+        False, _record("passed", COMPLETED, created=False)
+    )
+    service = _service(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="no result Artifact"):
+        service.execute(_request())
+
+
+def test_execute_reserved_validates_existence_and_scope(monkeypatch: Any) -> None:
+    service = _service(monkeypatch)
+    FakeRepository.record = None
+    repository = FakeRepository.instances[-1]
+    repository.get_record = lambda run_id: None  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="does not exist"):
+        service.execute_reserved(_request())
+
+    repository.get_record = lambda run_id: _record(  # type: ignore[method-assign]
+        "running", None, created=False, project_id="other-project"
+    )
+    with pytest.raises(ValueError, match="scope differs"):
+        service.execute_reserved(_request())
+
+
+def _service(monkeypatch: Any) -> DataExecutionService:
+    monkeypatch.setattr(service_module, "TestDataExecutionRepository", FakeRepository)
+    return DataExecutionService(
+        connection=object(),  # type: ignore[arg-type]
+        contracts=ContractCatalog.load(ROOT / "contracts"),
+        executors={"fixture": FixtureExecutor()},
+        clock=lambda: COMPLETED,
+    )
+
+
 def _request() -> DataExecutionServiceRequest:
     return DataExecutionServiceRequest(
         execution_result_id="result-001",
@@ -195,7 +314,13 @@ def _request() -> DataExecutionServiceRequest:
     )
 
 
-def _record(status: str, completed_at: datetime | None, *, created: bool) -> DataExecutionRecord:
+def _record(
+    status: str,
+    completed_at: datetime | None,
+    *,
+    created: bool,
+    project_id: str = "visiondemo",
+) -> DataExecutionRecord:
     return DataExecutionRecord(
         created=created,
         run_id="run-001",
@@ -203,7 +328,7 @@ def _record(status: str, completed_at: datetime | None, *, created: bool) -> Dat
         orchestration_id="orchestration-001",
         test_data_plan_id="test-data-plan-001",
         approval_grant_id="grant-001",
-        project_id="visiondemo",
+        project_id=project_id,
         analysis_case_id="case-001",
         status=status,
         started_at=STARTED,

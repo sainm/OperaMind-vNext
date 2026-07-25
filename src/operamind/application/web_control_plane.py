@@ -1646,38 +1646,23 @@ class WebControlPlaneService:
     def readiness(self) -> dict[str, object]:
         path = self._root / "readiness/mvp-readiness.json"
         validator = MvpReadinessValidator(self._root)
-        report = validator.validate(path)
         summary = validator.summarize(path)
         manifest = json.loads(path.read_text(encoding="utf-8"))
-        stale_regression = any(
-            issue.code == "readiness.source_tree_digest_mismatch" for issue in report.issues
-        )
         gates = [
             {
                 "gate_id": gate.gate_id,
-                "status": (
-                    "pending"
-                    if stale_regression and gate.gate_id == "full_local_regression"
-                    else gate.status
-                ),
-                "blocking_reason": (
-                    "Current source tree requires a fresh full regression."
-                    if stale_regression and gate.gate_id == "full_local_regression"
-                    else gate.blocking_reason
-                ),
-                "evidence_count": (
-                    0
-                    if stale_regression and gate.gate_id == "full_local_regression"
-                    else gate.evidence_count
-                ),
+                "status": gate.status,
+                "blocking_reason": gate.blocking_reason,
+                "evidence_count": gate.evidence_count,
+                "validation_issues": list(gate.validation_issues),
             }
             for gate in summary.gates
         ]
         return {
             "readiness_stage": summary.readiness_stage,
-            "manifest_status": summary.manifest_status if report.is_valid else "stale",
+            "manifest_status": summary.manifest_status,
             "manifest_version": manifest["manifest_version"],
-            "validation_issues": [issue.code for issue in report.issues],
+            "validation_issues": list(summary.validation_issues),
             "passed_gates": [gate["gate_id"] for gate in gates if gate["status"] == "passed"],
             "pending_gates": [gate["gate_id"] for gate in gates if gate["status"] == "pending"],
             "gates": gates,

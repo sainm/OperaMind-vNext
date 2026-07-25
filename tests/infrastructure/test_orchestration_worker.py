@@ -20,6 +20,31 @@ from operamind.infrastructure.orchestration_worker import (
 )
 
 
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"action": " "}, "action"),
+        ({"argv": ()}, "command"),
+        ({"working_directory": Path("/path/does/not/exist")}, "working directory"),
+        ({"timeout_seconds": 0}, "timeout"),
+        ({"max_output_bytes": 1}, "output limit"),
+        ({"environment_keys": ("BAD=VALUE",)}, "environment keys"),
+    ],
+)
+def test_fixed_command_configuration_rejects_unsafe_values(
+    tmp_path: Path, overrides: dict[str, object], message: str
+) -> None:
+    values: dict[str, object] = {
+        "action": "generate_plan",
+        "argv": (sys.executable,),
+        "working_directory": tmp_path,
+    }
+    values.update(overrides)
+
+    with pytest.raises(ValueError, match=message):
+        FixedCommandHandlerConfiguration(**values)  # type: ignore[arg-type]
+
+
 def test_fixed_command_handler_uses_json_protocol_without_lease_token(tmp_path: Path) -> None:
     code = (
         "import json,sys; value=json.load(sys.stdin); task=value['task']; "
@@ -138,3 +163,50 @@ def test_fixed_command_handler_terminates_when_output_limit_is_crossed(tmp_path:
 
     assert raised.value.error_kind == "handler_output_too_large"
     assert time.monotonic() - started < 3
+
+
+@pytest.mark.parametrize(
+    ("code", "error_kind"),
+    [
+        ("import sys; sys.exit(7)", "handler_nonzero_exit"),
+        ("print('not-json')", "handler_invalid_json"),
+    ],
+)
+def test_fixed_command_handler_rejects_failed_protocol(
+    tmp_path: Path, code: str, error_kind: str
+) -> None:
+    handler = FixedCommandOrchestrationTaskHandler(
+        FixedCommandHandlerConfiguration(
+            action="generate_plan",
+            argv=(sys.executable, "-c", code),
+            working_directory=tmp_path,
+            timeout_seconds=5,
+        )
+    )
+
+    with pytest.raises(OrchestrationTaskExecutionError) as raised:
+        handler.execute(
+            task={"orchestration_task_id": "task-failed-protocol"},
+            context=OrchestrationTaskExecutionContext(threading.Event(), threading.Event()),
+        )
+
+    assert raised.value.error_kind == error_kind
+
+
+def test_fixed_command_handler_reports_launch_failure(tmp_path: Path) -> None:
+    handler = FixedCommandOrchestrationTaskHandler(
+        FixedCommandHandlerConfiguration(
+            action="generate_plan",
+            argv=(str(tmp_path / "missing-handler"),),
+            working_directory=tmp_path,
+            timeout_seconds=5,
+        )
+    )
+
+    with pytest.raises(OrchestrationTaskExecutionError) as raised:
+        handler.execute(
+            task={"orchestration_task_id": "task-launch-failure"},
+            context=OrchestrationTaskExecutionContext(threading.Event(), threading.Event()),
+        )
+
+    assert raised.value.error_kind == "handler_launch_failed"
