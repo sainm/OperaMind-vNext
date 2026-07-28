@@ -8,6 +8,7 @@ from typing import Any
 from operamind.domain import ChangeReviewStatus, SearchCandidate, SearchChannel
 from operamind.infrastructure.embeddings import EmbeddingProvider
 from operamind.infrastructure.postgres import (
+    DocumentNodeRepository,
     ProfileRepository,
     RankedSearchHit,
     SearchIndexBuildSpec,
@@ -67,6 +68,162 @@ class HybridSearchResult:
     search_index_build_id: str
     ranking_policy_version: str
     candidates: tuple[SearchCandidate, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RequirementDocumentDiscoveryRequest:
+    """Requirement-only lookup against one current Canonical document index."""
+
+    project_id: str
+    query_text: str
+    vector_top_k: int = 10
+    keyword_top_k: int = 10
+    final_top_k: int = 10
+    rrf_k: int = 60
+
+    def __post_init__(self) -> None:
+        if not self.project_id.strip() or not self.query_text.strip():
+            raise ValueError("Requirement document discovery scope must not be blank")
+        for name, value in (
+            ("vector_top_k", self.vector_top_k),
+            ("keyword_top_k", self.keyword_top_k),
+            ("final_top_k", self.final_top_k),
+        ):
+            if not 1 <= value <= 100:
+                raise ValueError(f"{name} must be between 1 and 100")
+        if self.rrf_k <= 0:
+            raise ValueError("rrf_k must be greater than zero")
+
+
+@dataclass(frozen=True, slots=True)
+class RequirementDocumentCandidate:
+    document_id: str
+    section_id: str
+    heading_path: tuple[str, ...]
+    summary: str
+    source_refs: tuple[str, ...]
+    score: float
+    channels: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "document_id": self.document_id,
+            "section_id": self.section_id,
+            "heading_path": list(self.heading_path),
+            "summary": self.summary,
+            "source_refs": list(self.source_refs),
+            "score": self.score,
+            "channels": list(self.channels),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RequirementDocumentDiscoveryResult:
+    search_index_build_id: str
+    document_snapshot_id: str
+    embedding_profile_binding_key: str
+    candidates: tuple[RequirementDocumentCandidate, ...]
+
+
+class RequirementDocumentDiscoveryService:
+    """Find design-document candidates before a StructuredChange exists."""
+
+    def __init__(
+        self,
+        *,
+        profiles: ProfileCatalog,
+        profile_repository: ProfileRepository,
+        index_repository: SearchIndexRepository,
+        node_repository: DocumentNodeRepository,
+    ) -> None:
+        self._profiles = profiles
+        self._profile_repository = profile_repository
+        self._index_repository = index_repository
+        self._nodes = node_repository
+
+    def run(
+        self,
+        request: RequirementDocumentDiscoveryRequest,
+        *,
+        provider: EmbeddingProvider,
+    ) -> RequirementDocumentDiscoveryResult:
+        bindings = self._profile_repository.list_active_by_type(
+            project_id=request.project_id,
+            profile_type="EmbeddingProfile",
+        )
+        if len(bindings) != 1:
+            raise HybridSearchBlockedError(
+                "Requirement discovery requires exactly one active EmbeddingProfile "
+                f"(found {len(bindings)})"
+            )
+        binding = bindings[0]
+        self._profiles.validate_profile(binding.profile)
+        builds = self._index_repository.find_current_builds(
+            project_id=request.project_id,
+            profile_version_id=binding.profile_version_id,
+        )
+        if len(builds) != 1:
+            raise HybridSearchBlockedError(
+                "Requirement discovery requires exactly one current ready Search Index "
+                f"(found {len(builds)})"
+            )
+        build = builds[0]
+        HybridSearchService._validate_profile_build(binding.profile, build.spec)
+        query_batch = provider.embed((request.query_text,))
+        if query_batch.model != build.spec.model or len(query_batch.vectors) != 1:
+            raise HybridSearchBlockedError("Requirement embedding does not match Search Index")
+        query_vector = query_batch.vectors[0]
+        if len(query_vector) != build.spec.dimensions:
+            raise HybridSearchBlockedError(
+                "Requirement embedding dimensions do not match Search Index"
+            )
+        candidates = _reciprocal_rank_fusion(
+            vector_hits=self._index_repository.vector_search(
+                state=build,
+                query_vector=query_vector,
+                top_k=request.vector_top_k,
+            ),
+            keyword_hits=self._index_repository.keyword_search(
+                state=build,
+                query_text=request.query_text,
+                top_k=request.keyword_top_k,
+            ),
+            source_query_id="requirement-document-discovery",
+            rrf_k=request.rrf_k,
+            final_top_k=request.final_top_k,
+        )
+        records = self._nodes.get_nodes_with_documents(
+            project_id=request.project_id,
+            snapshot_id=build.spec.snapshot_id,
+            node_ids=tuple(candidate.target_id for candidate in candidates),
+        )
+        by_node_id = {record.node.node_id: record for record in records}
+        if set(by_node_id) != {candidate.target_id for candidate in candidates}:
+            raise HybridSearchBlockedError(
+                "Requirement discovery candidate cannot be rehydrated in Canonical Snapshot"
+            )
+        resolved = tuple(
+            RequirementDocumentCandidate(
+                document_id=by_node_id[candidate.target_id].document_id,
+                section_id=candidate.target_id,
+                heading_path=by_node_id[candidate.target_id].node.heading_path,
+                summary=by_node_id[candidate.target_id].node.summary,
+                source_refs=by_node_id[candidate.target_id].node.source_refs,
+                score=candidate.score,
+                channels=tuple(channel.value for channel in candidate.channels),
+            )
+            for candidate in candidates
+        )
+        if not resolved:
+            raise HybridSearchBlockedError(
+                "Requirement discovery returned no Canonical document candidates"
+            )
+        return RequirementDocumentDiscoveryResult(
+            search_index_build_id=build.spec.build_id,
+            document_snapshot_id=build.spec.snapshot_id,
+            embedding_profile_binding_key=binding.binding_key,
+            candidates=resolved,
+        )
 
 
 class HybridSearchService:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -22,58 +21,53 @@ from operamind.application.change_automation import (
     ChangeAutomationDecision,
     decide_change_automation,
 )
-from operamind.application.change_closure_service import ChangeClosureService
 from operamind.application.change_orchestration_service import ChangeOrchestrationService
-from operamind.application.change_traceability import build_change_traceability
-from operamind.application.code_graph_view import build_code_graph_view
 from operamind.application.copilot_coding_task import (
     CopilotCodingTaskPublishRequest,
     CopilotCodingTaskService,
+    build_bridge_task_view,
 )
+from operamind.application.edit_packet import EditPacketRequest, EditPacketService
 from operamind.application.failure_management import build_failure_management
+from operamind.application.main_change_flow import build_main_change_flow
 from operamind.application.orchestration_task import (
     OrchestrationSchedulingPolicy,
     build_orchestration_task,
 )
-from operamind.application.profile_registry import (
-    CanonicalProfileRegistryService,
-    ProfileActivationRequest,
-)
+from operamind.application.project_stack import ProjectProfileBootstrapper
 from operamind.application.test_case_revision_service import TestCaseRevisionService
-from operamind.application.test_data_execution_service import (
-    TestDataExecutionRecoveryRequest,
-    TestDataExecutionService,
-)
-from operamind.application.ui_knowledge_review import (
-    UiKnowledgeReviewRequest,
-    UiKnowledgeReviewService,
-)
 from operamind.contracts import ContractCatalog
 from operamind.domain.test_case_execution_scope import (
     compare_test_case_version_results,
 )
+from operamind.infrastructure.code_graph import GitWorkspaceInspector
 from operamind.infrastructure.postgres import (
-    ApprovalGrantRepository,
+    AnalysisRepository,
     ArtifactRepository,
     ChangeAutomationRepository,
     ChangeAutomationRunRecord,
     ChangeClosureRepository,
     ChangeOrchestrationRepository,
-    CodeGraphSnapshotRepository,
     ImpactRepository,
     OrchestrationTaskRepository,
     PersistenceConflictError,
+    ProfileRepository,
     TestCaseExecutionAuthorizationRepository,
     TestDataExecutionEventWrite,
     TestDataExecutionRepository,
     TestDataExecutionRunWrite,
-    UiKnowledgeReviewQueryRepository,
-    UnresolvedEvidenceRepository,
     WebControlPlaneRepository,
 )
 from operamind.infrastructure.postgres.web_command_repository import WebCommandRepository
 from operamind.profiles import ProfileCatalog
-from operamind.readiness import MvpReadinessValidator
+
+_AUTOMATIC_FORBIDDEN_GLOBS = (
+    ".git/**",
+    "**/.env",
+    "**/.env.*",
+    "**/*.key",
+    "**/*.pem",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,24 +92,6 @@ class ChangeRequestInput:
     submitted_by: str
 
 
-@dataclass(frozen=True, slots=True)
-class ImpactDecisionInput:
-    report_id: str
-    approved_item_ids: tuple[str, ...]
-    rejected_item_ids: tuple[str, ...]
-    note: str
-    actor: str
-
-
-@dataclass(frozen=True, slots=True)
-class GrantInput:
-    edit_packet_id: str
-    expires_at: datetime
-    command_profile_binding_key: str
-    test_command_refs: tuple[str, ...]
-    actor: str
-
-
 class WebControlPlaneService:
     """Coordinate Web commands without weakening existing transaction boundaries."""
 
@@ -134,7 +110,6 @@ class WebControlPlaneService:
         self._web_commands = WebCommandRepository(connection)
         self._artifacts = ArtifactRepository(connection, self._contracts)
         self._impacts = ImpactRepository(connection, self._contracts)
-        self._grants = ApprovalGrantRepository(connection, self._contracts)
         self._grant_service = ApprovalGrantService(
             connection=connection,
             contracts=self._contracts,
@@ -144,30 +119,19 @@ class WebControlPlaneService:
             connection=connection, repository_root=self._root
         )
         self._orchestrations = ChangeOrchestrationRepository(connection, self._contracts)
-        self._code_graphs = CodeGraphSnapshotRepository(connection, self._contracts)
         self._test_data_runs = TestDataExecutionRepository(connection, self._contracts)
         self._closures = ChangeClosureRepository(connection, self._contracts)
         self._automation_runs = ChangeAutomationRepository(connection)
-        self._profile_registry = CanonicalProfileRegistryService(
-            connection=connection,
-            profiles=self._profiles,
-        )
+        self._profile_repository = ProfileRepository(connection, self._profiles)
         self._orchestration_tasks = OrchestrationTaskRepository(
             connection, orchestration_scheduling_policy
         )
-        self._closure_service = ChangeClosureService(connection, self._contracts)
         self._test_case_revisions = TestCaseRevisionService(
             connection=connection,
             repository_root=self._root,
         )
         self._case_execution_authorizations = TestCaseExecutionAuthorizationRepository(
             connection, self._contracts
-        )
-        self._ui_knowledge_reviews = UiKnowledgeReviewQueryRepository(connection)
-        self._unresolved_evidence = UnresolvedEvidenceRepository(connection, self._contracts)
-        self._ui_knowledge_review_service = UiKnowledgeReviewService(
-            connection=connection,
-            profiles=self._profiles,
         )
 
     def execute_web_command(
@@ -215,321 +179,186 @@ class WebControlPlaneService:
             "target_document_ref": value.target_document_ref,
         }
         artifact.update({key: item for key, item in optional.items() if item is not None})
+        analysis_case_id = value.analysis_case_id
+        case_blocker: str | None = None
+        if analysis_case_id is None and value.ambiguity_status == "clear":
+            try:
+                analysis_case_id = self._ensure_change_request_case(value)
+            except ValueError as error:
+                case_blocker = str(error)
         record = self._repository.submit_change_request(
             artifact=artifact,
-            analysis_case_id=value.analysis_case_id,
+            analysis_case_id=analysis_case_id,
             submitted_by=value.submitted_by,
         )
-        return {
+        response: dict[str, object] = {
             "created": record.created,
             "change_request": self._repository.get_change_request(record.change_request_id),
         }
+        if value.ambiguity_status == "clear":
+            registered_workspace = self._repository.project_workspace_root(value.project_id)
+            if registered_workspace is None:
+                response["copilot_task"] = None
+                response["task_blocker"] = (
+                    "Project has no registered Workspace for the VS Code Change Task"
+                )
+            else:
+                task_id = _web_id(
+                    "copilot-change-task",
+                    value.project_id,
+                    value.change_request_id,
+                    "initial",
+                )
+                response["copilot_task"] = CopilotCodingTaskService(
+                    connection=self._connection,
+                    repository_root=self._root,
+                ).publish(
+                    CopilotCodingTaskPublishRequest(
+                        coding_task_id=task_id,
+                        change_request_id=value.change_request_id,
+                        project_id=value.project_id,
+                        workspace_root=Path(registered_workspace),
+                        task_summary=value.requirement_text or value.business_rules[0].text,
+                        actor=value.submitted_by,
+                        idempotency_key="initial-change-task",
+                    )
+                )
+        if case_blocker is not None:
+            response["case_blocker"] = case_blocker
+        return response
+
+    def _ensure_change_request_case(self, value: ChangeRequestInput) -> str:
+        registration = self._repository.project_repository_registration(value.project_id)
+        if registration is None:
+            raise ValueError("Project has no registered Repository for automatic Analysis Case")
+        workspace_root = Path(registration["workspace_root"]).resolve(strict=True)
+        git = GitWorkspaceInspector().inspect(workspace_root)
+        if git.remote_url != registration["remote_url"]:
+            raise ValueError("Registered Repository remote differs from Workspace Git remote")
+        ProjectProfileBootstrapper(
+            profiles=self._profiles,
+            repository=self._profile_repository,
+        ).ensure(
+            project_id=value.project_id,
+            repository_id=registration["repository_id"],
+            workspace_root=workspace_root,
+        )
+        case_id = _web_id(
+            "analysis-case",
+            value.project_id,
+            value.change_request_id,
+            "automatic",
+        )
+        AnalysisRepository(self._connection).start(
+            project_id=value.project_id,
+            project_name=registration["project_name"],
+            repository_id=registration["repository_id"],
+            remote_url=registration["remote_url"],
+            workspace_root=str(workspace_root),
+            repository_revision_id=(
+                self._repository.repository_revision_id(
+                    repository_id=registration["repository_id"],
+                    commit_sha=git.head_sha,
+                )
+                or _web_id(
+                    "repository-revision",
+                    registration["repository_id"],
+                    git.head_sha,
+                )
+            ),
+            commit_sha=git.head_sha,
+            analysis_case_id=case_id,
+        )
+        return case_id
 
     def list_projects(self) -> dict[str, object]:
         projects = self._repository.list_projects()
         return {"projects": list(projects), "count": len(projects)}
 
-    def profile_registry(self, *, project_id: str) -> dict[str, object]:
-        return self._profile_registry.management_view(project_id=project_id)
-
-    def activate_profile(
-        self,
-        *,
-        project_id: str,
-        binding_key: str,
-        profile_version_id: str,
-        reason: str,
-        idempotency_key: str,
-        actor: str,
-    ) -> dict[str, object]:
-        activation_event_id = _web_id(
-            "profile-activation",
-            project_id,
-            binding_key,
-            profile_version_id,
-            idempotency_key,
-        )
-        return self.execute_web_command(
-            command_scope=f"profile:activate:{project_id}:{binding_key}",
-            idempotency_key=idempotency_key,
-            actor=actor,
-            payload={
-                "profile_version_id": profile_version_id,
-                "binding_key": binding_key,
-                "reason": reason,
-            },
-            operation=lambda: self._profile_registry.activate(
-                ProfileActivationRequest(
-                    activation_event_id=activation_event_id,
-                    project_id=project_id,
-                    binding_key=binding_key,
-                    profile_version_id=profile_version_id,
-                    activated_by=actor,
-                    reason=reason,
-                )
-            ),
-        )
-
-    def request_profile_rebuild(
-        self,
-        *,
-        project_id: str,
-        drift_event_id: str,
-        artifact_type: str,
-        artifact_id: str,
-        idempotency_key: str,
-        actor: str,
-    ) -> dict[str, object]:
-        request_id = _web_id(
-            "profile-rebuild",
-            project_id,
-            drift_event_id,
-            artifact_type,
-            artifact_id,
-            idempotency_key,
-        )
-        return self.execute_web_command(
-            command_scope=(
-                f"profile:rebuild:{project_id}:{drift_event_id}:{artifact_type}:{artifact_id}"
-            ),
-            idempotency_key=idempotency_key,
-            actor=actor,
-            payload={
-                "drift_event_id": drift_event_id,
-                "artifact_type": artifact_type,
-                "artifact_id": artifact_id,
-            },
-            operation=lambda: self._profile_registry.request_rebuild(
-                rebuild_request_id=request_id,
-                project_id=project_id,
-                drift_event_id=drift_event_id,
-                artifact_type=artifact_type,
-                artifact_id=artifact_id,
-                requested_by=actor,
-            ),
-        )
-
-    def requeue_profile_rebuild(
-        self,
-        *,
-        project_id: str,
-        rebuild_request_id: str,
-        reason: str,
-        idempotency_key: str,
-        actor: str,
-    ) -> dict[str, object]:
-        return self.execute_web_command(
-            command_scope=(f"profile:rebuild:requeue:{project_id}:{rebuild_request_id}"),
-            idempotency_key=idempotency_key,
-            actor=actor,
-            payload={"rebuild_request_id": rebuild_request_id, "reason": reason},
-            operation=lambda: self._profile_registry.requeue_rebuild(
-                rebuild_request_id=rebuild_request_id,
-                project_id=project_id,
-                actor=actor,
-                reason=reason,
-            ),
-        )
-
-    def unresolved_evidence_management(
-        self, *, project_id: str, history_limit: int = 50
-    ) -> dict[str, object]:
-        """Return current unresolved findings plus immutable report history."""
-
-        return self._unresolved_evidence.management_view(
-            project_id=project_id,
-            history_limit=history_limit,
-        )
-
     def list_change_requests(self, *, project_id: str) -> dict[str, object]:
         requests = self._repository.list_change_requests(project_id=project_id)
         return {"change_requests": list(requests), "count": len(requests)}
 
-    def ui_knowledge_review_queue(self, *, project_id: str) -> dict[str, object]:
-        queue = self._ui_knowledge_reviews.review_queue(project_id=project_id)
-        for draft in cast_list(queue["drafts"]):
-            snapshot_id = str(draft["snapshot_id"])
-            for target in cast_list(draft["targets"]):
-                evidence = target.get("evidence")
-                if not isinstance(evidence, dict):
-                    continue
-                evidence_ref = str(evidence["evidence_ref"])
-                available = self._local_evidence_path(evidence_ref) is not None
-                evidence["available"] = available
-                evidence["content_url"] = (
-                    "/api/v1/projects/"
-                    f"{quote(project_id, safe='')}/ui-knowledge/reviews/"
-                    f"{quote(snapshot_id, safe='')}/screenshots/"
-                    f"{quote(str(evidence['evidence_id']), safe='')}"
-                    if available
-                    else None
-                )
-        return queue
-
-    def review_ui_knowledge(
-        self,
-        *,
-        project_id: str,
-        source_snapshot_id: str,
-        result_snapshot_version: str,
-        decision: str,
-        reason: str,
-        activate: bool,
-        idempotency_key: str,
-        actor: str,
-    ) -> dict[str, object]:
-        identity = _web_id(
-            "ui-knowledge-review",
-            project_id,
-            source_snapshot_id,
-            result_snapshot_version,
-            decision,
-            idempotency_key,
-        )
-        result_snapshot_id = _web_id(
-            "ui-knowledge-snapshot",
-            project_id,
-            source_snapshot_id,
-            result_snapshot_version,
-            decision,
-            idempotency_key,
-        )
-        reviewed = self._ui_knowledge_review_service.review(
-            UiKnowledgeReviewRequest(
-                project_id=project_id,
-                source_snapshot_id=source_snapshot_id,
-                result_snapshot_id=result_snapshot_id,
-                result_snapshot_version=result_snapshot_version,
-                review_event_id=identity,
-                decision=decision,
-                reviewed_by=actor,
-                activate=activate,
-                reason=reason,
+    def main_change_flow(self, request_id: str) -> dict[str, object]:
+        """Return the six-stage product flow without internal control-plane state."""
+        request = self._repository.get_change_request(request_id)
+        case_id = request.get("analysis_case_id")
+        workspace = (
+            self._repository.case_workspace(
+                project_id=str(request["project_id"]),
+                case_id=str(case_id),
             )
+            if case_id is not None
+            else None
         )
-        return {
-            "created": reviewed.record.created,
-            "review_event_id": reviewed.record.review_event_id,
-            "source_snapshot_id": reviewed.record.source_snapshot_id,
-            "result_snapshot_id": reviewed.record.result_snapshot_id,
-            "result_snapshot_version": reviewed.snapshot.snapshot_version,
-            "decision": reviewed.record.decision,
-            "active": reviewed.record.active,
-            "reviewed_by": actor,
-            "reason": reason,
-        }
-
-    def ui_knowledge_screenshot_path(
-        self, *, project_id: str, snapshot_id: str, evidence_id: str
-    ) -> Path:
-        evidence = self._ui_knowledge_reviews.evidence(
-            project_id=project_id,
-            snapshot_id=snapshot_id,
-            evidence_id=evidence_id,
-        )
-        if evidence["sanitized"] is not True:
-            raise ValueError("UI Knowledge review Evidence is not sanitized")
-        path = self._local_evidence_path(str(evidence["evidence_ref"]))
-        if path is None:
-            raise ValueError("UI Knowledge review screenshot does not exist")
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if digest != evidence["content_digest"]:
-            raise PersistenceConflictError("UI Knowledge review screenshot digest differs")
-        return path
-
-    def get_change_request(self, request_id: str) -> dict[str, object]:
-        return self._repository.get_change_request(request_id)
-
-    def publish_copilot_task(
-        self,
-        *,
-        request_id: str,
-        project_id: str,
-        edit_packet_id: str,
-        approval_grant_id: str,
-        workspace_root: Path,
-        task_summary: str,
-        idempotency_key: str,
-        actor: str,
-    ) -> dict[str, object]:
-        task_id = _web_id("copilot-coding-task", project_id, request_id, idempotency_key)
-        return CopilotCodingTaskService(
-            connection=self._connection,
-            repository_root=self._root,
-        ).publish(
-            CopilotCodingTaskPublishRequest(
-                coding_task_id=task_id,
-                change_request_id=request_id,
-                project_id=project_id,
-                edit_packet_id=edit_packet_id,
-                approval_grant_id=approval_grant_id,
-                workspace_root=workspace_root,
-                task_summary=task_summary,
-                actor=actor,
-                idempotency_key=idempotency_key,
+        if workspace is not None:
+            workspace["impact_artifact"] = self._repository.impact_report(
+                project_id=str(request["project_id"]),
+                case_id=str(case_id),
             )
-        )
-
-    def copilot_task(self, request_id: str) -> dict[str, object]:
-        self._repository.get_change_request(request_id)
+        automation = self._automation_runs.latest_for_request(request_id)
         task = CopilotCodingTaskService(
             connection=self._connection,
             repository_root=self._root,
         ).latest_for_request(request_id)
-        return {"task": task}
+        return build_main_change_flow(
+            request=request,
+            document_diff=self._repository.document_diff(request_id),
+            workspace=workspace,
+            automation=self._decorate_automation(automation) if automation is not None else None,
+            copilot_task=task,
+            execution=self.execution_management(request_id),
+        )
 
-    def cancel_copilot_task(
+    def propose_test_case_revision(
+        self, *, request_id: str, instruction: str, actor: str
+    ) -> dict[str, object]:
+        """Preview a natural-language Test Case change without changing the active plan."""
+
+        result = self._test_case_revisions.propose(
+            change_request_id=request_id,
+            instruction=instruction,
+            actor=actor,
+        )
+        return {
+            "state": result["state"],
+            "proposal": _public_test_case_proposal(cast_dict(result["proposal"])),
+        }
+
+    def confirm_test_case_revision(
         self,
         *,
         request_id: str,
-        coding_task_id: str,
-        reason: str,
-        idempotency_key: str,
+        proposal_id: str,
+        selections: dict[str, str],
         actor: str,
     ) -> dict[str, object]:
-        return CopilotCodingTaskService(
-            connection=self._connection,
-            repository_root=self._root,
-        ).cancel(
-            coding_task_id=coding_task_id,
-            change_request_id=request_id,
-            actor=actor,
-            reason=reason,
-            idempotency_key=idempotency_key,
-        )
+        """Apply one reviewed proposal and restart only the downstream test flow."""
 
-    def retry_copilot_task(
-        self,
-        *,
-        request_id: str,
-        coding_task_id: str,
-        idempotency_key: str,
-        actor: str,
-        edit_packet_id: str,
-        approval_grant_id: str,
-        workspace_root: Path,
-    ) -> dict[str, object]:
-        retry_id = _web_id("copilot-coding-task-retry", request_id, coding_task_id, idempotency_key)
-        return CopilotCodingTaskService(
-            connection=self._connection,
-            repository_root=self._root,
-        ).retry(
-            coding_task_id=coding_task_id,
-            retry_coding_task_id=retry_id,
+        result = self._test_case_revisions.confirm(
             change_request_id=request_id,
+            proposal_id=proposal_id,
+            selections=selections,
             actor=actor,
-            idempotency_key=idempotency_key,
-            edit_packet_id=edit_packet_id,
-            approval_grant_id=approval_grant_id,
-            workspace_root=workspace_root,
         )
+        revision = cast_dict(result["revision"])
+        revision_id = str(revision["revision_id"])
+        self.start_change_automation(
+            request_id=request_id,
+            idempotency_key=f"test-case-revision:{revision_id}",
+            actor="automation:operamind",
+        )
+        return {
+            "state": "applied",
+            "flow": self.main_change_flow(request_id),
+        }
 
     def claim_copilot_task(self, *, workspace_root: Path, consumer_id: str) -> dict[str, object]:
         task = CopilotCodingTaskService(
             connection=self._connection,
             repository_root=self._root,
         ).claim_next(workspace_root=workspace_root, consumer_id=consumer_id)
-        return {"task": task}
+        return {"task": build_bridge_task_view(task) if task is not None else None}
 
     def accept_copilot_task(
         self,
@@ -539,7 +368,7 @@ class WebControlPlaneService:
         consumer_id: str,
         actor: str,
     ) -> dict[str, object]:
-        return CopilotCodingTaskService(
+        view = CopilotCodingTaskService(
             connection=self._connection,
             repository_root=self._root,
         ).accept(
@@ -548,6 +377,7 @@ class WebControlPlaneService:
             consumer_id=consumer_id,
             actor=actor,
         )
+        return build_bridge_task_view(view)
 
     def resume_copilot_task(
         self,
@@ -556,7 +386,7 @@ class WebControlPlaneService:
         workspace_root: Path,
         consumer_id: str,
     ) -> dict[str, object]:
-        return CopilotCodingTaskService(
+        view = CopilotCodingTaskService(
             connection=self._connection,
             repository_root=self._root,
         ).resume(
@@ -564,6 +394,7 @@ class WebControlPlaneService:
             workspace_root=workspace_root,
             consumer_id=consumer_id,
         )
+        return build_bridge_task_view(view)
 
     def cancel_copilot_task_from_bridge(
         self,
@@ -584,21 +415,16 @@ class WebControlPlaneService:
             consumer_id=consumer_id,
         )
         artifact = cast_dict(resumed["task"])
-        return task.cancel(
-            coding_task_id=coding_task_id,
-            change_request_id=str(artifact["change_request_id"]),
-            actor=actor,
-            reason=reason,
-            idempotency_key=f"bridge:{consumer_id}",
-            consumer_id=consumer_id,
+        return build_bridge_task_view(
+            task.cancel(
+                coding_task_id=coding_task_id,
+                change_request_id=str(artifact["change_request_id"]),
+                actor=actor,
+                reason=reason,
+                idempotency_key=f"bridge:{consumer_id}",
+                consumer_id=consumer_id,
+            )
         )
-
-    def orchestrate_change_request(self, *, request_id: str, actor: str) -> dict[str, object]:
-        result = self._orchestration_service.orchestrate(change_request_id=request_id, actor=actor)
-        return {
-            "created": result.created,
-            "bundle": self._orchestrations.latest_bundle(request_id),
-        }
 
     def start_change_automation(
         self, *, request_id: str, idempotency_key: str, actor: str
@@ -617,265 +443,11 @@ class WebControlPlaneService:
             run_id=record.automation_run_id, actor=actor, created=record.created
         )
 
-    def resume_change_automation(
-        self, *, request_id: str, run_id: str, actor: str
-    ) -> dict[str, object]:
-        record = self._automation_runs.get(run_id)
-        if record.change_request_id != request_id:
-            raise ValueError("Change Automation Run does not belong to Change Request")
-        return self._advance_change_automation(run_id=run_id, actor=actor, created=False)
-
-    def change_automation(self, request_id: str) -> dict[str, object]:
-        self._repository.get_change_request(request_id)
-        run = self._automation_runs.latest_for_request(request_id)
-        return {"run": self._decorate_automation(run) if run is not None else None}
-
-    def orchestration_tasks(self, run_id: str) -> dict[str, object]:
-        self._automation_runs.get(run_id)
-        return {"tasks": self._orchestration_tasks.list_for_run(run_id)}
-
-    def orchestration_task(self, task_id: str) -> dict[str, object]:
-        return {"task": self._orchestration_tasks.view(task_id)}
-
-    def orchestration_task_management(
-        self,
-        *,
-        project_id: str | None,
-        states: tuple[str, ...],
-        capability: str | None,
-        blocking_reason: str | None,
-        limit: int,
-    ) -> dict[str, object]:
-        tasks = self._orchestration_tasks.list_management(
-            project_id=project_id,
-            states=states,
-            capability=capability,
-            blocking_reason=blocking_reason,
-            limit=limit,
-        )
-        return {"tasks": tasks, "count": len(tasks)}
-
-    def orchestration_task_dependency_graph(
-        self,
-        *,
-        project_id: str | None,
-        automation_run_id: str | None,
-        limit: int,
-    ) -> dict[str, object]:
-        return self._orchestration_tasks.dependency_graph(
-            project_id=project_id,
-            automation_run_id=automation_run_id,
-            limit=limit,
-        )
-
-    def orchestration_task_runtime_monitoring(
-        self, *, project_id: str | None, window_hours: int
-    ) -> dict[str, object]:
-        return self._orchestration_tasks.runtime_monitoring(
-            project_id=project_id,
-            window_hours=window_hours,
-        )
-
-    def orchestration_workers(self, *, project_id: str | None) -> dict[str, object]:
-        workers = self._orchestration_tasks.list_worker_registrations(project_id=project_id)
-        return {"workers": workers, "count": len(workers), "project_id": project_id}
-
-    def update_orchestration_worker_configuration(
-        self,
-        *,
-        executor_kind: str,
-        executor_id: str,
-        capabilities: tuple[str, ...],
-        max_concurrent_tasks: int,
-        actor: str,
-    ) -> dict[str, object]:
-        return {
-            "worker": self._orchestration_tasks.update_worker_configuration(
-                executor_kind=executor_kind,
-                executor_id=executor_id,
-                capabilities=capabilities,
-                max_concurrent_tasks=max_concurrent_tasks,
-                actor=actor,
-            )
-        }
-
-    def operate_orchestration_worker(
-        self,
-        *,
-        executor_kind: str,
-        executor_id: str,
-        operation: str,
-        actor: str,
-    ) -> dict[str, object]:
-        statuses = {"enable": "online", "disable": "offline", "drain": "draining"}
-        if operation not in statuses:
-            raise ValueError("Worker operation must be enable, disable, or drain")
-        return {
-            "worker": self._orchestration_tasks.set_worker_status(
-                executor_kind=executor_kind,
-                executor_id=executor_id,
-                status=statuses[operation],
-                actor=actor,
-            )
-        }
-
-    def ready_orchestration_tasks(
-        self,
-        *,
-        executor_kind: str,
-        capabilities: tuple[str, ...],
-        project_id: str | None,
-    ) -> dict[str, object]:
-        return {
-            "tasks": self._orchestration_tasks.list_ready(
-                executor_kind=executor_kind,
-                capabilities=capabilities,
-                project_id=project_id,
-            )
-        }
-
-    def claim_orchestration_task(
-        self,
-        *,
-        executor_kind: str,
-        executor_id: str,
-        capabilities: tuple[str, ...],
-        project_id: str | None,
-        worker_token: str | None = None,
-    ) -> dict[str, object]:
-        return {
-            "task": self._orchestration_tasks.claim_next(
-                executor_kind=executor_kind,
-                executor_id=executor_id,
-                capabilities=capabilities,
-                project_id=project_id,
-                worker_token=worker_token,
-            )
-        }
-
-    def claim_selected_orchestration_task(
-        self,
-        *,
-        task_id: str,
-        executor_kind: str,
-        executor_id: str,
-        capabilities: tuple[str, ...],
-        project_id: str | None,
-        worker_token: str | None = None,
-    ) -> dict[str, object]:
-        return {
-            "task": self._orchestration_tasks.claim(
-                task_id=task_id,
-                executor_kind=executor_kind,
-                executor_id=executor_id,
-                capabilities=capabilities,
-                project_id=project_id,
-                worker_token=worker_token,
-            )
-        }
-
-    def heartbeat_orchestration_task(
-        self, *, task_id: str, executor_id: str, lease_token: str
-    ) -> dict[str, object]:
-        return {
-            "task": self._orchestration_tasks.heartbeat(
-                task_id=task_id, executor_id=executor_id, lease_token=lease_token
-            )
-        }
-
-    def release_orchestration_task(
-        self, *, task_id: str, executor_id: str, lease_token: str, reason: str
-    ) -> dict[str, object]:
-        return {
-            "task": self._orchestration_tasks.release(
-                task_id=task_id,
-                executor_id=executor_id,
-                lease_token=lease_token,
-                reason=reason,
-            )
-        }
-
-    def complete_orchestration_task(
-        self,
-        *,
-        task_id: str,
-        executor_id: str,
-        lease_token: str,
-        outcome: str,
-        summary: str,
-        artifact_refs: tuple[str, ...],
-        evidence: dict[str, object],
-    ) -> dict[str, object]:
-        return {
-            "task": self._orchestration_tasks.record_result(
-                task_id=task_id,
-                executor_id=executor_id,
-                lease_token=lease_token,
-                outcome=outcome,
-                summary=summary,
-                artifact_refs=artifact_refs,
-                evidence=evidence,
-            )
-        }
-
-    def requeue_orchestration_task(
-        self, *, task_id: str, actor: str, reason: str
-    ) -> dict[str, object]:
-        return {
-            "task": self._orchestration_tasks.requeue(task_id=task_id, actor=actor, reason=reason)
-        }
-
-    def update_orchestration_task_priority(
-        self, *, task_id: str, priority: int, actor: str
-    ) -> dict[str, object]:
-        return {
-            "task": self._orchestration_tasks.update_priority(
-                task_id=task_id, priority=priority, actor=actor
-            )
-        }
-
-    def bind_change_request_case(
-        self,
-        *,
-        request_id: str,
-        project_id: str,
-        case_id: str,
-        idempotency_key: str,
-        actor: str,
-    ) -> dict[str, object]:
-        event_id = _web_id("change-case-binding", project_id, request_id, case_id, idempotency_key)
-        created = self._repository.bind_analysis_case(
-            event_id=event_id,
-            request_id=request_id,
-            project_id=project_id,
-            case_id=case_id,
-            idempotency_key=idempotency_key,
-            actor=actor,
-        )
-        self._resume_latest_automation(request_id=request_id, actor=actor)
-        return {
-            "created": created,
-            "binding_event_id": event_id,
-            "change_request_id": request_id,
-            "analysis_case_id": case_id,
-        }
-
     def _advance_change_automation(
         self, *, run_id: str, actor: str, created: bool
     ) -> dict[str, object]:
         record = self._automation_runs.get(run_id)
-        request = self._repository.get_change_request(record.change_request_id)
-        diff = self._repository.document_diff(record.change_request_id)
-        case_id = request["analysis_case_id"]
-        workspace: dict[str, object] | None = None
-        if case_id is not None:
-            workspace = self._repository.case_workspace(
-                project_id=record.project_id, case_id=str(case_id)
-            )
-        bundle = self._orchestrations.latest_bundle(record.change_request_id)
-        execution = (
-            self.execution_management(record.change_request_id) if bundle is not None else None
-        )
+        request, diff, workspace, bundle, execution = self._automation_inputs(record)
         decision = decide_change_automation(
             request=request,
             diff=diff,
@@ -883,6 +455,44 @@ class WebControlPlaneService:
             has_orchestration=bundle is not None,
             execution=execution,
         )
+        for _ in range(2):
+            if decision.next_action == "auto_confirm_document_diff":
+                self._auto_confirm_document_diff(record=record, run_id=run_id)
+            elif decision.next_action == "auto_confirm_impact":
+                if workspace is None:
+                    raise RuntimeError("Automatic impact confirmation lost its Case workspace")
+                self._auto_confirm_impact(record=record, run_id=run_id, workspace=workspace)
+            else:
+                break
+            request, diff, workspace, bundle, execution = self._automation_inputs(record)
+            decision = decide_change_automation(
+                request=request,
+                diff=diff,
+                workspace=workspace,
+                has_orchestration=bundle is not None,
+                execution=execution,
+            )
+        if decision.next_action == "provision_execution_scope":
+            decision = self._provision_execution_scope_or_block(
+                record=record,
+                run_id=run_id,
+                workspace=workspace,
+            )
+            if decision.status != "blocked":
+                request, diff, workspace, bundle, execution = self._automation_inputs(record)
+                decision = decide_change_automation(
+                    request=request,
+                    diff=diff,
+                    workspace=workspace,
+                    has_orchestration=bundle is not None,
+                    execution=execution,
+                )
+        if decision.next_action == "start_test_data_execution" and bundle is not None:
+            decision = self._authorize_test_data_execution_or_block(
+                record=record,
+                run_id=run_id,
+                bundle=bundle,
+            )
         current_task = self._sync_orchestration_task(record=record, decision=decision, actor=actor)
         if decision.stage == "planning" and current_task is None:
             raise RuntimeError("Planning decision did not produce an Orchestration Task")
@@ -998,6 +608,23 @@ class WebControlPlaneService:
                     ),
                     artifact_refs=artifact_refs,
                 )
+                if decision.next_action == "provision_execution_scope":
+                    decision = self._provision_execution_scope_or_block(
+                        record=record,
+                        run_id=run_id,
+                        workspace=workspace,
+                    )
+                    if decision.status != "blocked":
+                        request, diff, workspace, bundle, execution = self._automation_inputs(
+                            record
+                        )
+                        decision = decide_change_automation(
+                            request=request,
+                            diff=diff,
+                            workspace=workspace,
+                            has_orchestration=bundle is not None,
+                            execution=execution,
+                        )
             finally:
                 self._orchestration_tasks.unregister_worker(
                     executor_kind="agent",
@@ -1016,6 +643,332 @@ class WebControlPlaneService:
         )
         view = self._automation_runs.view(run_id)
         return {"created": created, "run": self._decorate_automation(view)}
+
+    def _authorize_test_data_execution_or_block(
+        self,
+        *,
+        record: ChangeAutomationRunRecord,
+        run_id: str,
+        bundle: dict[str, object],
+    ) -> ChangeAutomationDecision:
+        orchestration = cast_dict(bundle["orchestration"])
+        try:
+            authorization = self._case_execution_authorizations.confirm_deterministic_scope(
+                target_orchestration_id=str(orchestration["orchestration_id"]),
+                actor="automation:operamind",
+                at=datetime.now(UTC),
+            )
+            management = self.execution_management(record.change_request_id)
+            controls = cast_dict(management["controls"])
+            if controls.get("can_start") is not True:
+                reason = str(
+                    controls.get("blocking_reason") or "TestDataPlan execution is not authorized"
+                )
+                raise ValueError(reason)
+        except (ValueError, PersistenceConflictError) as error:
+            reason = f"テスト実行範囲を自動確定できません: {error}"
+            return ChangeAutomationDecision(
+                stage="test_data_execution",
+                status="blocked",
+                next_action="resolve_blocker",
+                blocking_reason=reason,
+                message=reason,
+            )
+        artifact_refs = (authorization.authorization_id,) if authorization is not None else ()
+        self._automation_runs.transition(
+            run_id=run_id,
+            actor="automation:operamind",
+            stage="test_data_execution",
+            status="waiting",
+            next_action="start_test_data_execution",
+            blocking_reason=None,
+            message="テスト実行範囲を内部で確定しました。TestDataPlan の実行を開始できます。",
+            artifact_refs=artifact_refs,
+        )
+        return ChangeAutomationDecision(
+            stage="test_data_execution",
+            status="waiting",
+            next_action="start_test_data_execution",
+            blocking_reason=None,
+            message="テスト実行範囲を内部で確定しました。TestDataPlan の実行を開始できます。",
+        )
+
+    def _provision_execution_scope_or_block(
+        self,
+        *,
+        record: ChangeAutomationRunRecord,
+        run_id: str,
+        workspace: dict[str, object] | None,
+    ) -> ChangeAutomationDecision:
+        try:
+            artifact_refs = self._provision_execution_scope(record=record, run_id=run_id)
+        except (ValueError, PersistenceConflictError) as error:
+            reason = f"コード実行範囲を自動準備できません: {error}"
+            return ChangeAutomationDecision(
+                stage="execution_approval",
+                status="blocked",
+                next_action="resolve_blocker",
+                blocking_reason=reason,
+                message=reason,
+            )
+        self._automation_runs.transition(
+            run_id=run_id,
+            actor="automation:operamind",
+            stage="execution_approval",
+            status="completed",
+            next_action=None,
+            blocking_reason=None,
+            message="確認済み Impact からコード変更とテストの実行範囲を自動準備しました。",
+            artifact_refs=artifact_refs,
+        )
+        return ChangeAutomationDecision(
+            stage="execution_approval",
+            status="completed",
+            next_action=None,
+            blocking_reason=None,
+            message="コード実行範囲の自動準備が完了しました。",
+        )
+
+    def _provision_execution_scope(
+        self, *, record: ChangeAutomationRunRecord, run_id: str
+    ) -> tuple[str, ...]:
+        automatic_actor = "automation:operamind"
+        request = self._repository.get_change_request(record.change_request_id)
+        case_id_value = request.get("analysis_case_id")
+        if not isinstance(case_id_value, str):
+            raise ValueError("Change Request has no bound Analysis Case")
+        case_id = case_id_value
+        workspace_root_value = self._repository.project_workspace_root(record.project_id)
+        if workspace_root_value is None:
+            raise ValueError("Project has no registered Workspace")
+        workspace_root = Path(workspace_root_value)
+        workspace = self._repository.case_workspace(
+            project_id=record.project_id,
+            case_id=case_id,
+        )
+        impact = cast_dict(workspace["impact_report"])
+        confirmation = cast_dict(workspace["confirmation"])
+        impact_report_id = impact.get("id")
+        confirmation_id = confirmation.get("id")
+        if not isinstance(impact_report_id, str) or not isinstance(confirmation_id, str):
+            raise ValueError("Confirmed Impact and confirmation are required")
+
+        packet = cast_dict(workspace["edit_packet"])
+        packet_id = packet.get("id")
+        if not isinstance(packet_id, str):
+            packet_id = _web_id(
+                "copilot-edit-packet",
+                record.project_id,
+                case_id,
+                impact_report_id,
+                run_id,
+            )
+            EditPacketService(
+                connection=self._connection,
+                contracts=self._contracts,
+            ).run(
+                EditPacketRequest(
+                    edit_packet_id=packet_id,
+                    project_id=record.project_id,
+                    analysis_case_id=case_id,
+                    impact_report_id=impact_report_id,
+                    confirmation_id=confirmation_id,
+                    workspace_root=workspace_root,
+                    forbidden_globs=_AUTOMATIC_FORBIDDEN_GLOBS,
+                )
+            )
+        packet_artifact = self._artifacts.get(packet_id)
+        if packet_artifact is None:
+            raise RuntimeError("Automatic Edit Packet has no immutable Artifact")
+        test_files = packet_artifact.get("test_files")
+        if not isinstance(test_files, list) or not test_files:
+            raise ValueError("Confirmed code scope has no test files")
+
+        command_bindings = self._profile_repository.list_active_by_type(
+            project_id=record.project_id,
+            profile_type="CommandExecutionProfile",
+        )
+        if len(command_bindings) != 1:
+            raise ValueError(
+                "Project must have exactly one active CommandExecutionProfile "
+                f"(found {len(command_bindings)})"
+            )
+        command_binding = command_bindings[0]
+        templates = command_binding.profile.get("templates")
+        if not isinstance(templates, list):
+            raise RuntimeError("Validated CommandExecutionProfile lost its templates")
+        command_refs = tuple(
+            str(template["command_ref"])
+            for template in templates
+            if isinstance(template, dict) and isinstance(template.get("command_ref"), str)
+        )
+        if not command_refs:
+            raise ValueError("Active CommandExecutionProfile has no command templates")
+
+        workspace = self._repository.case_workspace(
+            project_id=record.project_id,
+            case_id=case_id,
+        )
+        grant = cast_dict(workspace["approval_grant"])
+        grant_id = grant.get("id")
+        if not isinstance(grant_id, str):
+            grant_id = _web_id(
+                "automatic-approval-grant",
+                record.project_id,
+                case_id,
+                packet_id,
+                run_id,
+            )
+            self._grant_service.issue(
+                ApprovalGrantRequest(
+                    grant_id=grant_id,
+                    project_id=record.project_id,
+                    analysis_case_id=case_id,
+                    edit_packet_id=packet_id,
+                    approved_by=automatic_actor,
+                    expires_at=datetime.now(UTC) + timedelta(hours=8),
+                    command_profile_binding_key=command_binding.binding_key,
+                    allowed_test_command_refs=command_refs,
+                )
+            )
+
+        task_service = CopilotCodingTaskService(
+            connection=self._connection,
+            repository_root=self._root,
+        )
+        task_view = task_service.latest_for_request(record.change_request_id)
+        if task_view is None:
+            task_view = task_service.publish(
+                CopilotCodingTaskPublishRequest(
+                    coding_task_id=_web_id(
+                        "copilot-change-task",
+                        record.project_id,
+                        record.change_request_id,
+                        "initial",
+                    ),
+                    change_request_id=record.change_request_id,
+                    project_id=record.project_id,
+                    edit_packet_id=packet_id,
+                    approval_grant_id=grant_id,
+                    workspace_root=workspace_root,
+                    task_summary=str(
+                        cast_dict(request["artifact"]).get("requirement_text")
+                        or "Confirmed change request"
+                    ),
+                    actor=automatic_actor,
+                    idempotency_key="automatic-execution-scope",
+                )
+            )
+        task_artifact = cast_dict(task_view["task"])
+        coding_task_id = str(task_artifact["coding_task_id"])
+        task_service.bind_execution_scope(
+            coding_task_id=coding_task_id,
+            analysis_case_id=case_id,
+            edit_packet_id=packet_id,
+            approval_grant_id=grant_id,
+            workspace_root=workspace_root,
+            actor=automatic_actor,
+        )
+        return packet_id, grant_id, coding_task_id
+
+    def _automation_inputs(
+        self, record: ChangeAutomationRunRecord
+    ) -> tuple[
+        dict[str, object],
+        dict[str, object],
+        dict[str, object] | None,
+        dict[str, object] | None,
+        dict[str, object] | None,
+    ]:
+        request = self._repository.get_change_request(record.change_request_id)
+        diff = self._repository.document_diff(record.change_request_id)
+        case_id = request["analysis_case_id"]
+        workspace: dict[str, object] | None = None
+        if case_id is not None:
+            workspace = self._repository.case_workspace(
+                project_id=record.project_id, case_id=str(case_id)
+            )
+            workspace["impact_artifact"] = self._repository.impact_report(
+                project_id=record.project_id,
+                case_id=str(case_id),
+            )
+        bundle = self._orchestrations.latest_bundle(record.change_request_id)
+        execution = (
+            self.execution_management(record.change_request_id) if bundle is not None else None
+        )
+        return request, diff, workspace, bundle, execution
+
+    def _auto_confirm_document_diff(
+        self, *, record: ChangeAutomationRunRecord, run_id: str
+    ) -> None:
+        automatic_actor = "automation:operamind"
+        self._repository.record_document_review(
+            event_id=_web_id(
+                "document-review",
+                record.project_id,
+                record.change_request_id,
+                f"automatic:{run_id}",
+            ),
+            request_id=record.change_request_id,
+            project_id=record.project_id,
+            decision="confirmed",
+            actor=automatic_actor,
+            note="高信頼かつ確認事項のない差分を自動確認",
+        )
+        self._automation_runs.transition(
+            run_id=run_id,
+            actor=automatic_actor,
+            stage="document_confirmation",
+            status="completed",
+            next_action=None,
+            blocking_reason=None,
+            message="確定的な設計書差分を自動確認しました。",
+        )
+
+    def _auto_confirm_impact(
+        self,
+        *,
+        record: ChangeAutomationRunRecord,
+        run_id: str,
+        workspace: dict[str, object],
+    ) -> None:
+        automatic_actor = "automation:operamind"
+        report = cast_dict(workspace["impact_artifact"])
+        report_id = str(report["impact_report_id"])
+        case_id = str(workspace["analysis_case_id"])
+        item_ids = [str(item["impact_item_id"]) for item in cast_list(report.get("items", []))]
+        artifact = {
+            "artifact_type": "ImpactConfirmation",
+            "schema_version": "v1",
+            "confirmation_id": _web_id(
+                "impact-confirmation",
+                record.project_id,
+                case_id,
+                report_id,
+                f"automatic:{run_id}",
+            ),
+            "impact_report_id": report_id,
+            "confirmed_by": automatic_actor,
+            "approved_item_ids": item_ids,
+            "rejected_item_ids": [],
+            "user_note": "未知項目のない確定的な影響範囲を自動確認",
+            "confirmed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        }
+        self._impacts.confirm(
+            project_id=record.project_id,
+            analysis_case_id=case_id,
+            artifact=artifact,
+        )
+        self._automation_runs.transition(
+            run_id=run_id,
+            actor=automatic_actor,
+            stage="impact_confirmation",
+            status="completed",
+            next_action=None,
+            blocking_reason=None,
+            message="確定的な影響範囲を自動確認しました。",
+            artifact_refs=(str(artifact["confirmation_id"]),),
+        )
 
     def _sync_orchestration_task(
         self,
@@ -1043,6 +996,16 @@ class WebControlPlaneService:
             self._advance_change_automation(
                 run_id=str(run["automation_run_id"]), actor=actor, created=False
             )
+
+    def resume_pending_change_automation(
+        self, *, request_id: str, actor: str
+    ) -> dict[str, object] | None:
+        """Resume the internal workflow after an external Copilot MCP result."""
+
+        self._repository.get_change_request(request_id)
+        self._resume_latest_automation(request_id=request_id, actor=actor)
+        run = self._automation_runs.latest_for_request(request_id)
+        return self._decorate_automation(run) if run is not None else None
 
     def _decorate_automation(self, run: dict[str, object]) -> dict[str, object]:
         value = dict(run)
@@ -1082,100 +1045,6 @@ class WebControlPlaneService:
         )
         return value
 
-    def change_orchestration(self, request_id: str) -> dict[str, object]:
-        return {"bundle": self._orchestrations.latest_bundle(request_id)}
-
-    def change_traceability(self, request_id: str) -> dict[str, object]:
-        """Return one request-scoped relation graph and its missing-link ledger."""
-
-        request = self._repository.get_change_request(request_id)
-        case_id = request.get("analysis_case_id")
-        project_id = str(request["project_id"])
-        case = (
-            self.case_detail(project_id=project_id, case_id=str(case_id))
-            if case_id is not None
-            else None
-        )
-        return build_change_traceability(
-            request=request,
-            document_diff=self.document_diff(request_id),
-            case=case,
-            bundle=self._orchestrations.latest_bundle(request_id),
-            management=self.execution_management(request_id),
-            modification=self.test_case_modification_state(request_id),
-            copilot_task=self.copilot_task(request_id),
-        )
-
-    def modify_test_case(
-        self, *, request_id: str, instruction: str, actor: str
-    ) -> dict[str, object]:
-        return self._test_case_revisions.propose(
-            change_request_id=request_id,
-            instruction=instruction,
-            actor=actor,
-        )
-
-    def confirm_test_case_modification(
-        self,
-        *,
-        request_id: str,
-        proposal_id: str,
-        selections: dict[str, str],
-        actor: str,
-    ) -> dict[str, object]:
-        return self._test_case_revisions.confirm(
-            change_request_id=request_id,
-            proposal_id=proposal_id,
-            selections=selections,
-            actor=actor,
-        )
-
-    def test_case_modification_state(self, request_id: str) -> dict[str, object]:
-        return self._test_case_revisions.state(request_id)
-
-    def undo_test_case_revision(
-        self,
-        *,
-        request_id: str,
-        revision_id: str,
-        idempotency_key: str,
-        actor: str,
-    ) -> dict[str, object]:
-        return self._test_case_revisions.undo(
-            change_request_id=request_id,
-            revision_id=revision_id,
-            idempotency_key=idempotency_key,
-            actor=actor,
-        )
-
-    def confirm_test_case_execution_scope(
-        self,
-        *,
-        request_id: str,
-        approval_grant_id: str,
-        target_scope_digest: str,
-        actor: str,
-    ) -> dict[str, object]:
-        bundle = self._orchestrations.latest_bundle(request_id)
-        if bundle is None:
-            raise ValueError("Change Orchestration does not exist")
-        orchestration = cast_dict(bundle["orchestration"])
-        record = self._case_execution_authorizations.confirm(
-            target_orchestration_id=str(orchestration["orchestration_id"]),
-            approval_grant_id=approval_grant_id,
-            target_scope_digest=target_scope_digest,
-            actor=actor,
-            at=datetime.now(UTC),
-        )
-        return {
-            "created": record.created,
-            "authorization_id": record.authorization_id,
-            "approval_grant_id": record.approval_grant_id,
-            "decision": record.decision,
-            "confirmed_by": record.confirmed_by,
-            "created_at": record.created_at.isoformat(),
-        }
-
     def execution_management(self, request_id: str) -> dict[str, object]:
         """Build one request-scoped read model for Test Data and final closure."""
         request = self._repository.get_change_request(request_id)
@@ -1194,6 +1063,7 @@ class WebControlPlaneService:
                 "project_id": request["project_id"],
                 "analysis_case_id": request["analysis_case_id"],
                 "orchestration_id": None,
+                "test_plan": None,
                 "test_data_plan": None,
                 "test_data_execution": None,
                 "business_coverage": None,
@@ -1241,17 +1111,9 @@ class WebControlPlaneService:
             ),
             None,
         )
-        evidence = self._repository.evidence(project_id=project_id, case_id=case_id)
-        stale_evidence_refs = _latest_stale_evidence_refs(revision_state)
-        current_ui_evidence = [
-            value
-            for value in cast_list(evidence["ui_evidence"])
-            if str(value.get("evidence_ref")) not in stale_evidence_refs
-        ]
         screenshots = self._screenshot_items(
             request_id=request_id,
             execution=execution,
-            ui_evidence=current_ui_evidence,
         )
         authorization = self._case_execution_authorizations.state(
             target_orchestration_id=orchestration_id,
@@ -1286,6 +1148,7 @@ class WebControlPlaneService:
             "project_id": project_id,
             "analysis_case_id": case_id,
             "orchestration_id": orchestration_id,
+            "test_plan": bundle["test_plan"],
             "test_data_plan": bundle["test_data_plan"],
             "test_data_execution": execution,
             "business_coverage": bundle["coverage_report"],
@@ -1410,7 +1273,7 @@ class WebControlPlaneService:
                     project_id=project_id,
                     event_type="reserved",
                     status="running",
-                    message="Web request reserved the approved TestDataPlan Run.",
+                    message="Internal coordinator reserved the approved TestDataPlan Run.",
                 )
             )
         return {
@@ -1422,258 +1285,20 @@ class WebControlPlaneService:
             "background_required": reservation.created,
         }
 
-    def recover_test_data_run(
-        self,
-        *,
-        request_id: str,
-        run_id: str,
-        idempotency_key: str,
-        actor: str,
-        reason: str,
-        stale_before: datetime,
-    ) -> dict[str, object]:
-        bundle = self._orchestrations.latest_bundle(request_id)
-        if bundle is None:
-            raise ValueError("Change Orchestration does not exist")
-        orchestration = cast_dict(bundle["orchestration"])
-        record = self._test_data_runs.get_record(run_id)
-        if record is None or record.orchestration_id != str(orchestration["orchestration_id"]):
-            raise ValueError("Test data recovery Run does not exist")
-        recovery_id = _web_id("test-data-recovery", record.project_id, run_id, idempotency_key)
-        result = TestDataExecutionService(
-            connection=self._connection,
-            contracts=self._contracts,
-            executors={},
-        ).recover(
-            TestDataExecutionRecoveryRequest(
-                recovery_id=recovery_id,
-                run_id=run_id,
-                project_id=record.project_id,
-                actor=actor,
-                reason=reason,
-                stale_before=stale_before,
-            )
-        )
-        closure = self._closure_service.close(
-            orchestration_id=record.orchestration_id,
-            actor=actor,
-        )
-        self._test_data_runs.append_event(
-            TestDataExecutionEventWrite(
-                run_id=record.run_id,
-                project_id=record.project_id,
-                event_type="closure_generated",
-                message=f"ChangeClosureResult: {closure.record.closure_result_id}",
-            )
-        )
-        return {
-            "created": result.created,
-            "run_id": run_id,
-            "status": result.record.status,
-            "recovery_id": recovery_id,
-            "closure_result_id": closure.record.closure_result_id,
-            "closure_status": closure.record.status,
-        }
-
-    def screenshot_path(self, *, request_id: str, origin: str, evidence_id: str) -> Path:
-        if origin not in {"test_data", "ui"}:
-            raise ValueError("Screenshot evidence origin does not exist")
+    def screenshot_path(self, *, request_id: str, evidence_id: str) -> Path:
         management = self.execution_management(request_id)
         for item in cast_list(management["screenshots"]):
-            if item.get("origin") == origin and item.get("evidence_id") == evidence_id:
+            if item.get("evidence_id") == evidence_id:
                 path = self._local_evidence_path(str(item["evidence_ref"]))
                 if path is not None:
                     return path
         raise ValueError("Screenshot evidence does not exist")
-
-    def document_diff(self, request_id: str) -> dict[str, object]:
-        return self._repository.document_diff(request_id)
-
-    def review_document_diff(
-        self,
-        *,
-        idempotency_key: str,
-        request_id: str,
-        project_id: str,
-        decision: str,
-        actor: str,
-        note: str | None,
-    ) -> dict[str, object]:
-        event_id = _web_id("document-review", project_id, request_id, idempotency_key)
-        record = self._repository.record_document_review(
-            event_id=event_id,
-            request_id=request_id,
-            project_id=project_id,
-            decision=decision,
-            actor=actor,
-            note=note,
-        )
-        response = {
-            "created": record.created,
-            "review_event_id": record.review_event_id,
-            "decision": record.decision,
-            "actor": record.actor,
-            "created_at": record.created_at.isoformat(),
-        }
-        self._resume_latest_automation(request_id=request_id, actor=actor)
-        return response
-
-    def case_detail(self, *, project_id: str, case_id: str) -> dict[str, object]:
-        progress = self._repository.case_workspace(project_id=project_id, case_id=case_id)
-        report = self._repository.impact_report(project_id=project_id, case_id=case_id)
-        evidence = self._repository.evidence(project_id=project_id, case_id=case_id)
-        grant_value = progress["approval_grant"]
-        grant_state: str | None = None
-        if isinstance(grant_value, dict) and grant_value.get("id") is not None:
-            grant_state = self._grants.inspect(str(grant_value["id"])).state
-            grant_value["state"] = grant_state
-        progress["steps"] = _progress_steps(progress, grant_state)
-        return {"progress": progress, "impact_report": report, "evidence": evidence}
-
-    def code_graph_view(
-        self,
-        *,
-        project_id: str,
-        snapshot_id: str,
-        max_nodes: int = 240,
-        max_edges: int = 480,
-    ) -> dict[str, object]:
-        """Return a bounded graph without source content for visual inspection."""
-
-        artifact = self._code_graphs.get(snapshot_id)
-        if artifact is None:
-            raise ValueError("Code Graph Snapshot does not exist")
-        return build_code_graph_view(
-            artifact,
-            project_id=project_id,
-            max_nodes=max_nodes,
-            max_edges=max_edges,
-        )
-
-    def confirm_impact(
-        self,
-        *,
-        idempotency_key: str,
-        request_id: str,
-        project_id: str,
-        case_id: str,
-        value: ImpactDecisionInput,
-    ) -> dict[str, object]:
-        self._repository.require_confirmed_document_review(
-            request_id=request_id, project_id=project_id, case_id=case_id
-        )
-        confirmation_id = _web_id(
-            "impact-confirmation", project_id, case_id, value.report_id, idempotency_key
-        )
-        existing = self._artifacts.get(confirmation_id)
-        if existing is not None:
-            expected = (
-                existing.get("impact_report_id"),
-                existing.get("confirmed_by"),
-                existing.get("approved_item_ids"),
-                existing.get("rejected_item_ids"),
-                existing.get("user_note", ""),
-            )
-            requested = (
-                value.report_id,
-                value.actor,
-                list(value.approved_item_ids),
-                list(value.rejected_item_ids),
-                value.note,
-            )
-            if expected != requested:
-                raise ValueError("Impact confirmation replay payload differs")
-            artifact = existing
-        else:
-            artifact = {
-                "artifact_type": "ImpactConfirmation",
-                "schema_version": "v1",
-                "confirmation_id": confirmation_id,
-                "impact_report_id": value.report_id,
-                "confirmed_by": value.actor,
-                "approved_item_ids": list(value.approved_item_ids),
-                "rejected_item_ids": list(value.rejected_item_ids),
-                "user_note": value.note,
-                "confirmed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            }
-        result = self._impacts.confirm(
-            project_id=project_id,
-            analysis_case_id=case_id,
-            artifact=artifact,
-        )
-        response = {
-            "created": result.created,
-            "confirmation_id": result.confirmation_id,
-            "impact_report_id": result.impact_report_id,
-            "report_status": result.report_status,
-        }
-        self._resume_latest_automation(request_id=request_id, actor=value.actor)
-        return response
-
-    def issue_grant(
-        self,
-        *,
-        idempotency_key: str,
-        request_id: str,
-        project_id: str,
-        case_id: str,
-        value: GrantInput,
-    ) -> dict[str, object]:
-        self._repository.require_confirmed_document_review(
-            request_id=request_id, project_id=project_id, case_id=case_id
-        )
-        grant_id = _web_id("approval-grant", project_id, case_id, idempotency_key)
-        result = self._grant_service.issue(
-            ApprovalGrantRequest(
-                grant_id=grant_id,
-                project_id=project_id,
-                analysis_case_id=case_id,
-                edit_packet_id=value.edit_packet_id,
-                approved_by=value.actor,
-                expires_at=value.expires_at,
-                command_profile_binding_key=value.command_profile_binding_key,
-                allowed_test_command_refs=value.test_command_refs,
-            )
-        )
-        response = {
-            "created": result.record.created,
-            "state": result.record.state,
-            "approval_grant": result.artifact,
-        }
-        self._resume_latest_automation(request_id=request_id, actor=value.actor)
-        return response
-
-    def readiness(self) -> dict[str, object]:
-        path = self._root / "readiness/mvp-readiness.json"
-        validator = MvpReadinessValidator(self._root)
-        summary = validator.summarize(path)
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-        gates = [
-            {
-                "gate_id": gate.gate_id,
-                "status": gate.status,
-                "blocking_reason": gate.blocking_reason,
-                "evidence_count": gate.evidence_count,
-                "validation_issues": list(gate.validation_issues),
-            }
-            for gate in summary.gates
-        ]
-        return {
-            "readiness_stage": summary.readiness_stage,
-            "manifest_status": summary.manifest_status,
-            "manifest_version": manifest["manifest_version"],
-            "validation_issues": list(summary.validation_issues),
-            "passed_gates": [gate["gate_id"] for gate in gates if gate["status"] == "passed"],
-            "pending_gates": [gate["gate_id"] for gate in gates if gate["status"] == "pending"],
-            "gates": gates,
-        }
 
     def _screenshot_items(
         self,
         *,
         request_id: str,
         execution: dict[str, Any] | None,
-        ui_evidence: list[dict[str, Any]],
     ) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
         result = execution.get("result") if execution is not None else None
@@ -1684,7 +1309,6 @@ class WebControlPlaneService:
                 items.append(
                     self._screenshot_item(
                         request_id=request_id,
-                        origin="test_data",
                         evidence_id=str(value["evidence_id"]),
                         evidence_ref=str(value["evidence_ref"]),
                         digest=str(value["content_digest"]),
@@ -1695,26 +1319,12 @@ class WebControlPlaneService:
                         },
                     )
                 )
-        for value in ui_evidence:
-            if value.get("evidence_type") != "screenshot":
-                continue
-            items.append(
-                self._screenshot_item(
-                    request_id=request_id,
-                    origin="ui",
-                    evidence_id=str(value["evidence_id"]),
-                    evidence_ref=str(value["evidence_ref"]),
-                    digest=str(value["sha256"]),
-                    context={"scenario_id": value.get("scenario_id")},
-                )
-            )
         return items
 
     def _screenshot_item(
         self,
         *,
         request_id: str,
-        origin: str,
         evidence_id: str,
         evidence_ref: str,
         digest: str,
@@ -1722,15 +1332,13 @@ class WebControlPlaneService:
     ) -> dict[str, object]:
         available = self._local_evidence_path(evidence_ref) is not None
         return {
-            "origin": origin,
             "evidence_id": evidence_id,
             "evidence_ref": evidence_ref,
             "sha256": digest,
             "available": available,
             "content_url": (
                 "/api/v1/change-requests/"
-                f"{quote(request_id, safe='')}/screenshots/{origin}/"
-                f"{quote(evidence_id, safe='')}"
+                f"{quote(request_id, safe='')}/screenshots/{quote(evidence_id, safe='')}"
                 if available
                 else None
             ),
@@ -1781,6 +1389,45 @@ def _closure_matches_edit_result(
     }
 
 
+def _public_test_case_proposal(proposal: dict[str, Any]) -> dict[str, object]:
+    def operation(value: dict[str, Any]) -> dict[str, object]:
+        return {
+            "case_title": value["case_title"],
+            "field": value["field"],
+            "action": value["action"],
+            "summary_before": value["summary_before"],
+            "summary_after": value["summary_after"],
+        }
+
+    return {
+        "proposal_id": proposal["proposal_id"],
+        "instruction": proposal["instruction"],
+        "analysis_status": proposal["analysis_status"],
+        "operations": [
+            operation(value) for value in cast(list[dict[str, Any]], proposal["operations"])
+        ],
+        "ambiguities": [
+            {
+                "ambiguity_id": ambiguity["ambiguity_id"],
+                "question": ambiguity["question"],
+                "options": [
+                    {
+                        "option_id": option["option_id"],
+                        "label": option["label"],
+                        "operations": [
+                            operation(value)
+                            for value in cast(list[dict[str, Any]], option["operations"])
+                        ],
+                    }
+                    for option in cast(list[dict[str, Any]], ambiguity["options"])
+                ],
+            }
+            for ambiguity in cast(list[dict[str, Any]], proposal["ambiguities"])
+        ],
+        "blocking_reasons": list(cast(list[str], proposal["blocking_reasons"])),
+    }
+
+
 def _web_id(prefix: str, *values: str) -> str:
     if any(not value.strip() for value in values):
         raise ValueError("Idempotency identity values must not be blank")
@@ -1799,50 +1446,6 @@ def _execution_is_stale(execution: dict[str, Any] | None, now: datetime) -> bool
     )
     latest = max(datetime.fromisoformat(value.replace("Z", "+00:00")) for value in timestamps)
     return latest <= now - timedelta(seconds=30)
-
-
-def _latest_stale_evidence_refs(state: dict[str, object]) -> frozenset[str]:
-    latest = state.get("latest")
-    if not isinstance(latest, dict):
-        return frozenset()
-    revision = latest.get("revision")
-    if not isinstance(revision, dict):
-        return frozenset()
-    values = revision.get("stale_evidence_refs", [])
-    if not isinstance(values, list):
-        raise RuntimeError("Test Case revision stale Evidence lost its array shape")
-    return frozenset(str(value) for value in values)
-
-
-def _progress_steps(
-    progress: dict[str, object],
-    grant_state: str | None,
-) -> list[dict[str, str]]:
-    report_status = str(cast_dict(progress["impact_report"]).get("status") or "pending")
-    edit_status = str(cast_dict(progress["edit_result"]).get("status") or "pending")
-    validation_status = str(cast_dict(progress["validation"]).get("status") or "pending")
-    return [
-        {
-            "step": "impact_scope",
-            "label": "影響範囲の確認",
-            "status": "completed" if report_status == "confirmed" else report_status,
-        },
-        {
-            "step": "approval_grant",
-            "label": "実行範囲の承認",
-            "status": grant_state or "pending",
-        },
-        {
-            "step": "code_execution",
-            "label": "コード変更とテスト",
-            "status": edit_status,
-        },
-        {
-            "step": "ui_verification",
-            "label": "UI 検証",
-            "status": validation_status,
-        },
-    ]
 
 
 def cast_dict(value: object) -> dict[str, object]:

@@ -238,7 +238,7 @@ _EXTENSIONS_BY_LANGUAGE = {
     "shell": (".sh",),
     "sql": (".sql",),
     "typescript": (".ts", ".tsx", ".mts", ".cts"),
-    "xml": (".xml", ".xsd", ".xsl", ".xslt", ".jsp", ".tag"),
+    "xml": (".xml", ".xsd", ".xsl", ".xslt", ".html", ".jsp", ".tag"),
     "yaml": (".yaml", ".yml"),
 }
 

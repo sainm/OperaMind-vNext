@@ -10,7 +10,7 @@ GitHub Actions の `.github/workflows/quality.yml` は、Python 3.12、ロック
 2. Mypy strict
 3. PostgreSQL 統合テストを含む Pytest
 4. リポジトリ全体の statement coverage 80%
-5. readiness／Golden RAG、Approval、Copilot、Task scheduling、Recovery の各重要ファイル coverage 80%
+5. readiness／Golden RAG、Approval、Copilot／Project Stack、Main Change Flow、Task scheduling、Recovery の各重要ファイル coverage 80%
 
 ローカルでは `CREATEDB` 権限を持つテスト用 Role の接続先を指定し、次のように同じゲートを再現します。指定した DB は管理接続としてのみ使用されます。Pytest は収集前に `template0` からランダム名の DB を作成し、全 migration を一度適用して `OPERAMIND_TEST_DATABASE_URL` を一時的に差し替え、終了時に残存接続を切断して DB を削除します。元の DB が汚れていても、その Schema やデータは複製も変更もされません。作成、migration、cleanup のいずれかが失敗した場合はテスト全体を fail closed にします。
 
@@ -32,14 +32,18 @@ export OPERAMIND_TEST_DATABASE_URL='postgresql://.../operamind_test'
 
 `scripts/check_critical_coverage.py` は平均値だけを見ません。ポリシーに列挙された各ファイルを個別に検査し、レポートからファイルが消えた場合も失敗します。閾値や対象ファイルを変更すると source-tree digest も変わるため、古い full-regression Evidence は自動的に stale になります。
 
+2026-07-28 の内部回帰では 612 passed、1 skipped、総 coverage 83.59% で、Copilot Change Task 84.17%、内部 Main Flow Coordinator 83.78%、TestData／UI／Closure 実行 88.71% を含む重要ファイルの個別 80% gate も通過しました。Mypy strict は 165 source files、VS Code Extension は 8 tests を通過しています。テスト件数の減少は、旧手動 CLI、documents／requirement dual-entry Planner／Batch、停止済み monolithic Executor、公開先を失った旧 Control Plane／UI Review Query 層、主閉ループと接続されていなかった旧 UiKnowledge／BrowserManifest／UiVerificationPlan 管線、および Copilot 計画を迂回して Frozen Golden Case から TestPlan を生成する旧 runtime fallback の専用テストを実装と一緒に削除したためです。旧 UI Plan 用 Grant 認可、旧 Validation 進捗 Query、二重 Screenshot origin、旧 UI Environment／Deployment 経由の target URL 解決も現行 TestDataPlan／Closure 契約へ統合しました。Golden RAG のオフライン品質基準、UI Evidence の保存、TestDataPlan の跨画面変数／UI 参照／cleanup 検証、および TestDataPlan 起点の UI 実行経路は維持しています。1 件は `OPERAMIND_PLAYWRIGHT_LIVE` を必要とする実 Edge テストです。この結果は Python／PostgreSQL 側の回帰確認であり、切替後の対象環境で行う Gradle build と Microsoft Edge の `full_local_regression` Evidence を代替しません。
+
+2026-07-29 の追加精簡では、生成済み Test Case の自然言語修正を六工程 Web に接続し、VisionDemo 固有の 455 行の E2E Plan Builder を production package から test fixture へ移しました。現在の Mypy strict は 164 source files、VS Code Extension は 8 tests、Golden Dataset の構造検証は合格しています。PostgreSQL が停止している現端末で実行可能な回帰は 562 passed、53 skipped で、skip は PostgreSQL 依存 52 件と live Browser 1 件です。PostgreSQL を含む coverage gate はこの状態では再判定せず、上記 83.59% の記録を新しい source tree の Evidence として再利用しません。
+
 ## readiness と Golden RAG
 
 二つの状態は役割が異なります。
 
 - Repository readiness の唯一の正は、`MvpReadinessValidator` が Evidence の schema、digest、review と現在の source-tree digest を検証した「有効状態」です。Manifest に `passed` と書かれていても Evidence が古ければ API／CLI は `pending` と `stale` を返します。
-- Golden RAG の唯一の正は、Canonical PostgreSQL に保存された同一 Snapshot／Embedding Profile／current Search Index の最新 `GoldenRagQualityReport` です。最新 Report が `passed` でなければ Impact 生成と確認は fail closed で停止します。
+- Golden RAG は、固定 Query と期待 Context に対するオフライン回帰品質の正です。Canonical PostgreSQL に保存された同一 Snapshot／Embedding Profile／current Search Index の `GoldenRagQualityReport` を品質変更時とリリース前に評価しますが、個別 Change Request の Impact 実行条件にはしません。
 
-README の実行メモや過去の数値はどちらの代替にもなりません。Repository readiness と Golden RAG の両方が有効な場合だけ、実 RAG を含む変更処理を ready と判断します。
+個別 Change Request は、現在の Project に対する ready/current Canonical Index、固定 Embedding Profile、検索結果の Project/Snapshot provenance が揃わなければ fail closed で停止します。README の実行メモ、過去の Golden 数値、別 Snapshot の Report はこの実行時 Evidence の代替になりません。
 
 ## full_local_regression Evidence
 

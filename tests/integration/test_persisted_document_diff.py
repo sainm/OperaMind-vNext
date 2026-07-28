@@ -14,6 +14,7 @@ from operamind.application import (
     PersistedDocumentDiffRequest,
     PersistedDocumentDiffService,
 )
+from operamind.application.copilot_document_change import CopilotDocumentChangeService
 from operamind.contracts import ContractCatalog
 from operamind.domain import ChangeReviewStatus
 from operamind.infrastructure.documents import DocumentSignalExtractorRegistry
@@ -165,8 +166,8 @@ def build_request(
         logical_name="02_画面設計書_経費精算申請一覧.xlsx",
         source_document_version_id=f"document-version-before-{suffix}",
         target_document_version_id=f"document-version-after-{suffix}",
-        source_ref=f"immutable://design-docs/{suffix}/before.xlsx",
-        target_ref=f"immutable://design-docs/{suffix}/after.xlsx",
+        source_ref=before_path.resolve().as_uri(),
+        target_ref=after_path.resolve().as_uri(),
         profile_version_id=f"profile-{suffix}",
         profile_binding_key="document:screen_design",
         profile_activation_event_id=f"profile-activation-{suffix}",
@@ -316,6 +317,26 @@ def test_persisted_document_diff_is_atomic_and_idempotent(tmp_path: Path) -> Non
                 ),
             )
             assert cursor.fetchone() == (1, 2, 2, 4, 1, 2, 1)
+        write_screen_design(after_path, "差戻し")
+        copilot_change = CopilotDocumentChangeService(
+            connection=connection,
+            repository_root=ROOT,
+        ).materialize(
+            project_id=project_id,
+            analysis_case_id=case_id,
+            coding_task_id=f"copilot-task-{suffix}",
+            source_snapshot_id=request.diff.target_snapshot_id,
+            document_ids=(request.document_id,),
+        )
+        assert copilot_change.document_ids == (request.document_id,)
+        assert len(copilot_change.change_refs) == 1
+        accepted_change = ArtifactRepository(
+            connection, ContractCatalog.load(ROOT / "contracts")
+        ).get(copilot_change.change_refs[0])
+        assert accepted_change is not None
+        assert accepted_change["review_status"] == "accepted"
+        assert accepted_change["before"]["values"]["default_value"] == "すべて"
+        assert accepted_change["after"]["values"]["default_value"] == "差戻し"
         connection.rollback()
 
 

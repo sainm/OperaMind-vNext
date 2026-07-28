@@ -116,7 +116,7 @@ def test_outer_worker_failure_is_persisted_as_canonical_failed_result() -> None:
                 test_data_plan_id=str(plan["test_data_plan_id"]),
                 approval_grant_id="grant-1",
                 project_id="visiondemo",
-                created_by="web-test-data-worker",
+                created_by="main-flow-worker",
                 started_at=started_at,
             )
         )
@@ -133,7 +133,7 @@ def test_outer_worker_failure_is_persisted_as_canonical_failed_result() -> None:
                 test_data_plan_id=str(plan["test_data_plan_id"]),
                 approval_grant_id="grant-1",
                 project_id="visiondemo",
-                actor="web-test-data-worker",
+                actor="main-flow-worker",
                 started_at=started_at,
             ),
             reason="Background TestDataPlan worker failed before completion (TimeoutError)",

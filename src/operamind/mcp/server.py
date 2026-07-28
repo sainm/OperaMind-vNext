@@ -13,20 +13,10 @@ from jsonschema import Draft202012Validator
 from psycopg import Connection
 
 from operamind.application import (
-    ApprovedCommandRequest,
-    ApprovedCommandService,
     ChangedLineCoverageEvidence,
-    ControlPlaneQueryService,
     CopilotCodingTaskService,
-    CopilotHandoffRequest,
-    CopilotHandoffService,
-    EditResultRequest,
-    EditResultService,
-    EditValidationMode,
 )
 from operamind.contracts import ContractCatalog
-from operamind.infrastructure.postgres import ApprovalGrantRepository
-from operamind.profiles import ProfileCatalog
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
 SERVER_NAME = "operamind-vnext"
@@ -36,15 +26,6 @@ MCP_TOOL_NAME_PATTERN = re.compile(r"^[a-z0-9_-]+$")
 
 def _string() -> dict[str, object]:
     return {"type": "string", "minLength": 1}
-
-
-COMMON_SCOPE_PROPERTIES: dict[str, object] = {
-    "project_id": _string(),
-    "analysis_case_id": _string(),
-    "edit_packet_id": _string(),
-    "approval_grant_id": _string(),
-    "workspace_root": _string(),
-}
 
 
 def _schema(properties: Mapping[str, object], required: tuple[str, ...]) -> dict[str, object]:
@@ -93,164 +74,84 @@ def _changed_line_coverage_schema() -> dict[str, object]:
     }
 
 
+def _change_outputs_schema() -> dict[str, object]:
+    schema = _schema(
+        {
+            "coding_task_id": _string(),
+            "workspace_root": _string(),
+            "output_stage": {
+                "enum": ["document_change", "code_scope", "test_planning"]
+            },
+            "document_ids": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": True,
+                "items": _string(),
+            },
+            "code_scope": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "target_path",
+                        "target_symbols",
+                        "recommended_action",
+                        "test_file_refs",
+                        "rationale",
+                        "ui_impact",
+                    ],
+                    "properties": {
+                        "target_path": _string(),
+                        "target_symbols": {
+                            "type": "array",
+                            "uniqueItems": True,
+                            "items": _string(),
+                        },
+                        "recommended_action": {
+                            "enum": ["modify", "add", "delete", "review_only"]
+                        },
+                        "test_file_refs": {
+                            "type": "array",
+                            "minItems": 1,
+                            "uniqueItems": True,
+                            "items": _string(),
+                        },
+                        "rationale": _string(),
+                        "ui_impact": {"type": "boolean"},
+                    },
+                },
+            },
+            "test_plan": {"type": "object"},
+            "test_data_plan": {"type": "object"},
+        },
+        ("coding_task_id", "workspace_root", "output_stage"),
+    )
+    schema["oneOf"] = [
+        {
+            "properties": {"output_stage": {"const": "document_change"}},
+            "required": ["document_ids"],
+        },
+        {
+            "properties": {"output_stage": {"const": "code_scope"}},
+            "required": ["code_scope"],
+        },
+        {
+            "properties": {"output_stage": {"const": "test_planning"}},
+            "required": ["test_plan", "test_data_plan"],
+        },
+    ]
+    return schema
+
+
 TOOLS: tuple[dict[str, object], ...] = (
     {
-        "name": "analysis_list_ready_cases",
-        "title": "List cases for this exact Workspace revision",
-        "description": (
-            "List at most 50 non-terminal analysis cases whose registered Workspace root, "
-            "origin, and repository revision match the current clean Git checkout."
-        ),
-        "inputSchema": _schema(
-            {
-                "workspace_root": _string(),
-                "limit": {"type": "integer", "minimum": 1, "maximum": 50},
-            },
-            ("workspace_root",),
-        ),
-        "annotations": {
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": False,
-        },
-    },
-    {
-        "name": "impact_get_report",
-        "title": "Get one immutable Impact Report",
-        "description": (
-            "Return one Project/Case-scoped immutable ImpactReport plus its current "
-            "normalized lifecycle status."
-        ),
-        "inputSchema": _schema(
-            {
-                "project_id": _string(),
-                "analysis_case_id": _string(),
-                "impact_report_id": _string(),
-            },
-            ("project_id", "analysis_case_id", "impact_report_id"),
-        ),
-        "annotations": {
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": False,
-        },
-    },
-    {
-        "name": "copilot_get_edit_packet",
-        "title": "Get approved Copilot edit handoff",
-        "description": (
-            "Return one active Edit Packet and Approval Grant after validating the local "
-            "Workspace root, origin, and Git HEAD. Never returns the Context Package."
-        ),
-        "inputSchema": _schema(
-            COMMON_SCOPE_PROPERTIES,
-            tuple(COMMON_SCOPE_PROPERTIES),
-        ),
-        "annotations": {
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": False,
-        },
-    },
-    {
-        "name": "copilot_get_approval_grant",
-        "title": "Inspect one Approval Grant",
-        "description": "Return the bounded actions and current lifecycle state of one Grant.",
-        "inputSchema": _schema(
-            {"project_id": _string(), "approval_grant_id": _string()},
-            ("project_id", "approval_grant_id"),
-        ),
-        "annotations": {
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": False,
-        },
-    },
-    {
-        "name": "copilot_run_approved_command",
-        "title": "Run one approved command template",
-        "description": (
-            "Run a Grant-whitelisted command ref using its fixed Profile version, no shell, "
-            "and return only digest-based execution evidence."
-        ),
-        "inputSchema": _schema(
-            {
-                **COMMON_SCOPE_PROPERTIES,
-                "command_execution_id": _string(),
-                "command_ref": _string(),
-            },
-            (*COMMON_SCOPE_PROPERTIES, "command_execution_id", "command_ref"),
-        ),
-        "annotations": {
-            "readOnlyHint": False,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": False,
-        },
-    },
-    {
-        "name": "copilot_validate_worktree",
-        "title": "Validate current worktree paths",
-        "description": (
-            "Record a working-tree Edit Result after comparing all changed paths to the "
-            "active Packet allowlist."
-        ),
-        "inputSchema": _schema(
-            {**COMMON_SCOPE_PROPERTIES, "edit_result_id": _string()},
-            (*COMMON_SCOPE_PROPERTIES, "edit_result_id"),
-        ),
-        "annotations": {
-            "readOnlyHint": False,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": False,
-        },
-    },
-    {
-        "name": "copilot_record_edit_result",
-        "title": "Record committed edit result",
-        "description": (
-            "Validate a clean committed worktree and bind the result to audited command "
-            "execution IDs from the same Grant and Packet. For source changes, provide "
-            "changed_line_coverage or Closure will remain blocked."
-        ),
-        "inputSchema": _schema(
-            {
-                **COMMON_SCOPE_PROPERTIES,
-                "edit_result_id": _string(),
-                "test_result_refs": {
-                    "type": "array",
-                    "minItems": 1,
-                    "uniqueItems": True,
-                    "items": _string(),
-                },
-                "tests_passed": {"type": "boolean"},
-                "changed_line_coverage": _changed_line_coverage_schema(),
-            },
-            (
-                *COMMON_SCOPE_PROPERTIES,
-                "edit_result_id",
-                "test_result_refs",
-                "tests_passed",
-            ),
-        ),
-        "annotations": {
-            "readOnlyHint": False,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": False,
-        },
-    },
-    {
         "name": "copilot_get_coding_task",
-        "title": "Load one user-confirmed Coding Plan task",
+        "title": "Load one unified Copilot Change Task",
         "description": (
-            "Load the transport-neutral task, active Edit Packet, Grant, and bounded "
-            "Coding Plan after the VS Code user has confirmed the local Bridge notification."
+            "Load the current ordered stage of one Change Task after the VS Code user "
+            "confirms the local Bridge notification."
         ),
         "inputSchema": _schema(
             {"coding_task_id": _string(), "workspace_root": _string()},
@@ -267,7 +168,7 @@ TOOLS: tuple[dict[str, object], ...] = (
         "name": "copilot_run_task_command",
         "title": "Run a test command bound to one Coding Task",
         "description": (
-            "Run one Grant-whitelisted command and automatically publish its digest-only "
+            "Run one task-bound command and automatically publish its digest-only "
             "result to the Coding Task timeline used by OperaMind Web."
         ),
         "inputSchema": _schema(
@@ -292,10 +193,25 @@ TOOLS: tuple[dict[str, object], ...] = (
         },
     },
     {
+        "name": "copilot_record_change_outputs",
+        "title": "Record one ordered Change Task output stage",
+        "description": (
+            "Record exactly one ordered stage: materialize a Canonical design diff, validate "
+            "a Code Graph scope, or validate TestPlan/TestDataPlan after the code diff."
+        ),
+        "inputSchema": _change_outputs_schema(),
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+    },
+    {
         "name": "copilot_validate_task_diff",
         "title": "Validate and publish the current Coding Task diff",
         "description": (
-            "Compare all current Git path changes with the Task Packet allowlist and "
+            "Compare all current Git path changes with the Change Task path allowlist and "
             "automatically publish the path-only Diff result to OperaMind Web."
         ),
         "inputSchema": _schema(
@@ -350,42 +266,6 @@ TOOLS: tuple[dict[str, object], ...] = (
             "openWorldHint": False,
         },
     },
-    {
-        "name": "verification_get_ui_plan",
-        "title": "Get one UI execution plan",
-        "description": (
-            "Return one Project-scoped UI Plan with fixed Deployment revision and approved "
-            "Scenario version IDs, without raw evidence content."
-        ),
-        "inputSchema": _schema(
-            {"project_id": _string(), "plan_id": _string()},
-            ("project_id", "plan_id"),
-        ),
-        "annotations": {
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": False,
-        },
-    },
-    {
-        "name": "validation_get_result",
-        "title": "Get one final change validation",
-        "description": (
-            "Return one Project-scoped UiVerificationResult and normalized closure state, "
-            "without screenshot or log bytes."
-        ),
-        "inputSchema": _schema(
-            {"project_id": _string(), "verification_result_id": _string()},
-            ("project_id", "verification_result_id"),
-        ),
-        "annotations": {
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": False,
-        },
-    },
 )
 if invalid_tool_names := [
     str(tool["name"])
@@ -408,7 +288,6 @@ class CopilotToolDispatcher:
     def __init__(self, *, connection: Connection[Any], root: Path) -> None:
         self._connection = connection
         self._contracts = ContractCatalog.load(root.resolve() / "contracts")
-        self._profiles = ProfileCatalog.load(root.resolve() / "profiles")
 
     def call(self, name: str, arguments: object) -> dict[str, object]:
         tool = TOOL_BY_NAME.get(name)
@@ -430,52 +309,6 @@ class CopilotToolDispatcher:
             return self._dispatch(name, args)
 
     def _dispatch(self, name: str, args: dict[str, object]) -> dict[str, object]:
-        queries = ControlPlaneQueryService(
-            connection=self._connection,
-            contracts=self._contracts,
-        )
-        if name == "analysis_list_ready_cases":
-            return queries.list_ready_cases(
-                workspace_root=Path(_text(args, "workspace_root")),
-                limit=cast(int, args.get("limit", 20)),
-            )
-        if name == "impact_get_report":
-            return queries.get_impact_report(
-                project_id=_text(args, "project_id"),
-                analysis_case_id=_text(args, "analysis_case_id"),
-                impact_report_id=_text(args, "impact_report_id"),
-            )
-        if name == "copilot_get_edit_packet":
-            return CopilotHandoffService(
-                connection=self._connection,
-                contracts=self._contracts,
-            ).get(_handoff_request(args))
-        if name == "copilot_get_approval_grant":
-            return self._get_grant(args)
-        if name == "copilot_run_approved_command":
-            return (
-                ApprovedCommandService(
-                    connection=self._connection,
-                    contracts=self._contracts,
-                    profiles=self._profiles,
-                )
-                .run(
-                    ApprovedCommandRequest(
-                        command_execution_id=_text(args, "command_execution_id"),
-                        approval_grant_id=_text(args, "approval_grant_id"),
-                        project_id=_text(args, "project_id"),
-                        analysis_case_id=_text(args, "analysis_case_id"),
-                        edit_packet_id=_text(args, "edit_packet_id"),
-                        workspace_root=Path(_text(args, "workspace_root")),
-                        command_ref=_text(args, "command_ref"),
-                    )
-                )
-                .to_dict()
-            )
-        if name == "copilot_validate_worktree":
-            return self._edit_result(args, mode=EditValidationMode.WORKING)
-        if name == "copilot_record_edit_result":
-            return self._edit_result(args, mode=EditValidationMode.COMMITTED)
         coding_tasks = CopilotCodingTaskService(
             connection=self._connection,
             repository_root=self._contracts.root.parent,
@@ -486,91 +319,98 @@ class CopilotToolDispatcher:
                 workspace_root=Path(_text(args, "workspace_root")),
             )
         if name == "copilot_run_task_command":
-            return coding_tasks.run_command(
-                coding_task_id=_text(args, "coding_task_id"),
-                command_execution_id=_text(args, "command_execution_id"),
-                command_ref=_text(args, "command_ref"),
-                workspace_root=Path(_text(args, "workspace_root")),
+            return _public_command_result(
+                coding_tasks.run_command(
+                    coding_task_id=_text(args, "coding_task_id"),
+                    command_execution_id=_text(args, "command_execution_id"),
+                    command_ref=_text(args, "command_ref"),
+                    workspace_root=Path(_text(args, "workspace_root")),
+                )
             )
-        if name == "copilot_validate_task_diff":
-            return coding_tasks.validate_diff(
+        if name == "copilot_record_change_outputs":
+            output_stage = _text(args, "output_stage")
+            internal_result = coding_tasks.record_change_outputs(
                 coding_task_id=_text(args, "coding_task_id"),
-                edit_result_id=_text(args, "edit_result_id"),
                 workspace_root=Path(_text(args, "workspace_root")),
+                output_stage=output_stage,
+                document_ids=tuple(
+                    str(value)
+                    for value in cast(list[object], args.get("document_ids", []))
+                ),
+                code_scope=tuple(
+                    cast(dict[str, Any], value)
+                    for value in cast(list[object], args.get("code_scope", []))
+                ),
+                test_plan=cast(dict[str, Any], args["test_plan"])
+                if "test_plan" in args
+                else None,
+                test_data_plan=cast(dict[str, Any], args["test_data_plan"])
+                if "test_data_plan" in args
+                else None,
+            )
+            result = _public_change_output(internal_result, output_stage=output_stage)
+            from operamind.application.web_control_plane import WebControlPlaneService
+
+            task_view = coding_tasks.view(_text(args, "coding_task_id"))
+            task_artifact = cast(dict[str, object], task_view["task"])
+            service = WebControlPlaneService(
+                connection=self._connection,
+                repository_root=self._contracts.root.parent,
+            )
+            automation = service.resume_pending_change_automation(
+                request_id=str(task_artifact["change_request_id"]),
+                actor="mcp:github-copilot",
+            )
+            result["flow_status"] = _public_flow_status(
+                service.main_change_flow(str(task_artifact["change_request_id"]))
+            )
+            if not isinstance(automation, dict) or automation.get("status") != "blocked":
+                result["next_context"] = coding_tasks.get_mcp_context(
+                    coding_task_id=_text(args, "coding_task_id"),
+                    workspace_root=Path(_text(args, "workspace_root")),
+                )
+            else:
+                result["next_context"] = None
+            return result
+        if name == "copilot_validate_task_diff":
+            return _public_edit_result(
+                coding_tasks.validate_diff(
+                    coding_task_id=_text(args, "coding_task_id"),
+                    edit_result_id=_text(args, "edit_result_id"),
+                    workspace_root=Path(_text(args, "workspace_root")),
+                )
             )
         if name == "copilot_record_task_result":
-            return coding_tasks.record_result(
-                coding_task_id=_text(args, "coding_task_id"),
-                edit_result_id=_text(args, "edit_result_id"),
-                workspace_root=Path(_text(args, "workspace_root")),
-                test_result_refs=tuple(
-                    str(value) for value in cast(list[object], args["test_result_refs"])
-                ),
-                tests_passed=cast(bool, args["tests_passed"]),
-                changed_line_coverage=_changed_line_coverage(args),
-            )
-        if name == "verification_get_ui_plan":
-            return queries.get_ui_plan(
-                project_id=_text(args, "project_id"),
-                plan_id=_text(args, "plan_id"),
-            )
-        if name == "validation_get_result":
-            return queries.get_validation_result(
-                project_id=_text(args, "project_id"),
-                verification_result_id=_text(args, "verification_result_id"),
-            )
-        raise AssertionError(f"Tool dispatch is incomplete: {name}")
-
-    def _get_grant(self, args: dict[str, object]) -> dict[str, object]:
-        grant = ApprovalGrantRepository(self._connection, self._contracts).inspect(
-            _text(args, "approval_grant_id")
-        )
-        if grant.project_id != _text(args, "project_id"):
-            raise ValueError("Approval Grant is outside requested Project scope")
-        return {
-            "approval_grant_id": grant.grant_id,
-            "project_id": grant.project_id,
-            "analysis_case_id": grant.analysis_case_id,
-            "edit_packet_id": grant.edit_packet_id,
-            "base_repository_revision": grant.base_repository_revision,
-            "allowed_actions": list(grant.allowed_actions),
-            "command_profile_version_id": grant.command_profile_version_id,
-            "allowed_test_command_refs": list(grant.allowed_test_command_refs),
-            "allowed_ui_scenarios": list(grant.allowed_ui_scenarios),
-            "expires_at": grant.expires_at.isoformat(),
-            "state": grant.state,
-        }
-
-    def _edit_result(
-        self, args: dict[str, object], *, mode: EditValidationMode
-    ) -> dict[str, object]:
-        refs = (
-            tuple(str(value) for value in cast(list[object], args["test_result_refs"]))
-            if mode is EditValidationMode.COMMITTED
-            else ()
-        )
-        tests_passed = cast(bool, args["tests_passed"]) if refs else None
-        return (
-            EditResultService(
-                connection=self._connection,
-                contracts=self._contracts,
-            )
-            .run(
-                EditResultRequest(
+            result = _public_edit_result(
+                coding_tasks.record_result(
+                    coding_task_id=_text(args, "coding_task_id"),
                     edit_result_id=_text(args, "edit_result_id"),
-                    edit_packet_id=_text(args, "edit_packet_id"),
-                    approval_grant_id=_text(args, "approval_grant_id"),
-                    project_id=_text(args, "project_id"),
-                    analysis_case_id=_text(args, "analysis_case_id"),
                     workspace_root=Path(_text(args, "workspace_root")),
-                    mode=mode,
-                    test_result_refs=refs,
-                    tests_passed=tests_passed,
+                    test_result_refs=tuple(
+                        str(value)
+                        for value in cast(list[object], args["test_result_refs"])
+                    ),
+                    tests_passed=cast(bool, args["tests_passed"]),
                     changed_line_coverage=_changed_line_coverage(args),
                 )
             )
-            .to_dict()
-        )
+            from operamind.application.web_control_plane import WebControlPlaneService
+
+            task_view = coding_tasks.view(_text(args, "coding_task_id"))
+            task_artifact = cast(dict[str, object], task_view["task"])
+            service = WebControlPlaneService(
+                connection=self._connection,
+                repository_root=self._contracts.root.parent,
+            )
+            service.resume_pending_change_automation(
+                request_id=str(task_artifact["change_request_id"]),
+                actor="mcp:github-copilot",
+            )
+            result["flow_status"] = _public_flow_status(
+                service.main_change_flow(str(task_artifact["change_request_id"]))
+            )
+            return result
+        raise AssertionError(f"Tool dispatch is incomplete: {name}")
 
 
 class McpProtocolError(ValueError):
@@ -666,11 +506,12 @@ class OperaMindMcpServer:
                     "name": SERVER_NAME,
                     "title": "OperaMind vNext",
                     "version": SERVER_VERSION,
-                    "description": "Bounded local Copilot editing and test handoff",
+                    "description": "Bounded local Copilot unified Change Task",
                 },
                 "instructions": (
-                    "Use only the returned Edit Packet and Approval Grant. Never request or "
-                    "submit arbitrary shell commands or files outside the Packet."
+                    "Follow the current Change Task stage in order. Use only Canonical RAG "
+                    "documents and, once bound, only the validated execution scope. Never submit "
+                    "arbitrary shell commands or out-of-scope files."
                 ),
             },
         )
@@ -702,16 +543,6 @@ class OperaMindMcpServer:
         else:
             result_payload = _tool_result(result, is_error=False)
         return _success(request_id, result_payload)
-
-
-def _handoff_request(args: dict[str, object]) -> CopilotHandoffRequest:
-    return CopilotHandoffRequest(
-        project_id=_text(args, "project_id"),
-        analysis_case_id=_text(args, "analysis_case_id"),
-        edit_packet_id=_text(args, "edit_packet_id"),
-        approval_grant_id=_text(args, "approval_grant_id"),
-        workspace_root=Path(_text(args, "workspace_root")),
-    )
 
 
 def _changed_line_coverage(
@@ -756,6 +587,103 @@ def _error(
 
 def _valid_request_id(value: object) -> bool:
     return value is None or (isinstance(value, (int, str)) and not isinstance(value, bool))
+
+
+def _public_flow_status(flow: dict[str, object]) -> dict[str, object]:
+    """Return only the six-stage business projection to the Copilot client."""
+
+    return {
+        key: flow.get(key)
+        for key in (
+            "status",
+            "current_stage",
+            "progress_percent",
+            "blocking_reasons",
+        )
+    }
+
+
+def _public_change_output(
+    result: dict[str, object],
+    *,
+    output_stage: str,
+) -> dict[str, object]:
+    """Return the accepted business output without Canonical implementation IDs."""
+
+    public = {
+        key: result.get(key)
+        for key in ("recorded_stage", "next_stage", "coding_task_state")
+    }
+    if output_stage == "document_change":
+        public["document_count"] = len(cast(list[object], result.get("document_ids", [])))
+        public["document_change_count"] = len(
+            cast(list[object], result.get("document_change_refs", []))
+        )
+    elif output_stage == "code_scope":
+        public["code_scope"] = result.get("code_scope", [])
+    elif output_stage == "test_planning":
+        public["test_plan_id"] = result.get("test_plan_id")
+        public["test_data_plan_id"] = result.get("test_data_plan_id")
+    else:
+        raise ValueError(f"Unsupported public Change Task output stage: {output_stage}")
+    return public
+
+
+def _public_command_result(result: dict[str, object]) -> dict[str, object]:
+    """Return command outcome and digest Evidence, never Profile or path internals."""
+
+    return {
+        key: result.get(key)
+        for key in (
+            "command_execution_id",
+            "created",
+            "command_ref",
+            "status",
+            "exit_code",
+            "stdout_digest",
+            "stderr_digest",
+            "stdout_bytes",
+            "stderr_bytes",
+            "output_truncated",
+            "started_at",
+            "completed_at",
+            "coding_task_state",
+        )
+    }
+
+
+def _public_edit_result(result: dict[str, object]) -> dict[str, object]:
+    """Return path, test, revision, and coverage outcomes without control-plane state."""
+
+    public = {
+        key: result.get(key)
+        for key in (
+            "edit_result_id",
+            "created",
+            "status",
+            "command_evidence_status",
+            "changed_paths",
+            "out_of_scope_files",
+            "result_repository_revision",
+            "coding_task_state",
+        )
+    }
+    coverage = result.get("changed_line_coverage")
+    if isinstance(coverage, dict):
+        public["changed_line_coverage"] = {
+            key: coverage.get(key)
+            for key in (
+                "minimum_coverage_percent",
+                "changed_line_count",
+                "covered_changed_line_count",
+                "coverage_percent",
+                "files",
+                "evidence_refs",
+                "status",
+                "blocking_reasons",
+            )
+        }
+    return public
 
 
 def _require_request_id(message: dict[str, object]) -> None:

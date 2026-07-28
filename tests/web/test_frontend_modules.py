@@ -1,404 +1,273 @@
-# ruff: noqa: RUF001
-
 from __future__ import annotations
 
 import json
 import subprocess
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).parents[2]
-STATIC = ROOT / "src/operamind/web/static"
+FLOW_SCRIPT = ROOT / "src/operamind/web/static/change-flow-view.js"
+APP_SCRIPT = ROOT / "src/operamind/web/static/app.js"
 
 
-def test_change_management_builds_japanese_sections() -> None:
-    value = _run_module(
-        "change-management.js",
-        "orchestrationCards",
+def test_browser_reads_flow_without_triggering_internal_progress() -> None:
+    source = APP_SCRIPT.read_text(encoding="utf-8")
+
+    assert "/flow/progress" not in source
+    assert "${encodeURIComponent(state.requestId)}/flow`" in source
+    assert "/test-case-revisions`" in source
+    assert "/confirm`" in source
+    assert "renderTestCaseRevisionProposal" in source
+
+
+def test_stage_rail_renders_only_the_six_product_stages() -> None:
+    stages = [
+        _stage("requirement", "変更要件", "completed"),
+        _stage("document_change", "設計書差分", "completed"),
+        _stage("code_scope", "コード影響範囲", "running"),
+        _stage("compile_test", "コード変更・コンパイル・テスト", "waiting"),
+        _stage("ui_validation", "テストデータ・UI 検証", "waiting"),
+        _stage("final_report", "最終レポート", "waiting"),
+        _stage("approval_grant", "内部承認", "running"),
+    ]
+
+    html = _run("stageRail", stages, "code_scope")
+
+    assert html.count('class="stage-step') == 6
+    assert "VS Code GitHub Copilot" not in html
+    assert "承認" not in html
+    assert "approval_grant" not in html
+    assert "キュー" not in html
+    assert 'data-stage-target="code_scope"' in html
+    assert "current" in html
+
+
+def test_stage_details_show_copilot_deliverables_and_hide_internal_control_plane() -> None:
+    stages = [
         {
-            "orchestration": {
-                "code_scope": [
-                    {"recommended_action": "modify", "target_path": "ExpenseService.java"}
-                ],
-                "ui_scenarios": [
-                    {
-                        "scenario_id": "expense-filter-returned-option",
-                        "expected_results": ["fallback"],
-                    }
-                ],
+            **_stage("compile_test", "コード変更・コンパイル・テスト", "running"),
+            "executor": "vscode_github_copilot",
+            "summary": "コードとテスト計画を更新します。",
+            "details": {
+                "copilot_task_id": "copilot-001",
+                "copilot_task_state": "in_progress",
+                "approval_grant_id": "grant-001",
+                "scheduler_retry_count": 3,
+                "lease_owner": "worker-001",
             },
-            "test_data_plan": {
-                "generation_flows": [
+        }
+    ]
+
+    html = _run("stageDetails", stages)
+
+    assert "VS Code GitHub Copilot" in html
+    assert "コードとテスト計画を更新します。" in html
+    assert "copilot-001" not in html
+    assert "copilot_task_id" not in html
+    assert "approval_grant" not in html
+    assert "grant-001" not in html
+    assert "scheduler_retry_count" not in html
+    assert "worker-001" not in html
+    assert "Lease" not in html
+
+
+def test_stage_details_ignore_unknown_internal_stages() -> None:
+    stages = [
+        _stage("requirement", "変更要件", "completed"),
+        {
+            **_stage("worker_lease", "内部 Worker Lease", "running"),
+            "details": {"requirement_text": "表示してはいけない内部情報"},
+        },
+    ]
+
+    html = _run("stageDetails", stages)
+
+    assert "変更要件" in html
+    assert "Worker" not in html
+    assert "表示してはいけない内部情報" not in html
+
+
+def test_stage_details_render_document_scope_and_command_results_as_business_content() -> None:
+    stages = [
+        {
+            **_stage("document_change", "設計書差分", "completed"),
+            "details": {
+                "changes": [
                     {
-                        "test_data_refs": ["returned-expense"],
-                        "steps": [{"sequence": 1, "step_id": "create-returned-expense"}],
+                        "summary": "状態説明を更新",
+                        "domain": "expense",
+                        "fact_type": "screen_field",
+                        "change_type": "modified",
+                        "field_deltas": [{"field": "label", "before": "承認済", "after": "差戻し"}],
                     }
                 ]
             },
-            "coverage_report": {
-                "covered_rule_count": 1,
-                "business_rule_count": 1,
-                "coverage_percent": 100,
+        },
+        {
+            **_stage("code_scope", "コード影響範囲", "completed"),
+            "details": {
+                "items": [
+                    {
+                        "target_path": "src/ExpenseService.java",
+                        "target_symbols": ["search"],
+                        "recommended_action": "modify",
+                        "test_file_refs": ["test/ExpenseServiceTest.java"],
+                        "rationale": "状態条件を追加するため",
+                    }
+                ]
             },
         },
-    )
-
-    assert [section["title"] for section in value] == [
-        "コード変更範囲",
-        "テストデータ生成フロー（画面横断対応）",
-        "UI シナリオ",
-        "業務カバレッジ",
-    ]
-    assert value[0]["items"] == ["変更 · ExpenseService.java"]
-    assert "差戻し経費を登録" in value[1]["items"][0]
-    assert "差戻しを選択" in value[2]["items"][0]
-
-
-def test_case_editor_reports_missing_ambiguity_selections() -> None:
-    value = _run_module(
-        "case-editor.js",
-        "selectedAmbiguities",
         {
-            "ambiguities": [
-                {"ambiguity_id": "target", "options": ["一覧", "詳細"]},
-                {"ambiguity_id": "status", "options": ["差戻し", "承認済み"]},
-            ]
-        },
-        {"target": "一覧"},
-    )
-
-    assert value == {"missing": ["status"], "selected": {"target": "一覧"}}
-
-
-def test_test_data_module_extracts_cross_screen_variables() -> None:
-    value = _run_module(
-        "test-data-management.js",
-        "inputVariableNames",
-        {
-            "employee": "{{employee_no}}",
-            "expense": {"owner": "{{employee_no}}", "number": "{{expense_no}}"},
-        },
-    )
-
-    assert value == ["employee_no", "expense_no"]
-
-
-def test_verification_module_localizes_coverage_blockers() -> None:
-    value = _run_module(
-        "verification-results.js",
-        "closureView",
-        {
-            "status": "blocked",
-            "ui_status": "passed",
-            "business_coverage_percent": 100,
-            "changed_line_coverage_percent": 72.5,
-            "modified_paths": ["ExpenseService.java"],
-            "test_results": [],
-            "unresolved_items": [
-                "Changed-line coverage: 72.5% < 80%",
-                "Uncovered changed line: ExpenseService.java:42",
-                "Business Coverage Report summary is inconsistent",
-                "Change Closure is stale for current Edit Result",
-                "Legacy ChangeClosureResult v1 requires changed-line coverage re-evaluation",
-            ],
-        },
-    )
-
-    assert value["changedLineCoveragePercent"] == 72.5
-    assert value["blockers"] == [
-        {
-            "raw": "Changed-line coverage: 72.5% < 80%",
-            "label": "変更行カバレッジ 72.5% は基準値 80% 未満です。",
-        },
-        {
-            "raw": "Uncovered changed line: ExpenseService.java:42",
-            "label": "未カバーの変更行があります：ExpenseService.java:42",
-        },
-        {
-            "raw": "Business Coverage Report summary is inconsistent",
-            "label": "業務カバレッジの集計値と明細が一致していません。",
-        },
-        {
-            "raw": "Change Closure is stale for current Edit Result",
-            "label": "現在の変更実行結果に対応する変更完了判定を再生成してください。",
-        },
-        {
-            "raw": "Legacy ChangeClosureResult v1 requires changed-line coverage re-evaluation",
-            "label": (
-                "旧形式の変更完了判定には変更行カバレッジがないため、再評価が必要です。"
-            ),
-        },
-    ]
-
-
-def test_coverage_view_localizes_changed_line_blocking_reasons() -> None:
-    value = _run_module(
-        "verification-results.js",
-        "coverageView",
-        {"coverage_percent": 100, "covered_rule_count": 1, "business_rule_count": 1},
-        {
-            "coverage_percent": 50,
-            "covered_changed_line_count": 1,
-            "changed_line_count": 2,
-            "minimum_coverage_percent": 80,
-            "status": "failed",
-            "files": [],
-            "evidence_refs": ["command-1"],
-            "blocking_reasons": [
-                "Uncovered changed line: ExpenseService.java:42",
-                "Coverage evidence does not include changed source file: Missing.java",
-            ],
-        },
-    )
-
-    assert value["changedLines"]["blockingReasons"] == [
-        {
-            "raw": "Uncovered changed line: ExpenseService.java:42",
-            "label": "未カバーの変更行があります：ExpenseService.java:42",
-        },
-        {
-            "raw": "Coverage evidence does not include changed source file: Missing.java",
-            "label": "変更されたソースファイルのカバレッジ証跡がありません：Missing.java",
-        },
-    ]
-
-
-def test_traceability_module_groups_stages_and_labels_gaps() -> None:
-    value = _run_module(
-        "traceability-view.js",
-        "buildViewModel",
-        {
-            "nodes": [
-                {"id": "code:1", "kind": "影響コード", "title": "ExpenseService.java"},
-                {"id": "case:1", "kind": "Test Case", "title": "検索"},
-            ],
-            "edges": [{"from": "code:1", "to": "case:1", "relation": "検証"}],
-            "gaps": [
-                {
-                    "code": "ui_result",
-                    "severity": "critical",
-                    "message": "UI 検証結果がありません。",
-                }
-            ],
-            "summary": {
-                "stage_order": ["影響コード", "Test Case"],
-                "node_count": 2,
-                "edge_count": 1,
-                "gap_count": 1,
-                "critical_gap_count": 1,
+            **_stage("compile_test", "コード変更・コンパイル・テスト", "completed"),
+            "details": {
+                "commands": [{"command_ref": "targeted-unit", "status": "passed", "exit_code": 0}]
             },
         },
-    )
+    ]
 
-    assert [stage["label"] for stage in value["stages"]] == ["影響コード", "テストケース"]
-    assert value["gaps"][0]["label"] == "必須工程の欠落"
-    assert value["edges"][0]["relation"] == "検証"
-    assert value["edges"][0]["from_label"] == "ExpenseService.java"
-    assert value["edges"][0]["to_label"] == "検索"
+    html = _run("stageDetails", stages)
+
+    assert "承認済" in html
+    assert "差戻し" in html
+    assert "src/ExpenseService.java" in html
+    assert "search" in html
+    assert "test/ExpenseServiceTest.java" in html
+    assert "targeted-unit" in html
+    assert "exit 0" in html
+    assert ">項目<" not in html
 
 
-def test_traceability_svg_model_marks_critical_and_blocking_paths() -> None:
-    value = _run_module(
-        "traceability-view.js",
-        "buildGraph",
+def test_stage_details_escape_user_content_and_render_blockers() -> None:
+    stages = [
         {
-            "nodes": [
-                {"id": "request", "kind": "変更要件", "title": "変更", "status": "confirmed"},
-                {"id": "code", "kind": "影響コード", "title": "Service.java", "status": "modified"},
-                {"id": "case", "kind": "Test Case", "title": "検索", "status": "blocked"},
-                {
-                    "id": "closure",
-                    "kind": "Closure Result",
-                    "title": "完了判定",
-                    "status": "blocked",
-                },
-            ],
-            "edges": [
-                {"from": "request", "to": "code", "relation": "影響"},
-                {"from": "code", "to": "case", "relation": "検証"},
-                {"from": "case", "to": "closure", "relation": "判定"},
-            ],
-            "gaps": [
-                {"severity": "critical", "node_id": "case", "message": "結果がありません"}
-            ],
-            "summary": {
-                "stage_order": ["変更要件", "影響コード", "Test Case", "Closure Result"],
-                "node_count": 4,
-                "edge_count": 3,
-                "gap_count": 1,
-                "critical_gap_count": 1,
+            **_stage("requirement", "変更要件", "blocked"),
+            "summary": "<script>alert(1)</script>",
+            "blocking_reasons": ["RAG <index> が未準備です"],
+            "details": {"requirement_text": "A & B"},
+        }
+    ]
+
+    html = _run("stageDetails", stages)
+
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+    assert "RAG &lt;index&gt; が未準備です" in html
+    assert "A &amp; B" in html
+
+
+def test_stage_details_render_test_plan_data_flow_cleanup_and_report_without_ids() -> None:
+    stages = [
+        {
+            **_stage("compile_test", "コード変更・コンパイル・テスト", "completed"),
+            "details": {
+                "test_cases": [
+                    {
+                        "test_case_id": "internal-case-id",
+                        "title": "差戻し状態で検索する",
+                        "level": "ui",
+                        "execution_mode": "browser",
+                        "preconditions": ["差戻し申請が存在する"],
+                        "steps": ["一覧を開く", "差戻しを検索する"],
+                        "expected_results": ["対象申請が一件表示される"],
+                    }
+                ]
             },
         },
-    )
-
-    assert value["criticalPath"] == ["request", "code", "case", "closure"]
-    assert value["blockingChain"] == ["case", "closure"]
-    assert all(edge["critical"] for edge in value["edges"])
-    assert value["edges"][2]["blocking"] is True
-    assert value["width"] > 0
-
-
-def test_code_graph_svg_model_marks_unresolved_blocking_chain() -> None:
-    value = _run_module(
-        "code-graph.js",
-        "buildGraph",
         {
-            "nodes": [
-                {"id": "file", "kind": "file", "title": "Service.java"},
-                {"id": "method", "kind": "symbol", "title": "search()"},
-                {"id": "unknown", "kind": "external", "title": "unresolved"},
-                {"id": "downstream", "kind": "symbol", "title": "render()"},
-            ],
-            "edges": [
-                {"from": "file", "to": "method", "resolution": "resolved"},
-                {"from": "method", "to": "unknown", "resolution": "unresolved"},
-                {"from": "unknown", "to": "downstream", "resolution": "resolved"},
-            ],
+            **_stage("ui_validation", "テストデータ・UI 検証", "completed"),
+            "details": {
+                "generation_flows": [
+                    {
+                        "flow_id": "internal-flow-id",
+                        "title": "差戻し申請を作成して検証する",
+                        "status": "passed",
+                        "steps": [
+                            {
+                                "step_id": "internal-step-id",
+                                "sequence": 1,
+                                "channel": "http",
+                                "business_action": "差戻し申請を作成する",
+                                "status": "passed",
+                                "input_variables": ["employee"],
+                                "output_variables": ["expense_id"],
+                                "assertions": [
+                                    {
+                                        "assertion_id": "internal-assertion-id",
+                                        "observe_via": "response",
+                                        "subject": "status",
+                                        "operator": "equals",
+                                        "expected": "RETURNED",
+                                    }
+                                ],
+                            }
+                        ],
+                        "final_assertions": [],
+                        "cleanup_policy": "delete_after_run",
+                        "cleanup_steps": [
+                            {
+                                "sequence": 1,
+                                "channel": "http",
+                                "business_action": "作成した申請を削除する",
+                                "status": "passed",
+                            }
+                        ],
+                    }
+                ]
+            },
         },
-    )
-
-    assert value["criticalPath"] == ["file", "method", "unknown", "downstream"]
-    assert value["blockingChain"] == ["unknown", "downstream"]
-    assert value["edges"][1]["blocking"] is True
-    assert value["edges"][2]["blocking"] is True
-
-
-def test_shared_graph_canvas_clamps_and_fits_scale() -> None:
-    assert _run_module("graph-canvas.js", "clampScale", 99) == 2.5
-    assert _run_module("graph-canvas.js", "clampScale", 0.01) == 0.35
-    transform = _run_module("graph-canvas.js", "fitTransform", 800, 400, 1200, 600)
-    assert transform["scale"] == pytest.approx(0.6133333333)
-    assert transform["x"] > 0
-
-
-def test_shared_japanese_copy_hides_internal_terms() -> None:
-    assert _run_module("ui-copy.js", "statusLabel", "submitted") == "結果提出済み・照合待ち"
-    assert _run_module("ui-copy.js", "statusLabel", "needs_review") == "レビューが必要"
-    assert _run_module("ui-copy.js", "statusLabel", "attention_required") == "確認が必要"
-    assert _run_module("ui-copy.js", "term", "approvalGrant") == "実行許可"
-
-
-def test_profile_registry_localizes_and_marks_requested_rebuilds() -> None:
-    value = _run_module(
-        "profile-registry.js",
-        "buildViewModel",
         {
-            "profile_versions": [
-                {
-                    "profile_version_id": "embedding-v2",
-                    "profile_type": "EmbeddingProfile",
-                    "semantic_version": "2.0.0",
-                }
-            ],
-            "bindings": [
-                {
-                    "binding_key": "embedding:documents",
-                    "profile_version_id": "embedding-v2",
-                    "profile_type": "EmbeddingProfile",
-                }
-            ],
-            "drift_events": [
-                {
-                    "drift_event_id": "drift-1",
-                    "binding_key": "embedding:documents",
-                    "previous_profile_version_id": "embedding-v1",
-                    "activated_profile_version_id": "embedding-v2",
-                    "impacts": [
-                        {
-                            "affected_layer": "impact",
-                            "artifact_type": "ImpactReport",
-                            "artifact_id": "impact-1",
-                            "effective_status": "blocked",
-                            "rebuild_action": "rerun_impact_analysis",
-                            "reason": "Embedding Profile changed",
-                            "resolved": False,
-                        },
-                        {
-                            "affected_layer": "closure",
-                            "artifact_type": "ChangeClosureResult",
-                            "artifact_id": "closure-1",
-                            "effective_status": "blocked",
-                            "rebuild_action": "regenerate_change_closure",
-                            "reason": "Embedding Profile changed",
-                            "resolved": False,
-                        },
-                    ],
-                }
-            ],
-            "rebuild_requests": [
-                {
-                    "rebuild_request_id": "request-1",
-                    "drift_event_id": "drift-1",
-                    "artifact_type": "ImpactReport",
-                    "artifact_id": "impact-1",
-                    "status": "requested",
-                    "phase_order": 20,
-                    "attempt_count": 0,
-                    "max_attempts": 3,
-                }
-            ],
-            "rebuild_batches": [
-                {
-                    "rebuild_batch_id": "batch-1",
-                    "status": "requested",
-                    "request_count": 2,
-                    "completed_count": 0,
-                }
-            ],
-            "open_drift_count": 1,
-            "open_impact_count": 2,
+            **_stage("final_report", "最終レポート", "completed"),
+            "details": {
+                "test_results": [
+                    {
+                        "title": "差戻し状態で検索する",
+                        "status": "passed",
+                        "summary": "期待結果を確認",
+                    }
+                ]
+            },
         },
-    )
-
-    assert value["bindings"][0]["profile_label"] == "埋め込み検索"
-    assert value["bindings"][0]["candidates"][0]["profile_version_id"] == "embedding-v2"
-    assert value["impacts"][0]["layer_label"] == "影響分析"
-    assert value["impacts"][0]["action_label"] == "影響分析を再実行"
-    assert value["impacts"][0]["requested"] is True
-    assert value["impacts"][1]["action_label"] == "変更完了判定を再生成"
-    assert value["rebuildBatches"][0]["status_label"] == "待機中"
-    assert value["rebuildRequests"][0]["phase_label"] == "2. 影響分析"
-    assert value["rebuildRequests"][0]["retryable"] is False
-
-
-def test_layout_module_separates_long_page_into_japanese_workspaces() -> None:
-    operations = _run_module("layout.js", "activePanelIds", "operations")
-    evidence = _run_module("layout.js", "activePanelIds", "evidence")
-    tests = _run_module("layout.js", "viewDefinition", "tests")
-
-    assert operations == ["orchestrationTaskManagementPanel", "environmentDiagnosticsPanel"]
-    assert evidence == [
-        "workbenchOverviewPanel",
-        "traceabilityPanel",
-        "codeGraphPanel",
-        "uiKnowledgePanel",
-        "unresolvedEvidencePanel",
-        "evidenceReadinessPanel",
-    ]
-    assert tests["title"] == "テスト"
-    assert tests["panels"] == [
-        "workbenchOverviewPanel",
-        "orchestrationPanel",
-        "testDataManagementPanel",
-        "failureManagementPanel",
-        "closureManagementPanel",
     ]
 
+    html = _run("stageDetails", stages)
 
-def _run_module(filename: str, function_name: str, *arguments: object) -> object:
-    script = """
-const api = require(process.argv[1]);
-const functionName = process.argv[2];
+    assert "差戻し状態で検索する" in html
+    assert "入力変数:" in html
+    assert "expense_id" in html
+    assert "RETURNED" in html
+    assert "クリーンアップ" in html
+    assert "作成した申請を削除する" in html
+    assert "期待結果を確認" in html
+    assert "internal-case-id" not in html
+    assert "internal-flow-id" not in html
+    assert "internal-step-id" not in html
+    assert "internal-assertion-id" not in html
+
+
+def _stage(stage_id: str, label: str, status: str) -> dict[str, object]:
+    return {
+        "stage_id": stage_id,
+        "label": label,
+        "status": status,
+        "summary": label,
+        "executor": "operamind",
+        "blocking_reasons": [],
+        "details": {},
+    }
+
+
+def _run(function_name: str, *arguments: object) -> str:
+    javascript = """
+const flow = require(process.argv[1]);
+const name = process.argv[2];
 const args = JSON.parse(process.argv[3]);
-process.stdout.write(JSON.stringify(api[functionName](...args)));
+process.stdout.write(JSON.stringify(flow[name](...args)));
 """
     result = subprocess.run(
         [
             "node",
             "-e",
-            script,
-            str(STATIC / filename),
+            javascript,
+            str(FLOW_SCRIPT),
             function_name,
             json.dumps(arguments, ensure_ascii=False),
         ],
@@ -406,4 +275,6 @@ process.stdout.write(JSON.stringify(api[functionName](...args)));
         capture_output=True,
         text=True,
     )
-    return json.loads(result.stdout)
+    value: object = json.loads(result.stdout)
+    assert isinstance(value, str)
+    return value

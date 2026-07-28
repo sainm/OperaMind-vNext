@@ -1,22 +1,10 @@
 """Use cases that coordinate domain rules and infrastructure adapters."""
 
-from operamind.application.analysis_start import AnalysisStartRequest, AnalysisStartService
 from operamind.application.approval_grant import (
     ApprovalGrantRequest,
     ApprovalGrantResult,
     ApprovalGrantService,
 )
-from operamind.application.browser_execution import (
-    BrowserExecutionRequest,
-    BrowserExecutionRuntimeError,
-    BrowserExecutionService,
-    BrowserExecutionServiceResult,
-)
-from operamind.application.browser_preflight import (
-    BrowserPreflightRequest,
-    BrowserPreflightService,
-)
-from operamind.application.canonical_execution import PostgresCanonicalExecutionAuthorizer
 from operamind.application.change_closure import (
     ChangeClosureEvaluator,
     ChangeClosureInput,
@@ -26,31 +14,6 @@ from operamind.application.change_closure_service import (
     ChangeClosureServiceResult,
 )
 from operamind.application.change_coverage import ChangedLineCoverageEvidence
-from operamind.application.change_loop import (
-    ChangeInputMode,
-    ChangeLoopBlockedError,
-    ChangeLoopPlan,
-    ChangeLoopPlanner,
-    ChangeLoopPlanRequest,
-)
-from operamind.application.change_loop_batch import (
-    ChangeLoopBatchRequest,
-    ChangeLoopBatchResult,
-    ChangeLoopBatchRunner,
-)
-from operamind.application.change_loop_catalog import (
-    CaseValidationIssue,
-    ChangeLoopCaseCatalog,
-    DiscoveredChangeLoopCase,
-    initialize_case,
-)
-from operamind.application.change_loop_execution import (
-    CanonicalExecutionAuthorizer,
-    CanonicalExecutionBinding,
-    ChangeLoopExecutionRequest,
-    ChangeLoopExecutionResult,
-    ChangeLoopExecutor,
-)
 from operamind.application.change_orchestration import (
     ChangeOrchestrationBlockedError,
     ChangeOrchestrationInput,
@@ -89,20 +52,15 @@ from operamind.application.context_package import (
     ContextPackageResult,
     ContextPackageService,
 )
-from operamind.application.control_plane_query import ControlPlaneQueryService
-from operamind.application.copilot_checkpoint import (
-    CopilotCheckpointRequest,
-    CopilotCheckpointService,
-)
 from operamind.application.copilot_coding_task import (
     CodingTaskDeliveryProvider,
     CopilotCodingTaskPublishRequest,
     CopilotCodingTaskService,
     LocalBridgeCopilotProvider,
 )
-from operamind.application.copilot_handoff import (
-    CopilotHandoffRequest,
-    CopilotHandoffService,
+from operamind.application.copilot_task_context import (
+    CopilotTaskContextRequest,
+    CopilotTaskContextService,
 )
 from operamind.application.document_diff import (
     DocumentDiffBlockedError,
@@ -133,6 +91,10 @@ from operamind.application.hybrid_search import (
     HybridSearchRequest,
     HybridSearchResult,
     HybridSearchService,
+    RequirementDocumentCandidate,
+    RequirementDocumentDiscoveryRequest,
+    RequirementDocumentDiscoveryResult,
+    RequirementDocumentDiscoveryService,
 )
 from operamind.application.impact_report import (
     ImpactReportRequest,
@@ -144,10 +106,6 @@ from operamind.application.persisted_document_diff import (
     PersistedDocumentDiffRequest,
     PersistedDocumentDiffResult,
     PersistedDocumentDiffService,
-)
-from operamind.application.profile_registry import (
-    CanonicalProfileRegistryService,
-    ProfileActivationRequest,
 )
 from operamind.application.rag_readiness import (
     RagReadinessBlockedError,
@@ -180,25 +138,6 @@ from operamind.application.test_data_execution_service import (
     TestDataExecutionServiceRequest,
     TestDataExecutionServiceResult,
 )
-from operamind.application.ui_knowledge_proposal import (
-    UiKnowledgeProposalRequest,
-    UiKnowledgeProposalService,
-)
-from operamind.application.ui_knowledge_review import (
-    UiKnowledgeReviewRequest,
-    UiKnowledgeReviewService,
-    UiKnowledgeReviewServiceResult,
-)
-from operamind.application.ui_runtime_observation import (
-    UiRuntimeObservationRequest,
-    UiRuntimeObservationService,
-    UiRuntimeObservationServiceResult,
-)
-from operamind.application.ui_verification import (
-    UiRunRecovery,
-    UiVerificationService,
-    UiVerificationServiceResult,
-)
 from operamind.application.unresolved_evidence import (
     UnresolvedEvidenceBuildResult,
     UnresolvedEvidenceReportBuilder,
@@ -206,40 +145,16 @@ from operamind.application.unresolved_evidence import (
 )
 
 __all__ = [
-    "AnalysisStartRequest",
-    "AnalysisStartService",
     "ApprovalGrantRequest",
     "ApprovalGrantResult",
     "ApprovalGrantService",
     "ApprovedCommandRequest",
     "ApprovedCommandResult",
     "ApprovedCommandService",
-    "BrowserExecutionRequest",
-    "BrowserExecutionRuntimeError",
-    "BrowserExecutionService",
-    "BrowserExecutionServiceResult",
-    "BrowserPreflightRequest",
-    "BrowserPreflightService",
-    "CanonicalExecutionAuthorizer",
-    "CanonicalExecutionBinding",
-    "CanonicalProfileRegistryService",
-    "CaseValidationIssue",
     "ChangeClosureEvaluator",
     "ChangeClosureInput",
     "ChangeClosureService",
     "ChangeClosureServiceResult",
-    "ChangeInputMode",
-    "ChangeLoopBatchRequest",
-    "ChangeLoopBatchResult",
-    "ChangeLoopBatchRunner",
-    "ChangeLoopBlockedError",
-    "ChangeLoopCaseCatalog",
-    "ChangeLoopExecutionRequest",
-    "ChangeLoopExecutionResult",
-    "ChangeLoopExecutor",
-    "ChangeLoopPlan",
-    "ChangeLoopPlanRequest",
-    "ChangeLoopPlanner",
     "ChangeOrchestrationBlockedError",
     "ChangeOrchestrationInput",
     "ChangeOrchestrationPlanner",
@@ -265,14 +180,10 @@ __all__ = [
     "ContextPackageRequest",
     "ContextPackageResult",
     "ContextPackageService",
-    "ControlPlaneQueryService",
-    "CopilotCheckpointRequest",
-    "CopilotCheckpointService",
     "CopilotCodingTaskPublishRequest",
     "CopilotCodingTaskService",
-    "CopilotHandoffRequest",
-    "CopilotHandoffService",
-    "DiscoveredChangeLoopCase",
+    "CopilotTaskContextRequest",
+    "CopilotTaskContextService",
     "DocumentDiffBlockedError",
     "DocumentDiffRequest",
     "DocumentDiffResult",
@@ -303,12 +214,14 @@ __all__ = [
     "PersistedDocumentDiffRequest",
     "PersistedDocumentDiffResult",
     "PersistedDocumentDiffService",
-    "PostgresCanonicalExecutionAuthorizer",
-    "ProfileActivationRequest",
     "RagReadinessBlockedError",
     "RagReadinessRequest",
     "RagReadinessResult",
     "RagReadinessService",
+    "RequirementDocumentCandidate",
+    "RequirementDocumentDiscoveryRequest",
+    "RequirementDocumentDiscoveryResult",
+    "RequirementDocumentDiscoveryService",
     "RuntimeRouteReconcileRequest",
     "RuntimeRouteReconcileResult",
     "RuntimeRouteReconciler",
@@ -322,19 +235,7 @@ __all__ = [
     "TestDataExecutionServiceRequest",
     "TestDataExecutionServiceResult",
     "UiImpactStatus",
-    "UiKnowledgeProposalRequest",
-    "UiKnowledgeProposalService",
-    "UiKnowledgeReviewRequest",
-    "UiKnowledgeReviewService",
-    "UiKnowledgeReviewServiceResult",
-    "UiRunRecovery",
-    "UiRuntimeObservationRequest",
-    "UiRuntimeObservationService",
-    "UiRuntimeObservationServiceResult",
-    "UiVerificationService",
-    "UiVerificationServiceResult",
     "UnresolvedEvidenceBuildResult",
     "UnresolvedEvidenceReportBuilder",
-    "initialize_case",
     "unresolved_evidence_report_id",
 ]

@@ -156,6 +156,19 @@ def test_copilot_coding_task_contract_reserves_future_api_provider_route() -> No
     catalog.validate_artifact(artifact)
 
 
+def test_copilot_change_task_v2_requires_the_single_six_stage_flow() -> None:
+    catalog = ContractCatalog.load(ROOT / "contracts")
+    artifact = json.loads(
+        (ROOT / "contracts/examples/copilot-coding-task.v2.example.json").read_text()
+    )
+
+    catalog.validate_artifact(artifact)
+    artifact["workflow"]["stage_order"] = ["requirement", "document_change"]
+
+    with pytest.raises(ArtifactValidationError):
+        catalog.validate_artifact(artifact)
+
+
 def test_changed_line_coverage_contract_cannot_lower_system_threshold() -> None:
     catalog = ContractCatalog.load(ROOT / "contracts")
     artifact = json.loads(

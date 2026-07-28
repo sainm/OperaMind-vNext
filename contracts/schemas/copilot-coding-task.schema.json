@@ -8,14 +8,8 @@
     "artifact_type",
     "schema_version",
     "coding_task_id",
-    "change_session_id",
     "change_request_id",
     "project_id",
-    "analysis_case_id",
-    "repository_id",
-    "edit_packet_id",
-    "approval_grant_id",
-    "base_repository_revision",
     "execution_mode",
     "provider_contract",
     "task_summary",
@@ -26,19 +20,26 @@
   ],
   "properties": {
     "artifact_type": {"const": "CopilotCodingTask"},
-    "schema_version": {"const": "v1"},
+    "schema_version": {"enum": ["v1", "v2"]},
     "coding_task_id": {"type": "string", "minLength": 1},
-    "change_session_id": {"type": "string", "minLength": 1},
+    "change_session_id": {"type": ["string", "null"], "minLength": 1},
     "change_request_id": {"type": "string", "minLength": 1},
     "project_id": {"type": "string", "minLength": 1},
-    "analysis_case_id": {"type": "string", "minLength": 1},
-    "repository_id": {"type": "string", "minLength": 1},
-    "edit_packet_id": {"type": "string", "minLength": 1},
-    "approval_grant_id": {"type": "string", "minLength": 1},
-    "base_repository_revision": {"type": "string", "minLength": 1},
+    "analysis_case_id": {"type": ["string", "null"], "minLength": 1},
+    "repository_id": {"type": ["string", "null"], "minLength": 1},
+    "edit_packet_id": {"type": ["string", "null"], "minLength": 1},
+    "approval_grant_id": {"type": ["string", "null"], "minLength": 1},
+    "base_repository_revision": {"type": ["string", "null"], "minLength": 1},
+    "initial_stage": {
+      "enum": [
+        "document_change",
+        "code_scope",
+        "compile_test"
+      ]
+    },
     "retry_of_coding_task_id": {"type": "string", "minLength": 1},
     "attempt_number": {"type": "integer", "minimum": 1},
-    "execution_mode": {"const": "copilot_coding_plan"},
+    "execution_mode": {"enum": ["copilot_coding_plan", "copilot_change_task"]},
     "provider_contract": {
       "type": "object",
       "additionalProperties": false,
@@ -50,6 +51,144 @@
       }
     },
     "task_summary": {"type": "string", "minLength": 1, "maxLength": 10000},
+    "change_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requirement_text",
+        "source_document_ref",
+        "target_document_ref",
+        "business_rules",
+        "ambiguity_status"
+      ],
+      "properties": {
+        "requirement_text": {"type": ["string", "null"], "maxLength": 50000},
+        "source_document_ref": {"type": ["string", "null"], "maxLength": 4000},
+        "target_document_ref": {"type": ["string", "null"], "maxLength": 4000},
+        "business_rules": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {"type": "object"}
+        },
+        "ambiguity_status": {"enum": ["clear", "needs_confirmation"]}
+      }
+    },
+    "target_project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "detection_status",
+        "stack_id",
+        "evidence",
+        "missing_signals"
+      ],
+      "properties": {
+        "detection_status": {"enum": ["supported", "unrecognized"]},
+        "stack_id": {
+          "type": ["string", "null"],
+          "enum": ["springboot15-thymeleaf-gradle", null]
+        },
+        "framework": {"const": "Spring Boot 1.5"},
+        "template_engine": {"const": "Thymeleaf"},
+        "build_system": {"const": "Gradle Wrapper"},
+        "source_kinds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "change_constraints": {
+          "type": "array",
+          "minItems": 3,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "compile_command": {
+          "const": ["./gradlew", "classes", "testClasses", "--no-daemon"]
+        },
+        "test_command": {
+          "const": ["./gradlew", "test", "--no-daemon"]
+        },
+        "build_command": {
+          "const": ["./gradlew", "build", "--no-daemon"]
+        },
+        "evidence": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "missing_signals": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"detection_status": {"const": "supported"}},
+            "required": ["detection_status"]
+          },
+          "then": {
+            "required": [
+              "framework",
+              "template_engine",
+              "build_system",
+              "source_kinds",
+              "change_constraints",
+              "compile_command",
+              "test_command",
+              "build_command"
+            ],
+            "properties": {
+              "stack_id": {"const": "springboot15-thymeleaf-gradle"},
+              "missing_signals": {"maxItems": 0}
+            }
+          }
+        }
+      ]
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage_order", "required_outputs"],
+      "properties": {
+        "stage_order": {
+          "const": [
+            "requirement",
+            "document_change",
+            "code_scope",
+            "compile_test",
+            "ui_validation",
+            "final_report"
+          ]
+        },
+        "required_outputs": {
+          "type": "array",
+          "minItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "document_diff",
+              "code_diff",
+              "test_plan",
+              "test_data_plan"
+            ]
+          }
+        }
+      }
+    },
+    "output_protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage_order", "tool", "test_planning_requires_validated_diff"],
+      "properties": {
+        "stage_order": {
+          "const": ["document_change", "code_scope", "test_planning"]
+        },
+        "tool": {"const": "copilot_record_change_outputs"},
+        "test_planning_requires_validated_diff": {"const": true}
+      }
+    },
     "mcp_server_name": {"const": "operaMind"},
     "required_mcp_tools": {
       "type": "array",
@@ -58,6 +197,7 @@
       "items": {
         "enum": [
           "copilot_get_coding_task",
+          "copilot_record_change_outputs",
           "copilot_run_task_command",
           "copilot_validate_task_diff",
           "copilot_record_task_result"
@@ -66,5 +206,47 @@
     },
     "created_by": {"type": "string", "minLength": 1},
     "created_at": {"type": "string", "format": "date-time"}
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"schema_version": {"const": "v1"}},
+        "required": ["schema_version"]
+      },
+      "then": {
+        "required": [
+          "change_session_id",
+          "analysis_case_id",
+          "repository_id",
+          "edit_packet_id",
+          "approval_grant_id",
+          "base_repository_revision"
+        ],
+        "properties": {
+          "execution_mode": {"const": "copilot_coding_plan"},
+          "change_session_id": {"type": "string", "minLength": 1},
+          "analysis_case_id": {"type": "string", "minLength": 1},
+          "repository_id": {"type": "string", "minLength": 1},
+          "edit_packet_id": {"type": "string", "minLength": 1},
+          "approval_grant_id": {"type": "string", "minLength": 1},
+          "base_repository_revision": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"schema_version": {"const": "v2"}},
+        "required": ["schema_version"]
+      },
+      "then": {
+        "required": [
+          "change_context",
+          "workflow",
+          "output_protocol",
+          "initial_stage"
+        ],
+        "properties": {"execution_mode": {"const": "copilot_change_task"}}
+      }
+    }
+  ]
 }

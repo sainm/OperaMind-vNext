@@ -10,15 +10,30 @@ test("Bridge client rejects non-loopback URLs", () => {
   assert.equal(assertLoopbackUrl("http://127.0.0.1:8765").hostname, "127.0.0.1");
 });
 
-test("Coding Plan prompt carries task identity and MCP result tools", () => {
+test("Change Task prompt carries identity, test planning, and MCP result tools", () => {
   const prompt = buildCopilotPrompt(
     {
       task: {
         coding_task_id: "task-1",
-        execution_mode: "copilot_coding_plan",
+        execution_mode: "copilot_change_task",
         task_summary: "差戻しを追加する",
+        target_project: {
+          detection_status: "supported",
+          framework: "Spring Boot 1.5",
+          template_engine: "Thymeleaf",
+          build_system: "Gradle Wrapper",
+          change_constraints: [
+            "Spring Boot 1.5 を維持する",
+            "Framework を更新しない",
+            "互換 JDK を使用する",
+          ],
+          compile_command: ["./gradlew", "classes", "testClasses", "--no-daemon"],
+          test_command: ["./gradlew", "test", "--no-daemon"],
+          build_command: ["./gradlew", "build", "--no-daemon"],
+        },
         required_mcp_tools: [
           "copilot_get_coding_task",
+          "copilot_record_change_outputs",
           "copilot_run_task_command",
           "copilot_validate_task_diff",
           "copilot_record_task_result",
@@ -28,9 +43,16 @@ test("Coding Plan prompt carries task identity and MCP result tools", () => {
     "/workspace",
   );
   assert.match(prompt, /task-1/);
+  assert.match(prompt, /TestPlan/);
+  assert.match(prompt, /TestDataPlan/);
+  assert.match(prompt, /設計書を変更/);
+  assert.match(prompt, /Spring Boot 1\.5 \/ Thymeleaf \/ Gradle Wrapper/);
+  assert.match(prompt, /Framework を更新しない/);
+  assert.match(prompt, /\.\/gradlew classes testClasses --no-daemon/);
   assert.match(prompt, /copilot_get_coding_task/);
   assert.match(prompt, /copilot_record_task_result/);
   assert.doesNotMatch(prompt, /ai-response\.json/);
+  assert.doesNotMatch(prompt, /Edit Packet|Approval|Grant|automation/);
 });
 
 test("Bridge client builds authenticated calls without a handoff file", async () => {

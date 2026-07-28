@@ -29,6 +29,8 @@ from operamind.application import (
     RagReadinessBlockedError,
     RagReadinessRequest,
     RagReadinessService,
+    RequirementDocumentDiscoveryRequest,
+    RequirementDocumentDiscoveryService,
     SearchIndexBuildBlockedError,
     SearchIndexBuildRequest,
     SearchIndexBuildService,
@@ -44,6 +46,7 @@ from operamind.infrastructure.postgres import (
     ArtifactRepository,
     DocumentIngestionResultRepository,
     DocumentIngestionStatus,
+    DocumentNodeRepository,
     MigrationCatalog,
     MigrationRunner,
     PersistenceConflictError,
@@ -666,6 +669,23 @@ def test_hybrid_search_requires_accepted_change_and_returns_ids_only(tmp_path: P
             source_query_id=f"query-{suffix}",
             query_text="status",
         )
+        discovery = RequirementDocumentDiscoveryService(
+            profiles=profiles,
+            profile_repository=profile_repository,
+            index_repository=index_repository,
+            node_repository=DocumentNodeRepository(connection),
+        ).run(
+            RequirementDocumentDiscoveryRequest(
+                project_id=project_id,
+                query_text="status",
+            ),
+            provider=provider,
+        )
+        assert discovery.search_index_build_id == build_request_value.build_id
+        assert discovery.document_snapshot_id == persisted.diff.target_snapshot_id
+        assert len(discovery.candidates) == 1
+        assert discovery.candidates[0].document_id
+        assert discovery.candidates[0].source_refs
 
         with pytest.raises(HybridSearchBlockedError, match="must be accepted"):
             search.run(request, provider=provider)

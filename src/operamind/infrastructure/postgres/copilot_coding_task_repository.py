@@ -23,11 +23,11 @@ class CopilotCodingTaskRecord:
     coding_task_id: str
     project_id: str
     change_request_id: str
-    analysis_case_id: str
-    repository_id: str
-    edit_packet_id: str
-    approval_grant_id: str
-    base_repository_revision: str
+    analysis_case_id: str | None
+    repository_id: str | None
+    edit_packet_id: str | None
+    approval_grant_id: str | None
+    base_repository_revision: str | None
     execution_mode: str
     provider_route: str
     provider_id: str
@@ -38,6 +38,7 @@ class CopilotCodingTaskRecord:
     accepted_by: str | None
     retry_of_coding_task_id: str | None
     attempt_number: int
+    current_stage: str
     created: bool = False
 
 
@@ -57,7 +58,7 @@ class CopilotCodingTaskRepository:
     ) -> CopilotCodingTaskRecord:
         task_id = str(artifact["coding_task_id"])
         project_id = str(artifact["project_id"])
-        case_id = str(artifact["analysis_case_id"])
+        case_id = _optional_text(artifact.get("analysis_case_id"))
         provider = cast(dict[str, object], artifact["provider_contract"])
         resolved_workspace = str(workspace_root.resolve(strict=True))
         with self._connection.transaction():
@@ -76,10 +77,10 @@ class CopilotCodingTaskRepository:
                         approval_grant_id, base_repository_revision,
                         execution_mode, provider_route, provider_id,
                         workspace_root, state, payload_digest, created_by,
-                        retry_of_coding_task_id, attempt_number
+                        retry_of_coding_task_id, attempt_number, current_stage
                     ) VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, 'pending_confirmation', %s, %s, %s, %s
+                        %s, 'pending_confirmation', %s, %s, %s, %s, %s
                     )
                     ON CONFLICT DO NOTHING
                     """,
@@ -88,10 +89,10 @@ class CopilotCodingTaskRepository:
                         project_id,
                         artifact["change_request_id"],
                         case_id,
-                        artifact["repository_id"],
-                        artifact["edit_packet_id"],
-                        artifact["approval_grant_id"],
-                        artifact["base_repository_revision"],
+                        artifact.get("repository_id"),
+                        artifact.get("edit_packet_id"),
+                        artifact.get("approval_grant_id"),
+                        artifact.get("base_repository_revision"),
                         artifact["execution_mode"],
                         provider["route"],
                         provider["provider_id"],
@@ -100,6 +101,7 @@ class CopilotCodingTaskRepository:
                         artifact["created_by"],
                         artifact.get("retry_of_coding_task_id"),
                         artifact.get("attempt_number", 1),
+                        artifact.get("initial_stage", "compile_test"),
                     ),
                 )
                 created = cursor.rowcount == 1
@@ -110,10 +112,10 @@ class CopilotCodingTaskRepository:
                     project_id,
                     str(artifact["change_request_id"]),
                     case_id,
-                    str(artifact["repository_id"]),
-                    str(artifact["edit_packet_id"]),
-                    str(artifact["approval_grant_id"]),
-                    str(artifact["base_repository_revision"]),
+                    _optional_text(artifact.get("repository_id")),
+                    _optional_text(artifact.get("edit_packet_id")),
+                    _optional_text(artifact.get("approval_grant_id")),
+                    _optional_text(artifact.get("base_repository_revision")),
                     str(artifact["execution_mode"]),
                     str(provider["route"]),
                     str(provider["provider_id"]),
@@ -122,6 +124,7 @@ class CopilotCodingTaskRepository:
                     if artifact.get("retry_of_coding_task_id") is not None
                     else None,
                     int(artifact.get("attempt_number", 1)),
+                    str(artifact.get("initial_stage", "compile_test")),
                     digest,
                 )
                 actual = (
@@ -138,6 +141,7 @@ class CopilotCodingTaskRepository:
                     record.workspace_root,
                     record.retry_of_coding_task_id,
                     record.attempt_number,
+                    record.current_stage,
                     self._payload_digest(cursor, task_id),
                 )
                 if actual != expected:
@@ -163,7 +167,7 @@ class CopilotCodingTaskRepository:
                        COALESCE(task.claim_expires_at <= now(), false),
                        task.claim_expires_at
                 FROM copilot_coding_tasks AS task
-                JOIN approval_grants AS grant_record
+                LEFT JOIN approval_grants AS grant_record
                   ON grant_record.approval_grant_id = task.approval_grant_id
                  AND grant_record.project_id = task.project_id
                 WHERE task.provider_route = 'local_bridge'
@@ -174,10 +178,15 @@ class CopilotCodingTaskRepository:
                       OR task.claimed_by = %s
                       OR task.claim_expires_at <= now()
                   )
-                  AND grant_record.expires_at > now()
-                  AND NOT EXISTS (
-                      SELECT 1 FROM approval_grant_events AS grant_event
-                      WHERE grant_event.approval_grant_id = task.approval_grant_id
+                  AND (
+                      task.approval_grant_id IS NULL
+                      OR (
+                          grant_record.expires_at > now()
+                          AND NOT EXISTS (
+                              SELECT 1 FROM approval_grant_events AS grant_event
+                              WHERE grant_event.approval_grant_id = task.approval_grant_id
+                          )
+                      )
                   )
                 ORDER BY
                     CASE WHEN task.claimed_by = %s THEN 0 ELSE 1 END,
@@ -492,6 +501,144 @@ class CopilotCodingTaskRepository:
                 },
             )
 
+    def record_change_outputs(
+        self,
+        *,
+        coding_task_id: str,
+        actor: str,
+        output_stage: str,
+        expected_stage: str,
+        next_stage: str,
+        output_refs: dict[str, object],
+    ) -> None:
+        with self._connection.transaction(), self._connection.cursor() as cursor:
+            record = self._require_locked(cursor, coding_task_id)
+            if record.state != "in_progress":
+                raise ValueError("Copilot Change Task is not accepting outputs")
+            if record.current_stage not in {expected_stage, next_stage}:
+                raise ValueError(
+                    "Copilot Change Task output is out of order: "
+                    f"expected {expected_stage}, current {record.current_stage}"
+                )
+            payload = {"output_stage": output_stage, **output_refs}
+            self._append_event(
+                cursor,
+                record=record,
+                event_type="outputs_recorded",
+                actor=actor,
+                idempotency_key=f"outputs:{output_stage}",
+                payload=payload,
+            )
+            if record.current_stage == expected_stage and next_stage != expected_stage:
+                cursor.execute(
+                    """
+                    UPDATE copilot_coding_tasks
+                    SET current_stage = %s, updated_at = now()
+                    WHERE coding_task_id = %s
+                    """,
+                    (next_stage, coding_task_id),
+                )
+
+    def bind_execution_scope(
+        self,
+        *,
+        coding_task_id: str,
+        analysis_case_id: str,
+        repository_id: str,
+        edit_packet_id: str,
+        approval_grant_id: str,
+        base_repository_revision: str,
+        actor: str,
+    ) -> CopilotCodingTaskRecord:
+        values = (
+            analysis_case_id,
+            repository_id,
+            edit_packet_id,
+            approval_grant_id,
+            base_repository_revision,
+            actor,
+        )
+        if any(not value.strip() for value in values):
+            raise ValueError("Copilot Change Task execution scope must not be blank")
+        with self._connection.transaction(), self._connection.cursor() as cursor:
+            record = self._require_locked(cursor, coding_task_id)
+            if record.current_stage == "document_change":
+                raise ValueError(
+                    "Copilot Change Task execution scope requires recorded code scope"
+                )
+            cursor.execute(
+                """
+                SELECT 1
+                FROM copilot_coding_task_events
+                WHERE coding_task_id = %s
+                  AND event_type = 'outputs_recorded'
+                  AND payload ->> 'output_stage' = 'code_scope'
+                LIMIT 1
+                """,
+                (coding_task_id,),
+            )
+            if cursor.fetchone() is None:
+                raise ValueError(
+                    "Copilot Change Task execution scope requires recorded code scope"
+                )
+            requested = (
+                analysis_case_id,
+                repository_id,
+                edit_packet_id,
+                approval_grant_id,
+                base_repository_revision,
+            )
+            existing = (
+                record.analysis_case_id,
+                record.repository_id,
+                record.edit_packet_id,
+                record.approval_grant_id,
+                record.base_repository_revision,
+            )
+            if all(value is None for value in existing):
+                cursor.execute(
+                    """
+                    UPDATE copilot_coding_tasks
+                    SET analysis_case_id = %s, repository_id = %s,
+                        edit_packet_id = %s, approval_grant_id = %s,
+                        base_repository_revision = %s,
+                        current_stage = 'compile_test', updated_at = now()
+                    WHERE coding_task_id = %s
+                    """,
+                    (*requested, coding_task_id),
+                )
+                record = self._require_locked(cursor, coding_task_id)
+            elif existing != requested:
+                raise PersistenceConflictError(
+                    "Copilot Change Task execution scope is already bound differently"
+                )
+            elif record.current_stage == "code_scope":
+                cursor.execute(
+                    """
+                    UPDATE copilot_coding_tasks
+                    SET current_stage = 'compile_test', updated_at = now()
+                    WHERE coding_task_id = %s
+                    """,
+                    (coding_task_id,),
+                )
+                record = self._require_locked(cursor, coding_task_id)
+            self._append_event(
+                cursor,
+                record=record,
+                event_type="scope_bound",
+                actor=actor,
+                idempotency_key=f"scope:{edit_packet_id}:{approval_grant_id}",
+                payload={
+                    "analysis_case_id": analysis_case_id,
+                    "repository_id": repository_id,
+                    "edit_packet_id": edit_packet_id,
+                    "approval_grant_id": approval_grant_id,
+                    "base_repository_revision": base_repository_revision,
+                    "current_stage": "compile_test",
+                },
+            )
+        return record
+
     def get(self, coding_task_id: str) -> CopilotCodingTaskRecord:
         with self._connection.cursor() as cursor:
             record = self._get_locked(cursor, coding_task_id, lock=False)
@@ -506,7 +653,17 @@ class CopilotCodingTaskRepository:
                 SELECT coding_task_id
                 FROM copilot_coding_tasks
                 WHERE change_request_id = %s
-                ORDER BY created_at DESC, coding_task_id DESC
+                ORDER BY
+                    CASE state
+                        WHEN 'in_progress' THEN 0
+                        WHEN 'accepted' THEN 1
+                        WHEN 'pending_confirmation' THEN 2
+                        WHEN 'completed' THEN 3
+                        ELSE 4
+                    END,
+                    attempt_number DESC,
+                    created_at DESC,
+                    coding_task_id DESC
                 LIMIT 1
                 """,
                 (change_request_id,),
@@ -579,6 +736,15 @@ class CopilotCodingTaskRepository:
             "accepted_by": record.accepted_by,
             "retry_of_coding_task_id": record.retry_of_coding_task_id,
             "attempt_number": record.attempt_number,
+            "current_stage": record.current_stage,
+            "execution_scope": {
+                "analysis_case_id": record.analysis_case_id,
+                "repository_id": record.repository_id,
+                "edit_packet_id": record.edit_packet_id,
+                "approval_grant_id": record.approval_grant_id,
+                "base_repository_revision": record.base_repository_revision,
+                "bound": record.approval_grant_id is not None,
+            },
             "commands": [
                 {
                     "command_execution_id": str(row[0]),
@@ -628,7 +794,7 @@ class CopilotCodingTaskRepository:
                    base_repository_revision, execution_mode, provider_route,
                    provider_id, workspace_root, state, claimed_by,
                    claim_expires_at, accepted_by, retry_of_coding_task_id,
-                   attempt_number
+                   attempt_number, current_stage
             FROM copilot_coding_tasks
             WHERE coding_task_id = %s
             """,
@@ -642,11 +808,11 @@ class CopilotCodingTaskRepository:
             coding_task_id=str(row[0]),
             project_id=str(row[1]),
             change_request_id=str(row[2]),
-            analysis_case_id=str(row[3]),
-            repository_id=str(row[4]),
-            edit_packet_id=str(row[5]),
-            approval_grant_id=str(row[6]),
-            base_repository_revision=str(row[7]),
+            analysis_case_id=_optional_text(row[3]),
+            repository_id=_optional_text(row[4]),
+            edit_packet_id=_optional_text(row[5]),
+            approval_grant_id=_optional_text(row[6]),
+            base_repository_revision=_optional_text(row[7]),
             execution_mode=str(row[8]),
             provider_route=str(row[9]),
             provider_id=str(row[10]),
@@ -657,6 +823,7 @@ class CopilotCodingTaskRepository:
             accepted_by=str(row[15]) if row[15] is not None else None,
             retry_of_coding_task_id=str(row[16]) if row[16] is not None else None,
             attempt_number=int(row[17]),
+            current_stage=str(row[18]),
         )
 
     @classmethod
@@ -750,6 +917,17 @@ class CopilotCodingTaskRepository:
 
     @staticmethod
     def _require_live_grant(cursor: Cursor[Any], record: CopilotCodingTaskRecord) -> None:
+        scope = (
+            record.analysis_case_id,
+            record.repository_id,
+            record.edit_packet_id,
+            record.approval_grant_id,
+            record.base_repository_revision,
+        )
+        if all(value is None for value in scope) and record.execution_mode == "copilot_change_task":
+            return
+        if any(value is None for value in scope):
+            raise PersistenceConflictError("Copilot Change Task execution scope is incomplete")
         cursor.execute(
             """
             SELECT grant_record.expires_at > now()
@@ -786,6 +964,7 @@ class CopilotCodingTaskRepository:
         payload: dict[str, object],
     ) -> None:
         canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        normalized_payload = cast(dict[str, object], json.loads(canonical))
         event_id = (
             "copilot-task-event:"
             + hashlib.sha256(f"{record.coding_task_id}\0{idempotency_key}".encode()).hexdigest()
@@ -817,5 +996,9 @@ class CopilotCodingTaskRepository:
             (record.coding_task_id, idempotency_key),
         )
         stored = cursor.fetchone()
-        if stored is None or tuple(stored) != (event_type, actor, payload):
+        if stored is None or tuple(stored) != (event_type, actor, normalized_payload):
             raise PersistenceConflictError("Copilot Coding Task event idempotency payload differs")
+
+
+def _optional_text(value: object) -> str | None:
+    return str(value) if value is not None else None

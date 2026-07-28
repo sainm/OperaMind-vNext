@@ -171,6 +171,12 @@ ACTION_POLICIES: dict[str, _ActionPolicy] = {
         ("ChangeOrchestration", "TestDataPlan", "UiExecutionPlan"),
         ("生成物可追溯到已确认的需求、设计差分和影响项。",),
     ),
+    "provision_execution_scope": _ActionPolicy(
+        "deterministic_action",
+        ("execution_scope_binding",),
+        ("CopilotEditPacket", "ApprovalGrant"),
+        ("実行範囲は確認済み Impact と有効な CommandExecutionProfile から導出される。",),
+    ),
     "apply_code_change_with_copilot": _ActionPolicy(
         "external_execution",
         ("source_code_edit",),

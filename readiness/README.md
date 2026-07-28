@@ -35,9 +35,9 @@ After the source tree is final, run the exact full-regression command, capture P
   --analysis-case-id visiondemo-expense-status-filter-p6
 ```
 
-Human Approval and Deployment evidence require no external receipt: they are derived from normalized Impact/Confirmation/Packet/Grant and revision-bound UI Plan/Run/Validation rows. Copilot is intentionally different because the edit tables alone do not prove the editor origin. Record a reviewed session only after VS Code GitHub Copilot completed the immutable Coding Task with the fixed MCP Packet/Grant.
+Scope authorization and Deployment evidence require no external receipt: they are derived from the internal normalized Impact/Confirmation/Packet/Grant chain and revision-bound UI Plan/Run/Validation rows. Those controls are not separate user operations. Copilot is intentionally different because edit rows alone do not prove the editor origin. Record a reviewed session only after VS Code GitHub Copilot completed the immutable unified Change Task through the five public MCP tools.
 
-Before review, validate the completed VS Code session JSONL and exact request. The inspector requires a signed-in, non-BYOK GitHub Copilot request with matching session identity and completed, confirmed `copilot_get_coding_task`, `copilot_run_task_command`, `copilot_validate_task_diff`, and `copilot_record_task_result` MCP calls. Quota failures, incomplete responses, missing tools and unconfirmed tools are rejected:
+Before review, validate the completed VS Code session JSONL and exact request. The inspector requires a signed-in, non-BYOK GitHub Copilot request with matching session identity and completed, confirmed `copilot_get_coding_task`, ordered `copilot_record_change_outputs` calls for `document_change`, `code_scope`, and `test_planning`, plus `copilot_validate_task_diff`, `copilot_run_task_command`, and `copilot_record_task_result`. Quota failures, incomplete responses, missing tools and unconfirmed tools are rejected:
 
 ```bash
 .venv/bin/operamind-readiness inspect-copilot-session \
@@ -166,7 +166,7 @@ The path must be repository-relative. This command only prints the digest; it do
 Pending gate templates:
 
 - `embedding_provider_live`: finalized at `readiness/evidence/local-embedding-provider-2026-07-18.json` after the opt-in live Provider contract test passed against local Nomic; the template remains for later recapture.
-- `human_approval_e2e`: finalized at `readiness/evidence/visiondemo-human-approval-p6-v3.json` from the user-confirmed v3 Impact/Confirmation/Packet/Grant chain; the template remains for later cases.
-- `github_copilot_live`: `readiness/templates/github-copilot-live.example.json`; fill it only after a signed-in GitHub Copilot session uses the MCP handoff with the fixed Edit Packet and Approval Grant and produces the recorded result revision.
+- `human_approval_e2e`: legacy gate ID retained for schema compatibility; it now attests the bounded scope-authorization chain. The reconstructed main flow creates deterministic Impact confirmation, Packet and Grant internally and exposes no manual approval page.
+- `github_copilot_live`: `readiness/templates/github-copilot-live.example.json`; fill it only after a signed-in GitHub Copilot session completes the unified Change Task through the five public MCP tools and produces the recorded result revision. Packet and Grant identities remain internal evidence.
 - `target_deployment_e2e`: `readiness/templates/target-deployment-e2e.example.json`; fill it only after the revision-bound target Deployment passes UI verification and sanitized evidence has stable IDs.
 - `full_local_regression`: `readiness/templates/full-local-regression.example.json`; fill it only after the fixed full local regression command, including PostgreSQL-backed integration and real browser checks, completes with zero failures and zero skipped tests. The command explicitly excludes only `test_live_embedding_provider.py` (proved by its separate live Provider gate) and the legacy local-only Silver fixture `test_golden_screen_change.py` (not part of the frozen portable Golden Dataset). The validator rejects any additional omission and requires `passed == collected`.

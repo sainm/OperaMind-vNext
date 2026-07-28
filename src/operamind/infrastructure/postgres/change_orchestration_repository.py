@@ -25,6 +25,9 @@ class CanonicalOrchestrationEvidence:
     impact_report: dict[str, Any]
     impact_report_state: str
     impact_confirmation: dict[str, Any]
+    copilot_coding_task_id: str | None = None
+    generated_test_plan: dict[str, Any] | None = None
+    generated_test_data_plan: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +139,47 @@ class ChangeOrchestrationRepository:
         effective_reviews = {str(row[0]): str(row[1]) for row in review_rows}
         if set(effective_reviews) != set(change_refs):
             raise PersistenceConflictError("Structured Change normalized ledger is incomplete")
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT task.coding_task_id, event.payload
+                FROM copilot_coding_tasks AS task
+                JOIN copilot_coding_task_events AS event
+                  ON event.coding_task_id = task.coding_task_id
+                 AND event.project_id = task.project_id
+                WHERE task.change_request_id = %s
+                  AND task.project_id = %s
+                  AND task.execution_mode = 'copilot_change_task'
+                  AND event.event_type = 'outputs_recorded'
+                  AND event.payload ->> 'output_stage' = 'test_planning'
+                ORDER BY event.created_at DESC, event.event_sequence DESC
+                LIMIT 1
+                """,
+                (change_request_id, project_id),
+            )
+            output_row = cursor.fetchone()
+        coding_task_id: str | None = None
+        generated_test_plan: dict[str, Any] | None = None
+        generated_test_data_plan: dict[str, Any] | None = None
+        if output_row is not None:
+            coding_task_id = str(output_row[0])
+            output_refs = cast(dict[str, Any], output_row[1])
+            recorded_change_refs = {
+                str(value)
+                for value in cast(list[object], output_refs.get("document_change_refs", []))
+            }
+            if recorded_change_refs != set(change_refs):
+                raise PersistenceConflictError(
+                    "Copilot output document changes differ from confirmed Impact scope"
+                )
+            generated_test_plan = self._required_artifact(
+                str(output_refs.get("test_plan_id") or ""),
+                "TestPlan",
+            )
+            generated_test_data_plan = self._required_artifact(
+                str(output_refs.get("test_data_plan_id") or ""),
+                "TestDataPlan",
+            )
         return CanonicalOrchestrationEvidence(
             change_request=request,
             analysis_case_id=case_id,
@@ -146,6 +190,9 @@ class ChangeOrchestrationRepository:
             impact_report=report,
             impact_report_state="confirmed",
             impact_confirmation=confirmation,
+            copilot_coding_task_id=coding_task_id,
+            generated_test_plan=generated_test_plan,
+            generated_test_data_plan=generated_test_data_plan,
         )
 
     def persist(

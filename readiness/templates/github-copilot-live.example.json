@@ -25,6 +25,7 @@
     "session_transcript_sha256": "replace-with-64-character-sha256",
     "completed_mcp_tools": [
       "copilot_get_coding_task",
+      "copilot_record_change_outputs",
       "copilot_run_task_command",
       "copilot_validate_task_diff",
       "copilot_record_task_result"

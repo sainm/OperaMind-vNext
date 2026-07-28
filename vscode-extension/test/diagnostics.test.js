@@ -14,12 +14,12 @@ const {
   workspaceFingerprint,
 } = require("../diagnostics");
 
-test("normalizes the exact 13 OperaMind MCP tool names from VS Code prefixes", () => {
+test("normalizes the exact five unified Change Task MCP tool names", () => {
   const raw = EXPECTED_MCP_TOOL_NAMES.map((name) => `mcp_operamind_${name}`);
   assert.deepEqual(normalizeMcpToolNames([...raw, "unrelated_tool"]), [
     ...EXPECTED_MCP_TOOL_NAMES,
   ].sort());
-  assert.equal(normalizeMcpToolNames(raw).length, 13);
+  assert.equal(normalizeMcpToolNames(raw).length, 5);
 });
 
 test("recognizes a linked worktree git file but not a normal repository git directory", async () => {

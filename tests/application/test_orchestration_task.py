@@ -21,6 +21,7 @@ EXPECTED_CHANGE_AUTOMATION_ACTIONS = {
     "prepare_canonical_analysis",
     "confirm_impact",
     "generate_orchestration",
+    "provision_execution_scope",
     "apply_code_change_with_copilot",
     "issue_approval_grant",
     "start_test_data_execution",

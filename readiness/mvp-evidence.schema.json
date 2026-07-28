@@ -203,6 +203,7 @@
         "completed_mcp_tools": {
           "const": [
             "copilot_get_coding_task",
+            "copilot_record_change_outputs",
             "copilot_run_task_command",
             "copilot_validate_task_diff",
             "copilot_record_task_result"

@@ -22,6 +22,7 @@ from operamind.infrastructure.postgres.approval_grant_repository import (
 )
 from operamind.infrastructure.postgres.artifact_repository import ArtifactRepository
 from operamind.infrastructure.postgres.canonical_repository import (
+    CanonicalDocumentSlice,
     CanonicalRepository,
     DocumentSnapshotWrite,
     SnapshotStatus,
@@ -61,9 +62,6 @@ from operamind.infrastructure.postgres.command_execution_repository import (
     CommandExecutionReservation,
     CommandExecutionResultWrite,
     CommandExecutionScope,
-)
-from operamind.infrastructure.postgres.control_plane_query_repository import (
-    ControlPlaneQueryRepository,
 )
 from operamind.infrastructure.postgres.copilot_coding_task_repository import (
     CopilotCodingTaskRecord,
@@ -177,39 +175,6 @@ from operamind.infrastructure.postgres.test_data_execution_repository import (
     TestDataExecutionReservation,
     TestDataExecutionRunWrite,
 )
-from operamind.infrastructure.postgres.ui_browser_manifest_repository import (
-    ApprovedBrowserManifest,
-    BrowserManifestRecord,
-    UiBrowserManifestRepository,
-)
-from operamind.infrastructure.postgres.ui_knowledge_repository import (
-    UiKnowledgeRepository,
-    UiKnowledgeReviewRecord,
-    UiKnowledgeSnapshotRecord,
-)
-from operamind.infrastructure.postgres.ui_knowledge_review_query_repository import (
-    UiKnowledgeReviewQueryRepository,
-)
-from operamind.infrastructure.postgres.ui_locator_observation_repository import (
-    UiLocatorObservationRepository,
-    UiLocatorObservationRunRecord,
-)
-from operamind.infrastructure.postgres.ui_verification_repository import (
-    PREFLIGHT_TYPES,
-    UI_EVIDENCE_TYPES,
-    UiDeploymentWrite,
-    UiExecutionEvidenceWrite,
-    UiExecutionPlanRecord,
-    UiExecutionPlanWrite,
-    UiExecutionRunRecord,
-    UiPreflightCheckWrite,
-    UiScenarioResultWrite,
-    UiVerificationCompletionWrite,
-    UiVerificationRepository,
-    UiVerificationResultRecord,
-    UiVerificationScope,
-    VerificationScenarioWrite,
-)
 from operamind.infrastructure.postgres.unresolved_evidence_repository import (
     UnresolvedEvidencePublishResult,
     UnresolvedEvidenceRepository,
@@ -241,8 +206,6 @@ def __getattr__(name: str) -> object:
 
 __all__ = [
     "GOLDEN_SEMANTIC_BINDING_VERSION",
-    "PREFLIGHT_TYPES",
-    "UI_EVIDENCE_TYPES",
     "ActiveProfileBinding",
     "AnalysisRegistration",
     "AnalysisRepository",
@@ -250,9 +213,8 @@ __all__ = [
     "ApprovalGrantRecord",
     "ApprovalGrantRepository",
     "ApprovalGrantSource",
-    "ApprovedBrowserManifest",
     "ArtifactRepository",
-    "BrowserManifestRecord",
+    "CanonicalDocumentSlice",
     "CanonicalOrchestrationEvidence",
     "CanonicalRepository",
     "ChangeAutomationRepository",
@@ -280,7 +242,6 @@ __all__ = [
     "CommandExecutionResultWrite",
     "CommandExecutionScope",
     "ConfirmedImpactItem",
-    "ControlPlaneQueryRepository",
     "CopilotCodingTaskRecord",
     "CopilotCodingTaskRepository",
     "DocumentExpansionReason",
@@ -353,27 +314,8 @@ __all__ = [
     "TestDataExecutionRepository",
     "TestDataExecutionReservation",
     "TestDataExecutionRunWrite",
-    "UiBrowserManifestRepository",
-    "UiDeploymentWrite",
-    "UiExecutionEvidenceWrite",
-    "UiExecutionPlanRecord",
-    "UiExecutionPlanWrite",
-    "UiExecutionRunRecord",
-    "UiKnowledgeRepository",
-    "UiKnowledgeReviewQueryRepository",
-    "UiKnowledgeReviewRecord",
-    "UiKnowledgeSnapshotRecord",
-    "UiLocatorObservationRepository",
-    "UiLocatorObservationRunRecord",
-    "UiPreflightCheckWrite",
-    "UiScenarioResultWrite",
-    "UiVerificationCompletionWrite",
-    "UiVerificationRepository",
-    "UiVerificationResultRecord",
-    "UiVerificationScope",
     "UnresolvedEvidencePublishResult",
     "UnresolvedEvidenceRepository",
-    "VerificationScenarioWrite",
     "WebCommandRepository",
     "WebControlPlaneRepository",
     "document_relation_id",

@@ -11,21 +11,11 @@ from operamind.application.local_environment_diagnostics import (
 from operamind.web.dependencies import local_bridge_auth
 from operamind.web.models import LocalEnvironmentExtensionDiagnostic
 
-router = APIRouter(prefix="/api/v1/local-environment", tags=["local-environment"])
 bridge_router = APIRouter(
     prefix="/api/v1/local-bridge",
     tags=["local-bridge"],
     dependencies=[Depends(local_bridge_auth)],
 )
-
-
-@router.get("/diagnostics")
-def inspect_local_environment(request: Request) -> dict[str, object]:
-    service = cast(
-        LocalEnvironmentDiagnosticsService,
-        request.app.state.local_environment_diagnostics,
-    )
-    return service.inspect()
 
 
 @bridge_router.post("/diagnostics")

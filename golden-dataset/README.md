@@ -31,9 +31,7 @@ MVP 接受 1–5 个真实、可复核案例；当前冻结的 1 个案例覆盖
 
 开发用 `manifest.silver.json` 当前包含 5 个案例，覆盖画面字段修改、画面项目新增、画面事件删除、跨画面关联数据链和 API 字段类型修改。新增／删除／API 三个案例使用可移植的确定性 XLSX Fixture 并执行真实 `DocumentDiffService`；跨画面案例继续以顺序化 TestDataPlan 固定变量传递、断言和清理。所有新增案例仍需业务、开发和 QA 审核。
 
-双入口 Change Loop 另有 3 份通过 `change-loop-case.schema.json` 校验的可执行案例配置：既存的经费状态案例，以及新增的社員姓名空白检索、発注状态／仕入先检索案例。案例配置固定需求意图、文档差异、影响候选、精确代码替换、测试数据、验收条件、API 断言和受限 Browser Scenario；歧义、冲突、Revision 不一致或编辑越界仍会停止并要求人工确认。这两份新增配置用于多案例闭环回归，不会自动扩大 `manifest.golden.json` 中已冻结的正式 Golden 范围。
-
-`operamind-change-cases` 用于案例初始化、自动发现、完整性校验和隔离批量运行。初始化只生成不可执行的 `draft`；校验同时检查配置 Schema、跨对象 ID、源清单、文档 SHA-256、Profile、固定 Git Revision 和引用代码路径。批量结果通过 `change-loop-batch-report.schema.json` 校验，并明确区分需要确认、需要重新分析、环境失败和业务失败。
+Golden Dataset 只用于离线检索、差分、代码范围和 UI 期待值回归。正式变更的 TestPlan／TestDataPlan 必须由当前 Copilot Change Task 生成并绑定当前 Canonical Evidence；Dataset 不再作为运行时编排输入。
 
 真实设计书可以脱敏，但必须保留结构、关系和变化特征。代码仓库不复制到 Dataset，只保存 URL、commit、scan roots 和期待路径。
 
@@ -52,7 +50,7 @@ operamind-baseline \
   --require-ready
 ```
 
-当前上述 `--require-ready` 命令应通过。它只证明 Golden Dataset gate，不等于 MVP ready；完整本地回归已由机器验证，完整 MVP 仍需要真实 Provider、人工审批 E2E、GitHub Copilot live session 和真实 target deployment E2E evidence。
+当前上述 `--require-ready` 命令应通过。它只证明 Golden Dataset gate，不等于 MVP ready；完整 MVP 仍需要真实 Provider、内部范围授权链、GitHub Copilot live session、真实 target deployment E2E 以及绑定最终源码的零跳过完整回归 Evidence。
 
 人工审核后，先把正式 envelope 放入 `readiness/evidence/` 并单独预检，不能直接修改 gate：
 

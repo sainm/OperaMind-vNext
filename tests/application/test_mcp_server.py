@@ -10,6 +10,10 @@ from operamind.mcp.server import (
     MCP_TOOL_NAME_PATTERN,
     TOOLS,
     OperaMindMcpServer,
+    _public_change_output,
+    _public_command_result,
+    _public_edit_result,
+    _public_flow_status,
 )
 
 ROOT = Path(__file__).parents[2]
@@ -17,8 +21,10 @@ ROOT = Path(__file__).parents[2]
 
 class _StubDispatcher:
     def call(self, name: str, arguments: object) -> dict[str, object]:
-        if not isinstance(arguments, dict) or "project_id" not in arguments:
-            raise ValueError("project_id is required")
+        if not isinstance(arguments, dict):
+            raise ValueError("arguments must be an object")
+        if arguments.get("coding_task_id") == "raise-error":
+            raise ValueError("simulated business error")
         return {"tool": name, "arguments": arguments}
 
 
@@ -66,39 +72,160 @@ def test_mcp_lists_bounded_annotated_copilot_tools_after_initialization() -> Non
     assert all("annotations" in tool for tool in tools)
     by_name = {tool["name"]: tool for tool in tools}
     assert set(by_name) == {
-        "analysis_list_ready_cases",
-        "impact_get_report",
-        "copilot_get_edit_packet",
-        "copilot_get_approval_grant",
-        "copilot_run_approved_command",
-        "copilot_validate_worktree",
-        "copilot_record_edit_result",
         "copilot_get_coding_task",
+        "copilot_record_change_outputs",
         "copilot_run_task_command",
         "copilot_validate_task_diff",
         "copilot_record_task_result",
-        "verification_get_ui_plan",
-        "validation_get_result",
     }
-    assert by_name["analysis_list_ready_cases"]["inputSchema"]["properties"]["limit"] == {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 50,
-    }
-    threshold = by_name["copilot_record_edit_result"]["inputSchema"]["properties"][
+    threshold = by_name["copilot_record_task_result"]["inputSchema"]["properties"][
         "changed_line_coverage"
     ]["properties"]["minimum_coverage_percent"]
     assert threshold == {"type": "number", "minimum": 80, "maximum": 100}
+    outputs = by_name["copilot_record_change_outputs"]["inputSchema"]
+    assert outputs["properties"]["output_stage"]["enum"] == [
+        "document_change",
+        "code_scope",
+        "test_planning",
+    ]
+    assert len(outputs["oneOf"]) == 3
+    assert "ui_test_result_refs" not in by_name["copilot_record_task_result"][
+        "inputSchema"
+    ]["properties"]
     assert {
         name for name, tool in by_name.items() if tool["annotations"]["readOnlyHint"] is True
-    } == {
-        "analysis_list_ready_cases",
-        "impact_get_report",
-        "copilot_get_edit_packet",
-        "copilot_get_approval_grant",
-        "verification_get_ui_plan",
-        "validation_get_result",
+    } == set()
+    public_contract = json.dumps(tools).lower()
+    assert all(
+        internal_term not in public_contract
+        for internal_term in (
+            "approval",
+            "grant",
+            "packet",
+            "lease",
+            "worker",
+            "orchestration",
+        )
+    )
+
+
+def test_mcp_flow_status_drops_internal_automation_and_scheduler_fields() -> None:
+    status = _public_flow_status(
+        {
+            "status": "in_progress",
+            "current_stage": "code_scope",
+            "progress_percent": 33,
+            "blocking_reasons": [],
+            "automation_run_id": "run-internal",
+            "approval_grant_id": "grant-internal",
+            "orchestration_tasks": [{"lease_token": "secret"}],
+            "current_task": {"worker_id": "worker-internal"},
+        }
+    )
+
+    assert status == {
+        "status": "in_progress",
+        "current_stage": "code_scope",
+        "progress_percent": 33,
+        "blocking_reasons": [],
     }
+
+
+def test_mcp_tool_outputs_hide_internal_artifact_profile_and_scope_fields() -> None:
+    change_output = _public_change_output(
+        {
+            "recorded_stage": "document_change",
+            "next_stage": "code_scope",
+            "coding_task_state": "in_progress",
+            "document_ids": ["document-1"],
+            "document_change_refs": ["change-internal"],
+            "source_document_snapshot_id": "snapshot-internal",
+            "search_index_build_id": "index-internal",
+        },
+        output_stage="document_change",
+    )
+    command = _public_command_result(
+        {
+            "command_execution_id": "command-1",
+            "created": True,
+            "command_ref": "springboot15-test",
+            "status": "passed",
+            "exit_code": 0,
+            "stdout_digest": "stdout",
+            "stderr_digest": "stderr",
+            "stdout_bytes": 10,
+            "stderr_bytes": 0,
+            "output_truncated": False,
+            "started_at": "2026-07-28T00:00:00Z",
+            "completed_at": "2026-07-28T00:00:01Z",
+            "coding_task_state": "in_progress",
+            "command_profile_version_id": "profile-internal",
+            "template_digest": "template-internal",
+            "working_directory": "/registered/internal",
+        }
+    )
+    edit = _public_edit_result(
+        {
+            "edit_result_id": "edit-1",
+            "created": True,
+            "status": "in_scope",
+            "case_status": "editing",
+            "command_evidence_status": "complete",
+            "changed_paths": ["src/ExpenseService.java"],
+            "out_of_scope_files": [],
+            "result_repository_revision": "abc123",
+            "coding_task_state": "completed",
+            "approval_grant_id": "grant-internal",
+            "changed_line_coverage": {
+                "artifact_type": "ChangedLineCoverageReport",
+                "changed_line_coverage_report_id": "coverage-internal",
+                "project_id": "project-internal",
+                "minimum_coverage_percent": 80,
+                "changed_line_count": 1,
+                "covered_changed_line_count": 1,
+                "coverage_percent": 100,
+                "files": [],
+                "evidence_refs": ["command-1"],
+                "status": "passed",
+                "blocking_reasons": [],
+            },
+        }
+    )
+
+    assert change_output == {
+        "recorded_stage": "document_change",
+        "next_stage": "code_scope",
+        "coding_task_state": "in_progress",
+        "document_count": 1,
+        "document_change_count": 1,
+    }
+    assert set(command) == {
+        "command_execution_id",
+        "created",
+        "command_ref",
+        "status",
+        "exit_code",
+        "stdout_digest",
+        "stderr_digest",
+        "stdout_bytes",
+        "stderr_bytes",
+        "output_truncated",
+        "started_at",
+        "completed_at",
+        "coding_task_state",
+    }
+    assert set(edit) == {
+        "edit_result_id",
+        "created",
+        "status",
+        "command_evidence_status",
+        "changed_paths",
+        "out_of_scope_files",
+        "result_repository_revision",
+        "coding_task_state",
+        "changed_line_coverage",
+    }
+    assert "internal" not in repr((change_output, command, edit))
 
 
 def test_mcp_tool_business_error_is_a_tool_result_not_protocol_failure() -> None:
@@ -110,13 +237,19 @@ def test_mcp_tool_business_error_is_a_tool_result_not_protocol_failure() -> None
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/call",
-            "params": {"name": "copilot_get_approval_grant", "arguments": {}},
+            "params": {
+                "name": "copilot_get_coding_task",
+                "arguments": {
+                    "coding_task_id": "raise-error",
+                    "workspace_root": "/workspace",
+                },
+            },
         }
     )
 
     assert response is not None
     assert response["result"]["isError"] is True
-    assert "project_id is required" in response["result"]["structuredContent"]["error"]
+    assert "simulated business error" in response["result"]["structuredContent"]["error"]
 
 
 def test_mcp_unknown_tool_is_invalid_params() -> None:
@@ -144,8 +277,11 @@ def test_mcp_rate_limits_tool_calls_per_session() -> None:
         "id": 2,
         "method": "tools/call",
         "params": {
-            "name": "copilot_get_approval_grant",
-            "arguments": {"project_id": "project-001"},
+            "name": "copilot_get_coding_task",
+            "arguments": {
+                "coding_task_id": "task-001",
+                "workspace_root": "/workspace",
+            },
         },
     }
 

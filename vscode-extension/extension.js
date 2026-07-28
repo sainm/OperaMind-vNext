@@ -86,8 +86,8 @@ async function activate(context) {
       {
         modal: true,
         detail: continuing
-          ? "前回の Coding Plan を同じ Task ID から再開します。"
-          : "承認すると GitHub Copilot Coding Plan を開きます。",
+          ? "前回の変更作業を同じ Task ID から再開します。"
+          : "この変更を VS Code GitHub Copilot で開きます。",
       },
       openAction,
       "タスクを取消",

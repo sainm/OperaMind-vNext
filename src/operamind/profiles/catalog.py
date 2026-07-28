@@ -36,9 +36,13 @@ EXAMPLE_NAMES = {
     "CodeFrameworkProfile": (
         "code-framework-profile.example.json",
         "polyglot-code-framework-profile.example.json",
+        "springboot15-thymeleaf-gradle-code-framework-profile.example.json",
         "struts1-code-framework-profile.example.json",
     ),
-    "CommandExecutionProfile": ("command-execution-profile.example.json",),
+    "CommandExecutionProfile": (
+        "command-execution-profile.example.json",
+        "springboot15-thymeleaf-gradle-command-profile.example.json",
+    ),
     "UiLocatorProfile": ("ui-locator-profile.example.json",),
 }
 

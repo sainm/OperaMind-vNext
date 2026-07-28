@@ -30,8 +30,11 @@ def _session(*, error_code: str | None = None, include_result: bool = True) -> b
     }
     tools = [
         "mcp_operaMind_copilot_get_coding_task",
-        "mcp_operaMind_copilot_run_task_command",
+        "mcp_operaMind_copilot_record_change_outputs",
+        "mcp_operaMind_copilot_record_change_outputs",
         "mcp_operaMind_copilot_validate_task_diff",
+        "mcp_operaMind_copilot_record_change_outputs",
+        "mcp_operaMind_copilot_run_task_command",
     ]
     if include_result:
         tools.append("mcp_operaMind_copilot_record_task_result")
@@ -53,7 +56,7 @@ def _session(*, error_code: str | None = None, include_result: bool = True) -> b
             "details": "Copilot Model",
         },
         "modelState": {"completedAt": 1_784_443_124_779},
-        "message": {"text": "verify the fixed handoff"},
+        "message": {"text": "verify the unified Change Task"},
         "response": [
             {
                 "kind": "toolInvocationSerialized",
@@ -70,7 +73,7 @@ def _session(*, error_code: str | None = None, include_result: bool = True) -> b
     return (json.dumps(snapshot) + "\n" + json.dumps(delta) + "\n").encode()
 
 
-def test_inspect_vscode_copilot_session_accepts_completed_mcp_handoff(tmp_path: Path) -> None:
+def test_inspect_vscode_copilot_session_accepts_completed_change_task(tmp_path: Path) -> None:
     session = tmp_path / "session.jsonl"
     session.write_bytes(_session())
 
@@ -81,6 +84,7 @@ def test_inspect_vscode_copilot_session_accepts_completed_mcp_handoff(tmp_path: 
     assert result["copilot_is_byok"] is False
     assert result["completed_mcp_tools"] == [
         "copilot_get_coding_task",
+        "copilot_record_change_outputs",
         "copilot_run_task_command",
         "copilot_validate_task_diff",
         "copilot_record_task_result",

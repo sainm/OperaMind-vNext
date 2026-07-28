@@ -60,6 +60,7 @@ class _Repository:
             workspace_root=str(self.root),
             packet_status="active",
             writable_files=("src/service.py",),
+            required_command_refs=("targeted-unit",),
             required_ui_scenario_refs=(),
         )
 

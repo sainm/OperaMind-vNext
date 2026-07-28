@@ -43,8 +43,8 @@ def test_task_claim_lease_result_and_single_agent_policy() -> None:
                 (project_id,),
             )
         service = WebControlPlaneService(connection=connection, repository_root=ROOT)
-        security_repository = OrchestrationTaskRepository(connection)
-        worker_one_registration = security_repository.register_worker(
+        task_repository = OrchestrationTaskRepository(connection)
+        worker_one_registration = task_repository.register_worker(
             executor_kind="subagent",
             executor_id="worker-1",
             capabilities=("requirement_review",),
@@ -52,7 +52,7 @@ def test_task_claim_lease_result_and_single_agent_policy() -> None:
             max_concurrent_tasks=1,
             lease_seconds=30,
         )
-        worker_two_registration = security_repository.register_worker(
+        worker_two_registration = task_repository.register_worker(
             executor_kind="agent",
             executor_id="worker-2",
             capabilities=("requirement_review",),
@@ -85,46 +85,46 @@ def test_task_claim_lease_result_and_single_agent_policy() -> None:
         assert task["action"] == "confirm_requirement"
         assert task["eligible_executor_kinds"] == ["agent", "subagent", "human"]
 
-        ready = service.ready_orchestration_tasks(
+        ready = task_repository.list_ready(
             executor_kind="subagent",
             capabilities=("requirement_review",),
             project_id=project_id,
-        )["tasks"]
+        )
         assert [value["orchestration_task_id"] for value in ready] == [
             task["orchestration_task_id"]
         ]
 
-        claimed = service.claim_selected_orchestration_task(
+        claimed = task_repository.claim(
             task_id=task["orchestration_task_id"],
             executor_kind="subagent",
             executor_id="worker-1",
             capabilities=("requirement_review",),
             project_id=project_id,
             worker_token=str(worker_one_registration["worker_token"]),
-        )["task"]
+        )
         assert claimed is not None
         lease_token = claimed["lease_token"]
         task_id = claimed["orchestration_task_id"]
         assert "lease_token" not in claimed["claims"][0]
         assert (
-            service.claim_orchestration_task(
+            task_repository.claim_next(
                 executor_kind="agent",
                 executor_id="worker-2",
                 capabilities=("requirement_review",),
                 project_id=project_id,
                 worker_token=str(worker_two_registration["worker_token"]),
-            )["task"]
+            )
             is None
         )
 
-        running = service.heartbeat_orchestration_task(
+        running = task_repository.heartbeat(
             task_id=task_id,
             executor_id="worker-1",
             lease_token=lease_token,
-        )["task"]
+        )
         assert running["state"] == "running"
         with pytest.raises(ValueError, match="does not belong"):
-            service.complete_orchestration_task(
+            task_repository.record_result(
                 task_id=task_id,
                 executor_id="worker-1",
                 lease_token="wrong-token",
@@ -133,7 +133,7 @@ def test_task_claim_lease_result_and_single_agent_policy() -> None:
                 artifact_refs=("confirmation-1",),
                 evidence={"human_confirmation": True},
             )
-        completed = service.complete_orchestration_task(
+        completed = task_repository.record_result(
             task_id=task_id,
             executor_id="worker-1",
             lease_token=lease_token,
@@ -141,13 +141,13 @@ def test_task_claim_lease_result_and_single_agent_policy() -> None:
             summary="人工确认记录已写入",
             artifact_refs=("confirmation-1",),
             evidence={"human_confirmation": True},
-        )["task"]
+        )
         assert completed["state"] == "submitted"
         assert completed["results"][0]["artifact_refs"] == ["confirmation-1"]
         assert completed["claims"][0]["status"] == "completed"
         assert completed["events"][-1]["event_type"] == "result_submitted"
 
-        replayed = service.complete_orchestration_task(
+        replayed = task_repository.record_result(
             task_id=task_id,
             executor_id="worker-1",
             lease_token=lease_token,
@@ -155,11 +155,11 @@ def test_task_claim_lease_result_and_single_agent_policy() -> None:
             summary="人工确认记录已写入",
             artifact_refs=("confirmation-1",),
             evidence={"human_confirmation": True},
-        )["task"]
+        )
         assert len(replayed["results"]) == 1
         assert [event["event_type"] for event in replayed["events"]].count("result_submitted") == 1
         with pytest.raises(PersistenceConflictError, match="different content"):
-            service.complete_orchestration_task(
+            task_repository.record_result(
                 task_id=task_id,
                 executor_id="worker-1",
                 lease_token=lease_token,
@@ -190,12 +190,12 @@ def test_task_claim_lease_result_and_single_agent_policy() -> None:
             idempotency_key="lease-expiry",
             actor="owner",
         )
-        expiring = service.claim_orchestration_task(
+        expiring = task_repository.claim_next(
             executor_kind="human",
             executor_id="reviewer-1",
             capabilities=("requirement_review",),
             project_id=project_id,
-        )["task"]
+        )
         assert expiring is not None
         expiring_task_id = expiring["orchestration_task_id"]
         with connection.cursor() as cursor:
@@ -207,11 +207,11 @@ def test_task_claim_lease_result_and_single_agent_policy() -> None:
                 """,
                 (expiring_task_id,),
             )
-        recovered = service.ready_orchestration_tasks(
+        recovered = task_repository.list_ready(
             executor_kind="agent",
             capabilities=("requirement_review",),
             project_id=project_id,
-        )["tasks"]
+        )
         recovered_task = next(
             value for value in recovered if value["orchestration_task_id"] == expiring_task_id
         )
@@ -219,26 +219,26 @@ def test_task_claim_lease_result_and_single_agent_policy() -> None:
         assert recovered_task["effective_state"] == "ready"
         assert recovered_task["lease_expired"] is True
         assert recovered_task["claims"][0]["status"] == "active"
-        management_ready = service.orchestration_task_management(
+        management_ready = task_repository.list_management(
             project_id=project_id,
             states=("ready",),
             capability="requirement_review",
             blocking_reason=None,
             limit=50,
-        )["tasks"]
+        )
         assert expiring_task_id in {value["orchestration_task_id"] for value in management_ready}
 
-        reclaimed = service.claim_orchestration_task(
+        reclaimed = task_repository.claim_next(
             executor_kind="agent",
             executor_id="worker-2",
             capabilities=("requirement_review",),
             project_id=project_id,
             worker_token=str(worker_two_registration["worker_token"]),
-        )["task"]
+        )
         assert reclaimed is not None
         assert reclaimed["claims"][0]["status"] == "expired"
         assert reclaimed["events"][-1]["event_type"] == "claimed"
-        blocked = service.complete_orchestration_task(
+        blocked = task_repository.record_result(
             task_id=reclaimed["orchestration_task_id"],
             executor_id="worker-2",
             lease_token=reclaimed["lease_token"],
@@ -246,24 +246,24 @@ def test_task_claim_lease_result_and_single_agent_policy() -> None:
             summary="外部確認待ち",
             artifact_refs=(),
             evidence={"blocking_reason": "owner unavailable"},
-        )["task"]
+        )
         assert blocked["state"] == "blocked"
         assert blocked["blocking_reason"] == "owner unavailable"
-        management = service.orchestration_task_management(
+        management = task_repository.list_management(
             project_id=project_id,
             states=("blocked",),
             capability="requirement_review",
             blocking_reason="owner",
             limit=50,
         )
-        assert management["count"] == 1
-        assert management["tasks"][0]["orchestration_task_id"] == expiring_task_id
-        assert management["tasks"][0]["automation_run_id"] != task["automation_run_id"]
-        requeued = service.requeue_orchestration_task(
+        assert len(management) == 1
+        assert management[0]["orchestration_task_id"] == expiring_task_id
+        assert management[0]["automation_run_id"] != task["automation_run_id"]
+        requeued = task_repository.requeue(
             task_id=reclaimed["orchestration_task_id"],
             actor="operator-1",
             reason="owner is available",
-        )["task"]
+        )
         assert requeued["state"] == "ready"
         assert requeued["events"][-1]["event_type"] == "requeued"
 
@@ -295,7 +295,7 @@ def test_task_claim_lease_result_and_single_agent_policy() -> None:
         assert worker_result.task_id == expiring_task_id
         assert worker_result.outcome == "blocked"
         assert worker_result.recovered_expired_lease is True
-        worker_view = service.orchestration_task(expiring_task_id)["task"]
+        worker_view = task_repository.view(expiring_task_id)
         assert worker_view["state"] == "blocked"
         assert worker_view["claims"][-1]["executor_id"] == "worker-3"
         assert worker_view["results"][-1]["evidence"] == {
@@ -310,7 +310,7 @@ def test_task_claim_lease_result_and_single_agent_policy() -> None:
                 """,
                 (expiring_task_id, task["orchestration_task_id"], project_id),
             )
-        graph = service.orchestration_task_dependency_graph(
+        graph = task_repository.dependency_graph(
             project_id=project_id,
             automation_run_id=None,
             limit=50,

@@ -90,7 +90,7 @@ def test_complete_extension_report_makes_all_checks_ready_without_paths_or_secre
 
     assert result["overall_status"] == "warning"
     assert result["summary"] == {"passed": 7, "warnings": 1, "blocked": 0}
-    assert result["expected"]["mcp_tool_count"] == 13  # type: ignore[index]
+    assert result["expected"]["mcp_tool_count"] == 5  # type: ignore[index]
     assert "secret-password" not in serialized
     assert str(ROOT) not in serialized
 

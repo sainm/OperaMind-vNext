@@ -1,0 +1,88 @@
+{
+  "profile_type": "CodeFrameworkProfile",
+  "profile_id": "springboot15-thymeleaf-gradle",
+  "profile_version": "1.0.0",
+  "languages": [
+    "java",
+    "javascript",
+    "xml",
+    "sql",
+    "properties"
+  ],
+  "framework_markers": [
+    "org.springframework.boot",
+    "org.springframework.stereotype.Controller",
+    "org.springframework.web.bind.annotation",
+    "org.thymeleaf",
+    "apply plugin: 'org.springframework.boot'"
+  ],
+  "default_scan_roots": [
+    "src/main",
+    "src/test"
+  ],
+  "excluded_globs": [
+    "**/build/**",
+    "**/target/**",
+    "**/generated/**",
+    "**/*.min.js"
+  ],
+  "anchor_extractors": [
+    "java_symbol",
+    "java_field_access",
+    "spring_endpoint",
+    "spring_config_binding",
+    "spring_data_access",
+    "web_ui_route",
+    "sql_table",
+    "config_key",
+    "junit_test"
+  ],
+  "relation_policies": [
+    {
+      "change_domain": "api",
+      "edge_types": [
+        "exposes",
+        "calls",
+        "implements",
+        "tests"
+      ],
+      "max_depth": 2,
+      "include_reverse": true
+    },
+    {
+      "change_domain": "db",
+      "edge_types": [
+        "maps_to",
+        "reads",
+        "writes",
+        "calls",
+        "tests"
+      ],
+      "max_depth": 3,
+      "include_reverse": true
+    },
+    {
+      "change_domain": "config",
+      "edge_types": [
+        "reads",
+        "calls",
+        "tests"
+      ],
+      "max_depth": 2,
+      "include_reverse": true
+    },
+    {
+      "change_domain": "ui",
+      "edge_types": [
+        "exposes",
+        "calls",
+        "implements",
+        "navigates_to",
+        "tests"
+      ],
+      "max_depth": 2,
+      "include_reverse": true
+    }
+  ],
+  "unknown_framework_policy": "index_symbols_and_require_review"
+}

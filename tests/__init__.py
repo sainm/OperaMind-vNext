@@ -1,0 +1,1 @@
+"""OperaMind test suite."""

@@ -163,19 +163,39 @@ class BridgeClient {
 
 function buildCopilotPrompt(taskView, workspaceRoot) {
   const task = taskView && taskView.task;
-  if (!task || task.execution_mode !== "copilot_coding_plan") {
-    throw new Error("OperaMind task is not a Copilot Coding Plan");
+  if (!task || task.execution_mode !== "copilot_change_task") {
+    throw new Error("OperaMind task is not a unified Copilot Change Task");
   }
   const tools = Array.isArray(task.required_mcp_tools) ? task.required_mcp_tools.join(", ") : "";
+  const target = task.target_project || {};
+  const targetLines = target.detection_status === "supported"
+    ? [
+        `対象技術 Stack: ${target.framework} / ${target.template_engine} / ${target.build_system}`,
+        `変更制約: ${(target.change_constraints || []).join("、")}`,
+        `固定 compile: ${(target.compile_command || []).join(" ")}`,
+        `固定 test: ${(target.test_command || []).join(" ")}`,
+        `固定 build: ${(target.build_command || []).join(" ")}`,
+      ]
+    : [
+        "対象技術 Stack は自動確定していません。MCP が返す限定範囲を越えて Framework や Build Tool を変更しないでください。",
+      ];
   return [
-    `OperaMind の承認済み Coding Plan タスク ${task.coding_task_id} を実行してください。`,
+    `OperaMind Change Task ${task.coding_task_id} を実行してください。`,
     `対象 Workspace: ${workspaceRoot}`,
     `要求: ${task.task_summary}`,
+    ...targetLines,
     "最初に operaMind MCP の copilot_get_coding_task を task ID と Workspace で呼び出してください。",
-    "返された Edit Packet の editable/test 範囲だけを変更し、範囲拡大が必要なら停止してください。",
-    "テストは copilot_run_task_command、Diff は copilot_validate_task_diff、commit 後の結果は copilot_record_task_result で記録してください。",
+    "document_discovery が blocked の場合は編集せず、その blocking_reason を報告してください。",
+    "設計書段階では Canonical RAG 候補で特定した設計書を変更し、output_stage=document_change と document_ids を copilot_record_change_outputs に記録してください。",
+    "次にコードを読み取り専用で調査し、Graph で確認できる code_scope を output_stage=code_scope として記録してください。",
+    "next_context の execution_scope.bound が true になった後だけ、editable/test 範囲内でコードとテストを変更してください。",
+    "コード変更後、まず copilot_validate_task_diff を実行してください。",
+    "検証済みコード差分と設計差分から TestPlan/TestDataPlan を作り、output_stage=test_planning として記録してください。",
+    "UI Case は TestDataPlan の ui step と ui assertion で表現してください。データ生成後の UI 実行と Screenshot は OperaMind が行います。",
+    "コンパイルとテストは copilot_run_task_command、commit 後の結果は copilot_record_task_result で記録してください。",
+    "各 Tool の next_context が null の場合は先へ進まず、flow_status の停止理由を報告してください。",
     `必要な MCP tools: ${tools}`,
-    "Context Package や未承認ファイルを要求せず、任意の shell command を実行しないでください。",
+    "範囲外ファイルが必要な場合は停止し、任意の shell command を実行しないでください。",
   ].join("\n");
 }
 

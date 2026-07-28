@@ -674,67 +674,11 @@ class TestDataExecutionRepository:
             raise ValueError("Test data execution project differs from Orchestration")
         if authorization["authorized"] is not True:
             raise ValueError(str(authorization["blocking_reason"]))
-        with self._connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT environment.base_url
-                FROM change_orchestrations AS orchestration
-                JOIN ui_execution_plans AS plan
-                  ON plan.project_id = orchestration.project_id
-                 AND plan.analysis_case_id = orchestration.analysis_case_id
-                JOIN ui_environments AS environment
-                  ON environment.environment_id = plan.environment_id
-                 AND environment.project_id = plan.project_id
-                JOIN ui_deployments AS deployment
-                  ON deployment.deployment_revision = plan.deployment_revision
-                 AND deployment.environment_id = plan.environment_id
-                 AND deployment.project_id = plan.project_id
-                WHERE orchestration.orchestration_id = %s
-                  AND orchestration.project_id = %s
-                  AND environment.status = 'active'
-                  AND deployment.status = 'ready'
-                  AND plan.status IN ('ready', 'completed')
-                ORDER BY plan.created_at DESC, plan.ui_execution_plan_id DESC
-                LIMIT 1
-                """,
-                (orchestration_id, project_id),
-            )
-            environment = cursor.fetchone()
         return {
             "approval_grant_id": str(authorization["approval_grant_id"]),
-            "base_url": str(environment[0]) if environment is not None else None,
             "authorization_status": authorization["status"],
             "authorization_id": authorization["authorization_id"],
         }
-
-    def base_url_for_orchestration(self, *, orchestration_id: str, project_id: str) -> str | None:
-        with self._connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT environment.base_url
-                FROM change_orchestrations AS orchestration
-                JOIN ui_execution_plans AS plan
-                  ON plan.project_id = orchestration.project_id
-                 AND plan.analysis_case_id = orchestration.analysis_case_id
-                JOIN ui_environments AS environment
-                  ON environment.environment_id = plan.environment_id
-                 AND environment.project_id = plan.project_id
-                JOIN ui_deployments AS deployment
-                  ON deployment.deployment_revision = plan.deployment_revision
-                 AND deployment.environment_id = plan.environment_id
-                 AND deployment.project_id = plan.project_id
-                WHERE orchestration.orchestration_id = %s
-                  AND orchestration.project_id = %s
-                  AND environment.status = 'active'
-                  AND deployment.status = 'ready'
-                  AND plan.status IN ('ready', 'completed')
-                ORDER BY plan.created_at DESC, plan.ui_execution_plan_id DESC
-                LIMIT 1
-                """,
-                (orchestration_id, project_id),
-            )
-            row = cursor.fetchone()
-        return str(row[0]) if row is not None else None
 
     def latest_for_orchestration(self, orchestration_id: str) -> dict[str, Any] | None:
         """Return the latest bounded Run and its immutable Result, when complete."""

@@ -1,4 +1,5 @@
 import os
+import subprocess
 from pathlib import Path
 from uuid import uuid4
 
@@ -15,8 +16,11 @@ from operamind.infrastructure.postgres import (
     ArtifactRepository,
     MigrationCatalog,
     MigrationRunner,
+    OrchestrationTaskRepository,
+    ProfileRepository,
     WebControlPlaneRepository,
 )
+from operamind.profiles import ProfileCatalog
 
 ROOT = Path(__file__).parents[2]
 DATABASE_URL = os.getenv("OPERAMIND_TEST_DATABASE_URL")
@@ -24,7 +28,94 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
-def test_change_request_diff_and_human_review_are_canonical_and_idempotent() -> None:
+def test_change_request_auto_binds_detected_springboot15_runtime_profiles(
+    tmp_path: Path,
+) -> None:
+    assert DATABASE_URL is not None
+    suffix = uuid4().hex
+    project_id = f"spring15-project-{suffix}"
+    repository_id = f"spring15-repository-{suffix}"
+    request_id = f"spring15-request-{suffix}"
+    workspace, remote_url = _springboot15_workspace(tmp_path, suffix)
+
+    with psycopg.connect(DATABASE_URL) as connection:
+        MigrationRunner(connection, MigrationCatalog.load(ROOT / "migrations")).apply()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO projects (project_id, name) VALUES (%s, 'Spring Boot 1.5 test')",
+                (project_id,),
+            )
+            cursor.execute(
+                """
+                INSERT INTO repositories (
+                    repository_id, project_id, remote_url, workspace_root
+                ) VALUES (%s, %s, %s, %s)
+                """,
+                (repository_id, project_id, remote_url, str(workspace.resolve())),
+            )
+
+        service = WebControlPlaneService(connection=connection, repository_root=ROOT)
+        request = ChangeRequestInput(
+            change_request_id=request_id,
+            project_id=project_id,
+            analysis_case_id=None,
+            input_mode="natural_language",
+            requirement_text="検索条件に承認待ちを追加する",
+            source_document_ref=None,
+            target_document_ref=None,
+            business_rules=(
+                BusinessRuleInput(
+                    "rule-status",
+                    "承認待ちのデータを検索できること",
+                    (),
+                ),
+            ),
+            ambiguity_status="clear",
+            ambiguities=(),
+            submitted_by="integration-reviewer",
+        )
+
+        created = service.submit_change_request(request)
+        replay = service.submit_change_request(request)
+        bindings = ProfileRepository(
+            connection,
+            ProfileCatalog.load(ROOT / "profiles"),
+        ).list_active_by_type(
+            project_id=project_id,
+            profile_type="CodeFrameworkProfile",
+        ) + ProfileRepository(
+            connection,
+            ProfileCatalog.load(ROOT / "profiles"),
+        ).list_active_by_type(
+            project_id=project_id,
+            profile_type="CommandExecutionProfile",
+        )
+
+        assert created["created"] is True
+        assert replay["created"] is False
+        assert created["change_request"]["analysis_case_id"] is not None
+        assert created["copilot_task"]["task"]["target_project"]["stack_id"] == (
+            "springboot15-thymeleaf-gradle"
+        )
+        assert {binding.binding_key for binding in bindings} == {
+            f"code-framework:{repository_id}",
+            f"command-execution:{repository_id}",
+        }
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT count(*)
+                FROM profile_activation_events
+                WHERE project_id = %s
+                """,
+                (project_id,),
+            )
+            assert cursor.fetchone() == (2,)
+        connection.rollback()
+
+
+@pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
+def test_change_request_diff_and_automatic_review_are_canonical_and_idempotent() -> None:
     assert DATABASE_URL is not None
     suffix = uuid4().hex
     project_id = f"web-project-{suffix}"
@@ -62,7 +153,7 @@ def test_change_request_diff_and_human_review_are_canonical_and_idempotent() -> 
 
         first = service.submit_change_request(request)
         replay = service.submit_change_request(request)
-        diff = service.document_diff(request_id)
+        diff = web_repository.document_diff(request_id)
         automation = service.start_change_automation(
             request_id=request_id,
             idempotency_key="one-click-key",
@@ -73,134 +164,32 @@ def test_change_request_diff_and_human_review_are_canonical_and_idempotent() -> 
             idempotency_key="one-click-key",
             actor="integration-reviewer",
         )
-        claimed_review_task = service.claim_orchestration_task(
+        claimed_review_task = OrchestrationTaskRepository(connection).claim_next(
             executor_kind="human",
             executor_id="integration-reviewer",
             capabilities=("document_review",),
             project_id=project_id,
-        )["task"]
-        assert claimed_review_task is not None
-        with pytest.raises(ValueError, match="must be confirmed"):
-            web_repository.require_confirmed_document_review(
-                request_id=request_id, project_id=project_id, case_id=case_id
-            )
-        reviewed = service.review_document_diff(
-            idempotency_key="review-key",
-            request_id=request_id,
-            project_id=project_id,
-            decision="confirmed",
-            actor="integration-reviewer",
-            note="与设计意图一致",
         )
-        review_replay = service.review_document_diff(
-            idempotency_key="review-key",
-            request_id=request_id,
-            project_id=project_id,
-            decision="confirmed",
-            actor="integration-reviewer",
-            note="与设计意图一致",
-        )
-        stored = service.get_change_request(request_id)
-        resumed_automation = service.change_automation(request_id)["run"]
-        web_repository.require_confirmed_document_review(
-            request_id=request_id, project_id=project_id, case_id=case_id
-        )
+        assert claimed_review_task is None
+        stored = web_repository.get_change_request(request_id)
+        resumed_automation = automation["run"]
 
         assert first["created"] is True
         assert replay["created"] is False
         assert diff["total"] == 1
         assert automation["created"] is True
         assert automation_replay["created"] is False
-        assert automation["run"]["current_stage"] == "document_confirmation"
+        assert automation["run"]["current_stage"] == "impact_analysis"
         assert isinstance(resumed_automation, dict)
         assert resumed_automation["current_stage"] == "impact_analysis"
-        review_task = next(
-            task
-            for task in resumed_automation["orchestration_tasks"]
-            if task["action"] == "confirm_document_diff"
-        )
-        assert review_task["state"] == "completed"
-        assert review_task["claims"][0]["status"] == "completed"
-        assert review_task["results"][0]["evidence"]["canonical_state_advanced"] is True
         assert resumed_automation["current_task"]["action"] == "prepare_canonical_analysis"
         assert len(resumed_automation["events"]) == 2
         assert diff["changes"][0]["summary"] == "费用状态筛选增加差戻し选项"
-        assert reviewed["created"] is True
-        assert review_replay["created"] is False
         assert stored["document_review"]["status"] == "confirmed"
+        assert stored["document_review"]["actor"] == "automation:operamind"
+        assert first["copilot_task"] is None
+        assert first["task_blocker"]
         connection.rollback()
-
-
-@pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
-def test_natural_language_automation_binds_imported_case_and_resumes() -> None:
-    assert DATABASE_URL is not None
-    suffix = uuid4().hex
-    project_id = f"binding-project-{suffix}"
-    case_id = f"binding-case-{suffix}"
-    request_id = f"binding-request-{suffix}"
-    change_id = f"binding-change-{suffix}"
-    with psycopg.connect(DATABASE_URL) as connection:
-        MigrationRunner(connection, MigrationCatalog.load(ROOT / "migrations")).apply()
-        _seed_scope(
-            connection,
-            project_id,
-            f"binding-repository-{suffix}",
-            f"binding-revision-{suffix}",
-            case_id,
-            suffix,
-        )
-        contracts = ContractCatalog.load(ROOT / "contracts")
-        ArtifactRepository(connection, contracts).store(
-            artifact_id=change_id,
-            project_id=project_id,
-            analysis_case_id=case_id,
-            artifact=_structured_change(project_id, change_id, suffix),
-        )
-        service = WebControlPlaneService(connection=connection, repository_root=ROOT)
-        service.submit_change_request(
-            ChangeRequestInput(
-                change_request_id=request_id,
-                project_id=project_id,
-                analysis_case_id=None,
-                input_mode="natural_language",
-                requirement_text="差戻し状態を追加する",
-                source_document_ref=None,
-                target_document_ref=None,
-                business_rules=(BusinessRuleInput("rule-status", "差戻しを表示する", ()),),
-                ambiguity_status="clear",
-                ambiguities=(),
-                submitted_by="product-owner",
-            )
-        )
-        started = service.start_change_automation(
-            request_id=request_id,
-            idempotency_key="automation-1",
-            actor="product-owner",
-        )
-        bound = service.bind_change_request_case(
-            request_id=request_id,
-            project_id=project_id,
-            case_id=case_id,
-            idempotency_key="binding-1",
-            actor="product-owner",
-        )
-        replay = service.bind_change_request_case(
-            request_id=request_id,
-            project_id=project_id,
-            case_id=case_id,
-            idempotency_key="binding-1",
-            actor="product-owner",
-        )
-        current = service.change_automation(request_id)["run"]
-
-        assert started["run"]["current_stage"] == "document_generation"
-        assert bound["created"] is True
-        assert replay["created"] is False
-        assert isinstance(current, dict)
-        assert current["current_stage"] == "document_confirmation"
-        assert service.get_change_request(request_id)["analysis_case_id"] == case_id
-        connection.rollback()
-
 
 def _seed_scope(
     connection: psycopg.Connection[object],
@@ -238,6 +227,63 @@ def _seed_scope(
             """,
             (case_id, project_id, revision_id),
         )
+
+
+def _springboot15_workspace(tmp_path: Path, suffix: str) -> tuple[Path, str]:
+    workspace = tmp_path / f"springboot15-{suffix}"
+    template = workspace / "src" / "main" / "resources" / "templates" / "expense"
+    wrapper = workspace / "gradle" / "wrapper"
+    template.mkdir(parents=True)
+    wrapper.mkdir(parents=True)
+    (workspace / "gradlew").write_text("#!/bin/sh\n", encoding="utf-8")
+    (wrapper / "gradle-wrapper.properties").write_text(
+        "distributionUrl=https://services.gradle.org/distributions/gradle-4.10.3-bin.zip\n",
+        encoding="utf-8",
+    )
+    (workspace / "build.gradle").write_text(
+        """
+buildscript {
+    ext { springBootVersion = '1.5.22.RELEASE' }
+    dependencies {
+        classpath("org.springframework.boot:spring-boot-gradle-plugin:${springBootVersion}")
+    }
+}
+apply plugin: 'org.springframework.boot'
+dependencies {
+    compile 'org.springframework.boot:spring-boot-starter-thymeleaf'
+}
+""",
+        encoding="utf-8",
+    )
+    (template / "list.html").write_text(
+        '<html xmlns:th="http://www.thymeleaf.org"></html>\n',
+        encoding="utf-8",
+    )
+    remote_url = f"https://example.invalid/{suffix}.git"
+    _git(workspace, "init", "-q")
+    _git(workspace, "remote", "add", "origin", remote_url)
+    _git(workspace, "add", ".")
+    _git(
+        workspace,
+        "-c",
+        "user.name=OperaMind Test",
+        "-c",
+        "user.email=operamind@example.invalid",
+        "commit",
+        "-q",
+        "-m",
+        "fixture",
+    )
+    return workspace, remote_url
+
+
+def _git(root: Path, *arguments: str) -> str:
+    return subprocess.run(
+        ("git", "-C", str(root), *arguments),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def _structured_change(project_id: str, change_id: str, suffix: str) -> dict[str, object]:

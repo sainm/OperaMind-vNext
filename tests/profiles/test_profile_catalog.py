@@ -37,6 +37,29 @@ def test_visiondemo_command_profile_is_valid() -> None:
     catalog.validate_profile(load_example("visiondemo-command-profile.json"))
 
 
+def test_springboot15_thymeleaf_gradle_profiles_are_valid_and_use_wrapper() -> None:
+    catalog = ProfileCatalog.load(ROOT / "profiles")
+    code_profile = load_example(
+        "springboot15-thymeleaf-gradle-code-framework-profile.example.json"
+    )
+    command_profile = load_example(
+        "springboot15-thymeleaf-gradle-command-profile.example.json"
+    )
+
+    catalog.validate_profile(code_profile)
+    catalog.validate_profile(command_profile)
+    assert code_profile["profile_id"] == "springboot15-thymeleaf-gradle"
+    assert "web_ui_route" in code_profile["anchor_extractors"]
+    assert {
+        template["command_ref"]: template["argv"]
+        for template in command_profile["templates"]
+    } == {
+        "springboot15-compile": ["./gradlew", "classes", "testClasses", "--no-daemon"],
+        "springboot15-test": ["./gradlew", "test", "--no-daemon"],
+        "springboot15-build": ["./gradlew", "build", "--no-daemon"],
+    }
+
+
 def test_embedding_dimensions_must_be_positive() -> None:
     catalog = ProfileCatalog.load(ROOT / "profiles")
     profile = load_example("embedding-profile.example.json")

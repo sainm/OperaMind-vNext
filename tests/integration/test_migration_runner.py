@@ -99,6 +99,9 @@ def test_migrations_apply_once_and_record_checksum() -> None:
         "0054",
         "0055",
         "0056",
+        "0057",
+        "0058",
+        "0059",
     )
     assert second == ()
     assert rows == [
@@ -370,6 +373,21 @@ def test_migrations_apply_once_and_record_checksum() -> None:
             "snapshot_variant_provenance",
             catalog.migrations[55].checksum,
         ),
+        (
+            "0057",
+            "copilot_change_task",
+            catalog.migrations[56].checksum,
+        ),
+        (
+            "0058",
+            "copilot_change_outputs",
+            catalog.migrations[57].checksum,
+        ),
+        (
+            "0059",
+            "copilot_change_task_lifecycle",
+            catalog.migrations[58].checksum,
+        ),
     ]
 
 
@@ -581,10 +599,13 @@ def test_applied_migration_checksum_mismatch_is_rejected(tmp_path: Path) -> None
         "0051_web_command_idempotency.sql",
         "0052_changed_line_coverage.sql",
         "0053_canonical_profile_drift.sql",
-        "0054_profile_rebuild_lifecycle.sql",
-        "0055_golden_rag_quality_gate.sql",
-        "0056_snapshot_variant_provenance.sql",
-    ):
+            "0054_profile_rebuild_lifecycle.sql",
+            "0055_golden_rag_quality_gate.sql",
+            "0056_snapshot_variant_provenance.sql",
+            "0057_copilot_change_task.sql",
+            "0058_copilot_change_outputs.sql",
+            "0059_copilot_change_task_lifecycle.sql",
+        ):
         (tmp_path / version).write_text(
             (ROOT / "migrations" / version).read_text(encoding="utf-8"),
             encoding="utf-8",
@@ -983,6 +1004,9 @@ def test_locator_observation_migration_upgrades_candidate_identity_with_existing
         "0054",
         "0055",
         "0056",
+        "0057",
+        "0058",
+        "0059",
     )
     assert candidates == [
         ("knowledge-v1", "shared-status-label"),
@@ -1075,7 +1099,14 @@ def test_profile_rebuild_lifecycle_migrates_legacy_requests_fail_closed() -> Non
                     """,
                     (f"legacy-request-{index}", f"legacy-index-{index}", status, status),
                 )
-        assert MigrationRunner(connection, catalog).apply() == ("0054", "0055", "0056")
+        assert MigrationRunner(connection, catalog).apply() == (
+            "0054",
+            "0055",
+            "0056",
+            "0057",
+            "0058",
+            "0059",
+        )
         with connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -1194,7 +1225,12 @@ def test_snapshot_variant_provenance_migration_backfills_legacy_facts() -> None:
                 """
             )
 
-        assert MigrationRunner(connection, catalog).apply() == ("0056",)
+        assert MigrationRunner(connection, catalog).apply() == (
+            "0056",
+            "0057",
+            "0058",
+            "0059",
+        )
         with connection.cursor() as cursor:
             cursor.execute(
                 """

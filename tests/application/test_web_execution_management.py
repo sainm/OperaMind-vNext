@@ -5,7 +5,10 @@ from typing import Any
 
 import pytest
 
-from operamind.application.web_control_plane import WebControlPlaneService
+from operamind.application.web_control_plane import (
+    WebControlPlaneService,
+    _public_test_case_proposal,
+)
 
 
 class RequestRepository:
@@ -15,25 +18,6 @@ class RequestRepository:
             "project_id": "visiondemo",
             "analysis_case_id": "case-001",
         }
-
-    def evidence(self, *, project_id: str, case_id: str) -> dict[str, object]:
-        assert (project_id, case_id) == ("visiondemo", "case-001")
-        return {
-            "command_results": [],
-            "ui_evidence": [
-                {
-                    "evidence_id": "ui-screen",
-                    "scenario_id": "expense-list",
-                    "evidence_type": "screenshot",
-                    "evidence_ref": "evidence://external/ui-screen",
-                    "sha256": "b" * 64,
-                }
-            ],
-        }
-
-    def case_workspace(self, *, project_id: str, case_id: str) -> dict[str, object]:
-        assert (project_id, case_id) == ("visiondemo", "case-001")
-        return {"validation": {"id": "ui-result-001", "status": "blocked"}}
 
 
 class ArtifactRepository:
@@ -56,6 +40,11 @@ class OrchestrationRepository:
                 "project_id": "visiondemo",
                 "analysis_case_id": "case-001",
             },
+            "test_plan": {
+                "artifact_type": "TestPlan",
+                "status": "ready",
+                "test_cases": [{"title": "差戻し状態で検索する"}],
+            },
             "test_data_plan": {
                 "artifact_type": "TestDataPlan",
                 "status": "ready",
@@ -73,7 +62,7 @@ class OrchestrationRepository:
 class TestDataRepository:
     def latest_active_scope(self, **values: object) -> dict[str, str | None]:
         assert values["orchestration_id"] == "orchestration-001"
-        return {"approval_grant_id": "grant-001", "base_url": None}
+        return {"approval_grant_id": "grant-001"}
 
     def latest_for_orchestration(self, orchestration_id: str) -> dict[str, Any]:
         assert orchestration_id == "orchestration-001"
@@ -148,6 +137,19 @@ class TestCaseRevisionService:
         }
 
 
+class RevisingTestCaseService:
+    def propose(self, **values: object) -> dict[str, object]:
+        return {
+            "state": "ready_for_confirmation",
+            "proposal": _revision_proposal(str(values["instruction"])),
+        }
+
+    def confirm(self, **values: object) -> dict[str, object]:
+        assert values["proposal_id"] == "proposal-001"
+        assert values["selections"] == {}
+        return {"revision": {"revision_id": "revision-001"}}
+
+
 class ExecutionAuthorizationRepository:
     def state(self, **values: object) -> dict[str, object]:
         assert values["target_orchestration_id"] == "orchestration-001"
@@ -172,6 +174,7 @@ def test_management_combines_plan_run_coverage_closure_and_safe_screenshots(
     result = service.execution_management("change-001")
 
     assert result["orchestration_id"] == "orchestration-001"
+    assert result["test_plan"]["test_cases"][0]["title"] == "差戻し状態で検索する"  # type: ignore[index]
     assert result["test_data_execution"]["status"] == "passed"  # type: ignore[index]
     assert result["business_coverage"]["coverage_percent"] == 100  # type: ignore[index]
     assert result["change_closure"]["status"] == "blocked"  # type: ignore[index]
@@ -189,17 +192,11 @@ def test_management_combines_plan_run_coverage_closure_and_safe_screenshots(
         ("data-screen", True),
         ("unsafe-screen", False),
     ]
-    assert screenshots[0]["content_url"].endswith("/screenshots/test_data/data-screen")
-    assert (
-        service.screenshot_path(
-            request_id="change-001", origin="test_data", evidence_id="data-screen"
-        )
-        == screenshot
-    )
+    assert screenshots[0]["content_url"].endswith("/screenshots/data-screen")
+    assert service.screenshot_path(request_id="change-001", evidence_id="data-screen") == screenshot
     with pytest.raises(ValueError, match="does not exist"):
         service.screenshot_path(
             request_id="change-001",
-            origin="test_data",
             evidence_id="unsafe-screen",
         )
 
@@ -216,6 +213,42 @@ def test_management_does_not_expose_closure_from_an_older_edit_result(
     )
 
 
+def test_test_case_revision_preview_hides_internal_ids_and_confirmation_restarts_downstream(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    service._test_case_revisions = RevisingTestCaseService()  # type: ignore[attr-defined]
+    started: list[dict[str, object]] = []
+    service.start_change_automation = lambda **values: started.append(values) or {}  # type: ignore[method-assign]
+    service.main_change_flow = lambda request_id: {"change_request_id": request_id}  # type: ignore[method-assign]
+
+    preview = service.propose_test_case_revision(
+        request_id="change-001",
+        instruction="期待結果を変更",
+        actor="local-user",
+    )
+    applied = service.confirm_test_case_revision(
+        request_id="change-001",
+        proposal_id="proposal-001",
+        selections={},
+        actor="local-user",
+    )
+
+    assert preview["proposal"] == _public_test_case_proposal(_revision_proposal("期待結果を変更"))
+    assert "test_case_id" not in repr(preview)
+    assert started == [
+        {
+            "request_id": "change-001",
+            "idempotency_key": "test-case-revision:revision-001",
+            "actor": "automation:operamind",
+        }
+    ]
+    assert applied == {
+        "state": "applied",
+        "flow": {"change_request_id": "change-001"},
+    }
+
+
 def _service(root: Path, *, stale_closure: bool = False) -> WebControlPlaneService:
     service = object.__new__(WebControlPlaneService)
     service._root = root  # type: ignore[attr-defined]
@@ -229,3 +262,35 @@ def _service(root: Path, *, stale_closure: bool = False) -> WebControlPlaneServi
         ExecutionAuthorizationRepository()
     )
     return service
+
+
+def _revision_proposal(instruction: str) -> dict[str, Any]:
+    operation = {
+        "operation_id": "operation-001",
+        "test_case_id": "case-001",
+        "case_title": "差戻し状態で検索する",
+        "field": "expected_results",
+        "action": "replace",
+        "summary_before": "期待結果: 1 件",
+        "summary_after": "期待結果: 2 件",
+    }
+    return {
+        "proposal_id": "proposal-001",
+        "instruction": instruction,
+        "analysis_status": "needs_confirmation",
+        "operations": [operation],
+        "ambiguities": [
+            {
+                "ambiguity_id": "ambiguity-001",
+                "question": "どの対象に適用しますか?",
+                "options": [
+                    {
+                        "option_id": "option-001",
+                        "label": "差戻し一覧",
+                        "operations": [operation],
+                    }
+                ],
+            }
+        ],
+        "blocking_reasons": [],
+    }

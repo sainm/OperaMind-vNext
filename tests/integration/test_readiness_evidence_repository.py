@@ -124,6 +124,7 @@ def test_human_copilot_and_deployment_are_derived_from_canonical_chain() -> None
                 "session_transcript_sha256": "c" * 64,
                 "completed_mcp_tools": [
                     "copilot_get_coding_task",
+                    "copilot_record_change_outputs",
                     "copilot_run_task_command",
                     "copilot_validate_task_diff",
                     "copilot_record_task_result",

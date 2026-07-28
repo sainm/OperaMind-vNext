@@ -23,7 +23,7 @@ from operamind.infrastructure.postgres.test_case_revision_repository import (
 
 
 class TestCaseRevisionService:
-    """Analyze, auto-apply deterministic changes, and confirm ambiguous choices."""
+    """Preview every change and apply it only after one explicit confirmation."""
 
     def __init__(self, *, connection: Connection[Any], repository_root: Path) -> None:
         root = repository_root.resolve()

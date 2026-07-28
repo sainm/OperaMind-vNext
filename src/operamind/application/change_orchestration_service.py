@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from psycopg import Connection
 
-from operamind.application.change_loop_case import ChangeLoopCase
 from operamind.application.change_orchestration import (
-    ChangeOrchestrationBlockedError,
     ChangeOrchestrationInput,
     ChangeOrchestrationPlanner,
 )
@@ -41,12 +38,8 @@ class ChangeOrchestrationService:
         self, *, change_request_id: str, actor: str
     ) -> ChangeOrchestrationServiceResult:
         evidence = self._repository.load_evidence(change_request_id)
-        reviewed_case = _select_reviewed_case(
-            repository_root=self._root,
-            project_id=str(evidence.change_request["project_id"]),
-            repository_revision=str(evidence.impact_report["repository_revision"]),
-            stable_keys={str(value["stable_key"]) for value in evidence.structured_changes},
-        )
+        generated_test_plan = getattr(evidence, "generated_test_plan", None)
+        generated_test_data_plan = getattr(evidence, "generated_test_data_plan", None)
         result = self._planner.plan(
             ChangeOrchestrationInput(
                 change_request=evidence.change_request,
@@ -56,7 +49,9 @@ class ChangeOrchestrationService:
                 impact_report=evidence.impact_report,
                 impact_report_state=evidence.impact_report_state,
                 impact_confirmation=evidence.impact_confirmation,
-                reviewed_case=reviewed_case,
+                copilot_coding_task_id=getattr(evidence, "copilot_coding_task_id", None),
+                generated_test_plan=generated_test_plan,
+                generated_test_data_plan=generated_test_data_plan,
             )
         )
         record = self._repository.persist(result=result, created_by=actor)
@@ -65,53 +60,3 @@ class ChangeOrchestrationService:
             orchestration=result.orchestration,
             artifacts=result.artifacts,
         )
-
-
-def _select_reviewed_case(
-    *,
-    repository_root: Path,
-    project_id: str,
-    repository_revision: str,
-    stable_keys: set[str],
-) -> ChangeLoopCase:
-    dataset_root = repository_root / "golden-dataset"
-    manifest = cast(
-        dict[str, Any],
-        json.loads((dataset_root / "manifest.golden.json").read_text(encoding="utf-8")),
-    )
-    if manifest.get("dataset_stage") != "golden" or manifest.get("status") != "frozen":
-        raise ChangeOrchestrationBlockedError("Golden Dataset is not frozen")
-    project = next(
-        (
-            value
-            for value in cast(list[dict[str, Any]], manifest["projects"])
-            if value.get("project_id") == project_id
-        ),
-        None,
-    )
-    if project is None or project.get("repository_commit") != repository_revision:
-        raise ChangeOrchestrationBlockedError(
-            "Golden Dataset does not bind the current repository revision"
-        )
-    matches: list[ChangeLoopCase] = []
-    for entry in cast(list[dict[str, Any]], manifest["cases"]):
-        if entry.get("project_id") != project_id:
-            continue
-        expected_path = (dataset_root / str(entry["expected_changes"])).resolve()
-        if not expected_path.is_relative_to(dataset_root.resolve()):
-            raise ChangeOrchestrationBlockedError("Golden case path escapes dataset root")
-        expected = cast(dict[str, Any], json.loads(expected_path.read_text(encoding="utf-8")))
-        expected_keys = {
-            str(value["stable_key"]) for value in cast(list[dict[str, Any]], expected["changes"])
-        }
-        if expected_keys != stable_keys:
-            continue
-        case_root = expected_path.parent
-        case = ChangeLoopCase.load(case_root)
-        if str(case.repository["base_revision"]) == repository_revision:
-            matches.append(case)
-    if len(matches) != 1:
-        raise ChangeOrchestrationBlockedError(
-            f"Expected exactly one reviewed Golden case, found {len(matches)}"
-        )
-    return matches[0]

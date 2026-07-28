@@ -10,15 +10,15 @@ from operamind.application.test_data_execution import (
 from operamind.application.test_data_execution import (
     TestDataStepExecution as StepExecution,
 )
-from operamind.application.visiondemo_target_e2e import (
-    build_visiondemo_cross_screen_plan,
-)
 from operamind.contracts import ContractCatalog
 from operamind.infrastructure.test_data.executors import HttpResponse
 from operamind.infrastructure.test_data.visiondemo import (
     VisionDemoCanonicalHttpExecutor,
     VisionDemoDeploymentConfig,
     VisionDemoReviewedHttpTransport,
+)
+from tests.fixtures.visiondemo_target_e2e import (
+    build_visiondemo_cross_screen_plan,
 )
 
 ROOT = Path(__file__).parents[2]
@@ -127,7 +127,7 @@ def test_deployment_config_rejects_non_tmp_h2_database(
     java = tmp_path / "java"
     h2_jar.touch()
     java.touch()
-    monkeypatch.setenv("OPERAMIND_VISIONDEMO_BASE_URL", "http://127.0.0.1:18082")
+    monkeypatch.setenv("OPERAMIND_TEST_TARGET_BASE_URL", "http://127.0.0.1:18082")
     monkeypatch.setenv(
         "OPERAMIND_VISIONDEMO_JDBC_URL",
         "jdbc:h2:file:/Users/example/visiondemo;AUTO_SERVER=TRUE",
@@ -147,7 +147,10 @@ def test_deployment_config_rejects_credentials_in_base_url(
     java = tmp_path / "java"
     h2_jar.touch()
     java.touch()
-    monkeypatch.setenv("OPERAMIND_VISIONDEMO_BASE_URL", "http://operator:secret@127.0.0.1:18082")
+    monkeypatch.setenv(
+        "OPERAMIND_TEST_TARGET_BASE_URL",
+        "http://operator:secret@127.0.0.1:18082",
+    )
     monkeypatch.setenv(
         "OPERAMIND_VISIONDEMO_JDBC_URL",
         "jdbc:h2:file:/tmp/visiondemo;AUTO_SERVER=TRUE",

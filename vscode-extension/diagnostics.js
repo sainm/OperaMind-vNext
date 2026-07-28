@@ -5,19 +5,11 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 
 const EXPECTED_MCP_TOOL_NAMES = Object.freeze([
-  "analysis_list_ready_cases",
-  "impact_get_report",
-  "copilot_get_edit_packet",
-  "copilot_get_approval_grant",
-  "copilot_run_approved_command",
-  "copilot_validate_worktree",
-  "copilot_record_edit_result",
   "copilot_get_coding_task",
+  "copilot_record_change_outputs",
   "copilot_run_task_command",
   "copilot_validate_task_diff",
   "copilot_record_task_result",
-  "verification_get_ui_plan",
-  "validation_get_result",
 ]);
 
 function normalizeMcpToolNames(rawNames) {

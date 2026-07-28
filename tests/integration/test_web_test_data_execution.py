@@ -38,13 +38,6 @@ def test_web_test_data_authorization_queries_fail_closed_for_missing_scope() -> 
                 project_id="missing-project",
                 at=datetime.now(UTC),
             )
-        assert (
-            repository.base_url_for_orchestration(
-                orchestration_id="missing-orchestration",
-                project_id="missing-project",
-            )
-            is None
-        )
         with pytest.raises(ValueError, match="scope does not exist"):
             repository.reserve(
                 DataExecutionRunWrite(

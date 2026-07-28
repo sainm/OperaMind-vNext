@@ -15,7 +15,7 @@
 - JavaScript／TypeScript（含 TSX）、Python 和 Kotlin 由独立 Tree-sitter grammar 经同一 `SemanticAdapterRegistry` 提取 class/interface/object/type、function/method、import、inheritance/implements 和 call。JavaScript／TypeScript 的命名函数与变量绑定 arrow function 都形成稳定 Symbol；测试文件中唯一解析到 production Symbol 的调用生成 `tests` Edge。唯一候选才标记 resolved，已导入或语言内建目标标记 external，多候选或无证明目标继续 unresolved。
 - `java_field_access` 从方法体中已证明的 `this.field` 或未被局部变量遮蔽的 owner field 访问生成 `reads`/`writes` Edge。getter/setter 名称本身不作为证据，因此规则同样适用于非 JavaBean 方法，并且不会按 DTO/Entity 类名猜字段。
 - `spring_endpoint` 提取 class/method Mapping 合并后的 HTTP endpoint；`junit_test` 只从显式 JUnit annotation 且 resolved 到 production Symbol 的 call 派生 `tests` Edge。
-- `spring_config_binding` 将 `@Value("${...}")` 和显式 `Environment.getProperty(...)` 连接到唯一 properties key；`spring_data_access` 将显式 JPA `@Table`、Spring Data Repository 泛型、派生查询和继承 CRUD 调用连接到唯一 SQL table，并按 Spring Data `findById -> Optional<T>` 契约解析 Lambda 参数中的 Entity 调用。`web_ui_route` 从 JSP/HTML form/link、JavaScript `url`、location 赋值、唯一局部常量别名，以及“函数参数流入 URL sink 后由调用实参提供 Route”的跨文件摘要提取 route，再按 HTTP method 与规范化 path 连接到唯一 Spring endpoint。运行时参数、对象属性和多目标仍显式保留 dynamic/unresolved，不按名称相似度猜测。
+- `spring_config_binding` 将 `@Value("${...}")` 和显式 `Environment.getProperty(...)` 连接到唯一 properties key；`spring_data_access` 将显式 JPA `@Table`、Spring Data Repository 泛型、派生查询和继承 CRUD 调用连接到唯一 SQL table，并按 Spring Data `findById -> Optional<T>` 契约解析 Lambda 参数中的 Entity 调用。`web_ui_route` 从 JSP／HTML form/link、Thymeleaf `th:href`／`th:action`、JavaScript `url`、location 赋值、唯一局部常量别名，以及“函数参数流入 URL sink 后由调用实参提供 Route”的跨文件摘要提取 route，再按 HTTP method 与规范化 path 连接到唯一 Spring endpoint。Thymeleaf URL 参数只在字面 path 可证明时绑定；运行时路径、对象属性和多目标仍显式保留 dynamic/unresolved，不按名称相似度猜测。
 - `struts1_mvc` 读取 `struts-config.xml`、ActionServlet 的 `web.xml` mapping、Tiles definition、JSP Struts tag 和 Java `findForward()`。ActionMapping 生成稳定 Symbol 并通过 `exposes` 连接 `*.do` 或 path servlet route，通过 `maps_to` 连接 Action／ActionForm，通过 `calls` 连接唯一 `execute`／`perform`；局部／全局 ActionForward、Action input、ForwardAction、Tiles 继承／模板／body 及 JSP form/link/forward/tiles 标签用 `navigates_to` 或 `calls` 串成完整导航链。缺少 servlet mapping、外部 Action、动态 JSP 表达式、多模块歧义继续显式 unresolved/external；XML 错误、内部实体和同一配置内重复定义使 Graph truncated。
 - Playwright Runner 对 approved Browser DSL 采集 `network_request`、`navigation` 和 `form_submission`。只保存 HTTP method、origin-relative path、Scenario、Action 和可选静态 Route Ref；query、fragment、header、body、cookie、token 均不进入 Route Evidence。`route_source_ref` 是内部 Manifest 绑定，不作为普通用户编辑字段。
 - Runtime Route Reconciler 只在静态来源明确且只有一条待解析 Edge、method 一致、模板路径唯一命中一个本地图 Endpoint，且同一动态来源的全部观测只指向同一 Endpoint 时，把 unresolved `calls` Edge 生成新的 `static_runtime` resolved Edge。缺少来源、来源不存在／已非 unresolved／对应多条 Edge、method 不符、零候选、多候选或同一来源命中多个 Endpoint 都写入 `RuntimeRouteEvidence.resolutions` 并继续 unresolved。
@@ -102,36 +102,11 @@ OPERAMIND_DATABASE_URL='postgresql://...' \
 
 日文 Web 的「未解決 Evidence 管理」按 Project 展示所有 current Repository Report、来源位置、候选、缺失 Evidence、解决建议、唯一证明和不可变再计算历史。Web 只读取 Canonical Report，不在浏览器中重新推断状态。
 
-## Scope 命令
+## Scope 解決境界
 
-锚点文件只包含类型化锚点和 ContextPackage 中已有的 evidence 引用：
+コード範囲は `document_change` の確定後に主変更フローが自動解決します。Copilot が提示した候補を、OperaMind が current Code Graph、固定 Repository Revision、型付き Anchor、Context Evidence、および Test Binding に対して検証し、許可されたパスだけを同じ Change Task の `code_scope` として返します。
 
-```json
-{
-  "anchors": [
-    {
-      "anchor_id": "expense-list-endpoint",
-      "kind": "endpoint",
-      "value": "GET /expenses",
-      "evidence_refs": ["document-node-after-001"]
-    }
-  ]
-}
-```
-
-```bash
-operamind-resolve-code-scope \
-  --anchors scope-anchors.json \
-  --project-id visiondemo \
-  --analysis-case-id analysis-case-001 \
-  --context-package-id context-package-001 \
-  --structured-change-id change-001 \
-  --code-graph-snapshot-id code-graph-001 \
-  --repository-revision-id revision-001 \
-  --profile-binding-key code-framework:repository-001
-```
-
-输出是确定性的 `scope_format_version: v1` 只读候选台账，不写入 ImpactReport。无阻断项时退出码为 `0`；存在 `unknown_items` 时仍输出完整台账并以 `1` 退出；请求身份或 evidence 越界同样以 `1` 拒绝。
+独立した Scope CLI と手動 Anchor ファイルは公開しません。`unknown_items`、Evidence 越境、Profile drift、Revision 不一致、または一意でない候補は `code_scope` 工程を fail closed で停止し、内部 ID を含まない阻断理由だけを Web に投影します。決定的な候補は内部 ImpactReport と範囲認可へ自動的に固定されます。
 
 ## 验证
 
@@ -159,5 +134,5 @@ operamind-resolve-code-scope \
 
 ## 后续任务与有意边界
 
-- Scope 结果到正式 ImpactReport、人工确认、Edit Packet 和 Approval Grant 的状态机已经在 P4 实现。Scope Resolver 继续只生成 v1 候选台账且不自行批准修改，这是信任边界，不是未实现功能；具体状态和命令见 [P4 Impact](P4-IMPACT.md)。
+- Scope 结果到正式 ImpactReport、确定性自动确认、Edit Packet 和内部 Approval Grant 的状态机已经在 P4 实现。Scope Resolver 只生成候选台账，主流程再用当前 Graph、Revision 与 Test Binding 做 fail-closed 验证；具体边界见 [P4 Impact](P4-IMPACT.md)。
 - Struts 1 Adapter 当前只解析静态配置和字面量导航。运行时生成的 Forward、请求参数选择的 DispatchAction 方法、插件自定义 ActionMapping／RequestProcessor 行为和无法唯一确定的多模块前缀继续 unresolved，等待运行时 Route Evidence 或项目专用 Profile 提供证明。

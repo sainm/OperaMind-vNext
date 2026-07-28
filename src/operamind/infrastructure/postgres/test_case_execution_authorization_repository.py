@@ -162,6 +162,57 @@ class TestCaseExecutionAuthorizationRepository:
             actor=actor,
         )
 
+    def confirm_deterministic_scope(
+        self,
+        *,
+        target_orchestration_id: str,
+        actor: str,
+        at: datetime,
+    ) -> TestCaseExecutionAuthorizationRecord | None:
+        """Internally bind the sole eligible Grant to a deterministic revised scope."""
+
+        if not actor.strip():
+            raise ValueError("Test Case execution confirmer must not be blank")
+        revision = self._revision(target_orchestration_id)
+        if revision is None:
+            return None
+        target_bundle = self._orchestrations.bundle(target_orchestration_id)
+        target = cast(dict[str, Any], target_bundle["orchestration"])
+        grants = self._eligible_grants(
+            project_id=str(target["project_id"]),
+            analysis_case_id=str(target["analysis_case_id"]),
+            ui_scenario_ids=_ui_scenario_ids(target_bundle),
+            at=at,
+        )
+        if len(grants) != 1:
+            raise ValueError(
+                "Deterministic Test Case scope authorization requires exactly one "
+                f"eligible Approval Grant (found {len(grants)})"
+            )
+        comparison = self._comparison(revision, target_bundle)
+        existing = self._authorization_for_grant(
+            revision=revision,
+            comparison=comparison,
+            grant_id=grants[0],
+        )
+        if existing is not None:
+            return existing
+        if not comparison.changed:
+            return self._persist(
+                revision=revision,
+                comparison=comparison,
+                grant_id=grants[0],
+                decision="reused",
+                actor=actor,
+            )
+        return self._persist(
+            revision=revision,
+            comparison=comparison,
+            grant_id=grants[0],
+            decision="reconfirmed",
+            actor=actor,
+        )
+
     def authorize_for_run(
         self,
         *,

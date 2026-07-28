@@ -6,15 +6,15 @@ from uuid import uuid4
 import psycopg
 import pytest
 
-from operamind.application.visiondemo_target_e2e import (
-    build_visiondemo_cross_screen_template,
-)
 from operamind.contracts import ContractCatalog
 from operamind.infrastructure.postgres import (
     ArtifactRepository,
     MigrationCatalog,
     MigrationRunner,
     PersistenceConflictError,
+)
+from tests.fixtures.visiondemo_target_e2e import (
+    build_visiondemo_cross_screen_template,
 )
 
 ROOT = Path(__file__).parents[2]

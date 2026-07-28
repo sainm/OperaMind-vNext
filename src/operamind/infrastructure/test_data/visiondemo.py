@@ -48,7 +48,7 @@ class VisionDemoDeploymentConfig:
 
     @classmethod
     def from_environment(cls) -> VisionDemoDeploymentConfig:
-        base_url = os.getenv("OPERAMIND_VISIONDEMO_BASE_URL", "").rstrip("/")
+        base_url = os.getenv("OPERAMIND_TEST_TARGET_BASE_URL", "").rstrip("/")
         jdbc_url = os.getenv("OPERAMIND_VISIONDEMO_JDBC_URL", "")
         h2_jar = Path(os.getenv("OPERAMIND_VISIONDEMO_H2_JAR", ""))
         java_executable = Path(os.getenv("OPERAMIND_VISIONDEMO_JAVA", ""))

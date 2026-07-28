@@ -92,6 +92,23 @@ class DocumentSnapshotWrite:
         object.__setattr__(self, "fact_variant_ids", fact_variant_ids)
 
 
+@dataclass(frozen=True, slots=True)
+class CanonicalDocumentSlice:
+    """One document membership rehydrated from a possibly multi-document Snapshot."""
+
+    project_id: str
+    document_id: str
+    document_version_id: str
+    logical_name: str
+    source_ref: str
+    content_digest: str
+    extractor_ref: str
+    profile_version_id: str
+    selected_variant_ids: tuple[str, ...]
+    fact_variant_ids: tuple[tuple[str, str], ...]
+    snapshot: CanonicalSnapshot
+
+
 class CanonicalRepository:
     """Idempotent immutable persistence for P1 normalized Canonical data."""
 
@@ -237,6 +254,108 @@ class CanonicalRepository:
                     f"Canonical Fact differs from Document Slice: {snapshot_fact.fact_ref}"
                 )
         return snapshot
+
+    def get_document_slice(
+        self,
+        *,
+        project_id: str,
+        snapshot_id: str,
+        document_id: str,
+    ) -> CanonicalDocumentSlice | None:
+        """Load exactly one document membership without treating sibling documents as deleted."""
+
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT version.document_version_id, document.logical_name,
+                       version.source_ref, version.content_digest, version.extractor_ref,
+                       membership.profile_version_id, membership.selected_variant_ids
+                FROM snapshot_memberships AS membership
+                JOIN document_versions AS version
+                  ON version.project_id = membership.project_id
+                 AND version.document_version_id = membership.document_version_id
+                JOIN documents AS document
+                  ON document.project_id = version.project_id
+                 AND document.document_id = version.document_id
+                WHERE membership.project_id = %s
+                  AND membership.document_snapshot_id = %s
+                  AND version.document_id = %s
+                """,
+                (project_id, snapshot_id, document_id),
+            )
+            membership_rows = cursor.fetchall()
+            if not membership_rows:
+                return None
+            if len(membership_rows) != 1:
+                raise PersistenceConflictError(
+                    "Canonical Snapshot has duplicate document memberships"
+                )
+            membership = membership_rows[0]
+            document_version_id = str(membership[0])
+            cursor.execute(
+                """
+                SELECT document_fact_id, stable_key, fact_type,
+                       values_json, source_refs, field_evidence
+                FROM document_facts
+                WHERE project_id = %s
+                  AND document_snapshot_id = %s
+                  AND document_version_id = %s
+                ORDER BY stable_key
+                """,
+                (project_id, snapshot_id, document_version_id),
+            )
+            fact_rows = cursor.fetchall()
+            cursor.execute(
+                """
+                SELECT document_fact_id, selected_variant_id
+                FROM document_fact_variants
+                WHERE project_id = %s
+                  AND document_snapshot_id = %s
+                  AND document_version_id = %s
+                ORDER BY document_fact_id
+                """,
+                (project_id, snapshot_id, document_version_id),
+            )
+            variant_rows = cursor.fetchall()
+        facts = tuple(
+            SnapshotFact(
+                fact_ref=str(row[0]),
+                fact=CanonicalFact(
+                    stable_key=str(row[1]),
+                    fact_type=str(row[2]),
+                    values=cast(dict[str, str], row[3]),
+                    source_refs=tuple(str(value) for value in cast(list[object], row[4])),
+                    field_evidence=_field_evidence_from_json(row[5]),
+                ),
+            )
+            for row in fact_rows
+        )
+        selected_variant_ids = tuple(
+            str(value) for value in cast(list[object], membership[6])
+        )
+        fact_variant_ids = tuple((str(row[0]), str(row[1])) for row in variant_rows)
+        if (
+            not facts
+            or not selected_variant_ids
+            or {fact.fact_ref for fact in facts}
+            != {fact_ref for fact_ref, _variant_id in fact_variant_ids}
+        ):
+            raise PersistenceConflictError(
+                "Canonical document membership Fact provenance is incomplete"
+            )
+        return CanonicalDocumentSlice(
+            project_id=project_id,
+            document_id=document_id,
+            document_version_id=document_version_id,
+            logical_name=str(membership[1]),
+            source_ref=str(membership[2]),
+            content_digest=str(membership[3]),
+            extractor_ref=str(membership[4]),
+            profile_version_id=str(membership[5]),
+            selected_variant_ids=selected_variant_ids,
+            fact_variant_ids=fact_variant_ids,
+            snapshot=CanonicalSnapshot(snapshot_id=snapshot_id, facts=facts),
+        )
 
     def store_changes(self, changes: tuple[StructuredChange, ...]) -> tuple[str, ...]:
         """Validate and idempotently store normalized StructuredChange rows."""

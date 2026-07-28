@@ -16,8 +16,8 @@
 代码必须服务于以下主链路之一：
 
 ```text
-Document -> Diff -> RAG -> Context Package -> Code Scope -> Impact Report
-Impact Report -> Confirmation -> Edit Packet -> Copilot -> UI Verification
+ChangeRequest -> Document RAG -> Copilot Document Diff -> Code Scope
+Copilot Code/TestPlan -> Compile/Test -> TestData/UI -> Closure Report
 ```
 
 不属于主链路、没有明确调用方、只有未来设想的模块不得提前加入 MVP。
@@ -109,7 +109,7 @@ Pytest      unit/integration tests
 Coverage    repository total + capability-critical per-file gate, changed-code report
 ```
 
-仓库级质量流水线的总 statement coverage 不得低于 80%；`quality/critical-coverage.json` 中列出的 readiness／Golden RAG、Approval、Copilot、Task scheduling 与 Recovery 文件必须逐文件达到 80%，不得用总体平均值掩盖单个关键模块。具体命令和 Evidence 边界见 `docs/QUALITY-BASELINE.md`。
+仓库级质量流水线的总 statement coverage 不得低于 80%；`quality/critical-coverage.json` 中列出的 readiness／Golden RAG、Approval、Copilot／Project Stack、Main Change Flow、Task scheduling 与 Recovery 文件必须逐文件达到 80%，不得用总体平均值掩盖单个关键模块。具体命令和 Evidence 边界见 `docs/QUALITY-BASELINE.md`。
 
 不得通过全局 `# noqa`、`type: ignore` 或降低规则等级绕过问题。单行例外必须说明原因。
 

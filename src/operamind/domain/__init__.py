@@ -59,49 +59,8 @@ from operamind.domain.structured_changes import (
     StructuredChange,
     StructuredChangeBuilder,
 )
-from operamind.domain.ui_execution import (
-    BrowserAction,
-    BrowserActionKind,
-    BrowserAssertion,
-    BrowserAssertionKind,
-    BrowserExecutionManifest,
-    BrowserFailureCategory,
-    BrowserLocator,
-    BrowserScenarioSpec,
-    BrowserValue,
-    LocatorStrategy,
-)
-from operamind.domain.ui_knowledge import (
-    UiKnowledgeSnapshot,
-    UiKnowledgeTarget,
-    UiLocatorCandidate,
-)
-from operamind.domain.ui_knowledge_proposal import (
-    UiKnowledgeProposal,
-    UiKnowledgeProposalBuilder,
-    UiKnowledgeProposalIssue,
-)
-from operamind.domain.ui_runtime_observation import (
-    UiLocatorObservationStatus,
-    UiRuntimeLocatorObservation,
-    UiRuntimeObservationEvidence,
-    UiRuntimeObservationIssue,
-    UiRuntimeObservationMerger,
-    UiRuntimeObservationResult,
-    runtime_candidate_id,
-    runtime_observation_id,
-)
 
 __all__ = [
-    "BrowserAction",
-    "BrowserActionKind",
-    "BrowserAssertion",
-    "BrowserAssertionKind",
-    "BrowserExecutionManifest",
-    "BrowserFailureCategory",
-    "BrowserLocator",
-    "BrowserScenarioSpec",
-    "BrowserValue",
     "CanonicalDocumentNodeBuilder",
     "CanonicalFact",
     "CanonicalFactMapper",
@@ -130,7 +89,6 @@ __all__ = [
     "DocumentRelationPlanner",
     "DocumentRelationRule",
     "FactState",
-    "LocatorStrategy",
     "ObservedField",
     "ObservedRecord",
     "PlannedDocumentRelation",
@@ -146,20 +104,6 @@ __all__ = [
     "StructuredChange",
     "StructuredChangeBuilder",
     "StructuredChangeQueryPlanner",
-    "UiKnowledgeProposal",
-    "UiKnowledgeProposalBuilder",
-    "UiKnowledgeProposalIssue",
-    "UiKnowledgeSnapshot",
-    "UiKnowledgeTarget",
-    "UiLocatorCandidate",
-    "UiLocatorObservationStatus",
-    "UiRuntimeLocatorObservation",
-    "UiRuntimeObservationEvidence",
-    "UiRuntimeObservationIssue",
-    "UiRuntimeObservationMerger",
-    "UiRuntimeObservationResult",
     "UnresolvedDocumentRelation",
     "relation_policy_for_domain",
-    "runtime_candidate_id",
-    "runtime_observation_id",
 ]

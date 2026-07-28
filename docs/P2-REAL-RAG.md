@@ -21,7 +21,7 @@
 - Token 估算包含完整 Artifact；超预算时失败并要求按 Change Group 拆分，不静默截断候选账本。相同 Context Package ID 只有在 Project、Case、Snapshot、ingestion、Change、Embedding Profile 版本/绑定、Token 预算、三类 Top-K 和邻接距离全部相同时才是完全重放；重放直接返回经 SHA-256 和数据库 envelope 复核的持久化 Artifact，不调用 Provider。
 - Golden RAG expectation 有独立 Schema。只有冻结三类 Query 的 required/irrelevant Canonical ID、人工批准和质量阈值后，`require-ready` 才允许通过；silver 的 `to_be_filled` 状态不能产生伪质量结论。
 - `operamind-evaluate-rag` 离线计算三类 Query 的 macro Recall@5、Recall@10、MRR、显式无关候选率和跨项目泄漏数；任何阈值失败返回非零退出码，期待值不会由 evaluator 改写。
-- `operamind-run-golden-rag` 不接收人工 observed JSON，而是从已审核的 Golden expected change/context 通过固定 `golden-cross-document-query-v2` 生成三类 Query，并用当前 Profile 对真实 pgvector 与 PostgreSQL 全文索引执行检索。冻结的语义引用不会冒充物理 `node-*`：命令按已审核的 document/location 在固定 Build 中解析唯一 Canonical Slice，Report 同时保存语义引用、物理节点、Stable Key、匹配与未匹配位置、Query 文本、摘要和生成版本。同一 Snapshot／Profile／Index 最新报告缺失、失败或阻断时，Impact Report 生成和新的人工确认都会失败关闭。
+- `operamind-run-golden-rag` 不接收人工 observed JSON，而是从已审核的 Golden expected change/context 通过固定 `golden-cross-document-query-v2` 生成三类 Query，并用当前 Profile 对真实 pgvector 与 PostgreSQL 全文索引执行检索。冻结的语义引用不会冒充物理 `node-*`：命令按已审核的 document/location 在固定 Build 中解析唯一 Canonical Slice，Report 同时保存语义引用、物理节点、Stable Key、匹配与未匹配位置、Query 文本、摘要和生成版本。该 Report 是离线回归门禁；个别变更的运行时门禁是本 Project 当前 ready/current Index、Profile 与检索 provenance，而不是某个 Golden Dataset。
 - Snapshot／Profile／Build 三个参数必须一起提供或一起省略。省略时，命令遍历当前 Profile 的 ready/current Build，只接受能把全部已审核 required context 唯一解析到索引节点的一个 Build；找不到或存在多个候选时失败，不按时间或名称猜测 Scope。
 
 ## Canonical Node
@@ -156,7 +156,7 @@ operamind-recover-index \
 
 真实 PostgreSQL 18 + pgvector 0.8.2 集成测试覆盖：
 
-- `0001-0056` 顺序升级和 checksum。
+- `0001-0059` 顺序升级和 checksum。
 - Search Index Build 的普通读取、向量检索和关键词检索都会重算完整条目账本；条目删除、关键词漂移、向量元数据/内容漂移以及缺失版本摘要均失败关闭。迁移前的 ready/stale Build 不原地补写可信摘要，必须使用新 Build ID 重建。
 - Canonical Node 与 Snapshot Membership 的事务写入/回滚。
 - 二进制版本不同但 Canonical 内容相同的两个 Snapshot 只生成一个向量，第二个 Build 100% 复用。

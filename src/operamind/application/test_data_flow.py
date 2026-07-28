@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import copy
 import re
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
-
-from operamind.application.change_loop_case import ChangeLoopCase
 
 _VARIABLE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
@@ -24,19 +21,6 @@ class TestDataFlowSource(Protocol):
 class _ArtifactFlowSource:
     data_sets: list[dict[str, Any]]
     test_cases: list[dict[str, Any]]
-
-
-def build_test_data_plan_flows(
-    case: ChangeLoopCase,
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """Return reviewed flows or convert legacy setup actions into explicit flows."""
-
-    configured = case.payload.get("data_generation_flows")
-    if isinstance(configured, list) and configured:
-        flows = copy.deepcopy(cast(list[dict[str, Any]], configured))
-    else:
-        flows = [_legacy_flow(case, data_set) for data_set in case.data_sets]
-    return flows, validate_test_data_plan_flows(case, flows)
 
 
 def validate_test_data_plan_flows(
@@ -181,111 +165,6 @@ def validate_test_data_plan_artifact(plan: dict[str, Any]) -> list[str]:
         source,
         cast(list[dict[str, Any]], plan.get("generation_flows", [])),
     )
-
-
-def _legacy_flow(case: ChangeLoopCase, data_set: dict[str, Any]) -> dict[str, Any]:
-    data_id = str(data_set["test_data_id"])
-    test_refs = list(cast(list[str], data_set["test_case_refs"]))
-    actions = cast(list[dict[str, Any]], data_set["setup_actions"])
-    steps = [
-        _legacy_step(
-            case,
-            data_id,
-            index,
-            action,
-            previous_action_id=(str(actions[index - 2]["action_id"]) if index > 1 else None),
-        )
-        for index, action in enumerate(actions, start=1)
-    ]
-    assertions: list[dict[str, Any]] = []
-    for test in case.test_cases:
-        test_id = str(test["test_case_id"])
-        if test_id not in test_refs:
-            continue
-        for index, expected in enumerate(cast(list[str], test["expected_results"]), start=1):
-            assertions.append(
-                {
-                    "assertion_id": f"{data_id}-{test_id}-result-{index}",
-                    "observe_via": "test",
-                    "subject": test_id,
-                    "operator": "satisfies",
-                    "expected": expected,
-                }
-            )
-    return {
-        "flow_id": f"flow-{data_id}",
-        "title": f"Generate reviewed data set {data_id}",
-        "test_data_refs": [data_id],
-        "test_case_refs": test_refs,
-        "steps": steps,
-        "final_assertions": assertions,
-        "cleanup_policy": data_set["cleanup_policy"],
-        "cleanup_steps": [],
-    }
-
-
-def _legacy_step(
-    case: ChangeLoopCase,
-    data_id: str,
-    sequence: int,
-    action: dict[str, Any],
-    previous_action_id: str | None,
-) -> dict[str, Any]:
-    action_id = str(action["action_id"])
-    channel = str(action["action_type"])
-    target = str(action["target"])
-    setup_request = _setup_request(case, target)
-    assertions = _setup_request_assertions(setup_request)
-    if not assertions:
-        assertions = [
-            {
-                "assertion_id": f"{data_id}-{action_id}-{key}",
-                "observe_via": "fixture" if channel == "fixture" else "database",
-                "subject": key,
-                "operator": "equals",
-                "expected": value,
-            }
-            for key, value in cast(dict[str, Any], action["payload"]).items()
-            if key.startswith("expected_")
-        ]
-    return {
-        "step_id": action_id,
-        "sequence": sequence,
-        "channel": channel,
-        "business_action": action_id.replace("-", " "),
-        "target": target,
-        "inputs": copy.deepcopy(
-            setup_request["request"] if setup_request is not None else action["payload"]
-        ),
-        "depends_on": [] if previous_action_id is None else [previous_action_id],
-        "output_bindings": [],
-        "postconditions": assertions,
-    }
-
-
-def _setup_request(case: ChangeLoopCase, target: str) -> dict[str, Any] | None:
-    normalized = target.strip().upper()
-    for setup in cast(list[dict[str, Any]], case.execution["setup_requests"]):
-        request = cast(dict[str, Any], setup["request"])
-        request_target = f"{request['method']} {request['path']}".upper()
-        if request_target == normalized:
-            return setup
-    return None
-
-
-def _setup_request_assertions(setup: dict[str, Any] | None) -> list[dict[str, Any]]:
-    if setup is None:
-        return []
-    return [
-        {
-            "assertion_id": f"{setup['setup_id']}-{index}",
-            "observe_via": "response",
-            "subject": str(value["path"]),
-            "operator": str(value["operator"]),
-            "expected": value.get("expected"),
-        }
-        for index, value in enumerate(cast(list[dict[str, Any]], setup["assertions"]), start=1)
-    ]
 
 
 def _variables_in(value: object) -> set[str]:

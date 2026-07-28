@@ -4,8 +4,8 @@ import os
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
 from uuid import uuid4
 
 import psycopg
@@ -16,11 +16,6 @@ from operamind.application import (
     ApprovalGrantService,
     ApprovedCommandRequest,
     ApprovedCommandService,
-    BrowserExecutionRequest,
-    BrowserExecutionRuntimeError,
-    BrowserExecutionService,
-    BrowserPreflightRequest,
-    BrowserPreflightService,
     ChangedLineCoverageEvidence,
     CodeScopeRequest,
     CodeScopeResolverService,
@@ -36,14 +31,6 @@ from operamind.application import (
     ImpactReportRequest,
     ImpactReportService,
     UiImpactStatus,
-    UiKnowledgeProposalRequest,
-    UiKnowledgeProposalService,
-    UiKnowledgeReviewRequest,
-    UiKnowledgeReviewService,
-    UiRunRecovery,
-    UiRuntimeObservationRequest,
-    UiRuntimeObservationService,
-    UiVerificationService,
 )
 from operamind.application.web_control_plane import (
     BusinessRuleInput,
@@ -52,7 +39,6 @@ from operamind.application.web_control_plane import (
 )
 from operamind.contracts import ContractCatalog
 from operamind.domain import (
-    BrowserExecutionManifest,
     CanonicalDocumentNodeBuilder,
     CanonicalFact,
     CanonicalSnapshot,
@@ -60,23 +46,12 @@ from operamind.domain import (
     CodeAnchorKind,
     SnapshotFact,
     StructuredChangeBuilder,
-    UiKnowledgeSnapshot,
-    UiLocatorObservationStatus,
-    UiRuntimeLocatorObservation,
-    UiRuntimeObservationMerger,
-    UiRuntimeObservationResult,
-    runtime_observation_id,
-)
-from operamind.infrastructure.browser import (
-    BrowserExecutionOutput,
-    BrowserPreflightObservation,
-    BrowserScenarioOutcome,
-    StoredBrowserEvidence,
 )
 from operamind.infrastructure.postgres import (
     ApprovalGrantRepository,
     ArtifactRepository,
     CanonicalRepository,
+    ChangeAutomationRunRecord,
     CodeGraphSnapshotRepository,
     DocumentNodeRepository,
     DocumentSnapshotWrite,
@@ -89,18 +64,8 @@ from operamind.infrastructure.postgres import (
     SnapshotStatus,
     StructuredChangeReviewDecision,
     StructuredChangeReviewRepository,
-    UiBrowserManifestRepository,
-    UiDeploymentWrite,
-    UiExecutionEvidenceWrite,
-    UiExecutionPlanWrite,
-    UiKnowledgeRepository,
-    UiLocatorObservationRepository,
-    UiPreflightCheckWrite,
-    UiScenarioResultWrite,
-    UiVerificationRepository,
-    VerificationScenarioWrite,
 )
-from operamind.mcp import MCP_PROTOCOL_VERSION, CopilotToolDispatcher, OperaMindMcpServer
+from operamind.mcp import CopilotToolDispatcher
 from operamind.profiles import ProfileCatalog
 
 ROOT = Path(__file__).parents[2]
@@ -140,6 +105,16 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
         "templates": [
             {
                 "command_ref": "targeted-unit",
+                "argv": ["git", "status", "--short"],
+                "working_directory": ".",
+                "timeout_seconds": 10,
+                "expected_exit_codes": [0],
+                "environment_keys": ["PATH", "LANG"],
+                "output_limit_bytes": 4096,
+                "failure_policy": "record_and_block",
+            },
+            {
+                "command_ref": "ui-e2e",
                 "argv": ["git", "status", "--short"],
                 "working_directory": ".",
                 "timeout_seconds": 10,
@@ -341,7 +316,6 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
             contracts=contracts,
             profiles=profiles,
         )
-        impact_service._rag_quality = MagicMock()
         impact_request = ImpactReportRequest(
             impact_report_id=f"impact-report-{suffix}",
             scope=request,
@@ -352,7 +326,6 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
         impact = impact_service.run(impact_request)
         replay = impact_service.run(impact_request)
         impact_repository = ImpactRepository(connection, contracts)
-        impact_repository._rag_quality = MagicMock()
 
         assert impact.publication.created
         assert not replay.publication.created
@@ -463,6 +436,126 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
         with connection.cursor() as cursor:
             cursor.execute("ROLLBACK TO SAVEPOINT impact_item_ledger_drift_probe")
             cursor.execute("RELEASE SAVEPOINT impact_item_ledger_drift_probe")
+
+        with connection.cursor() as cursor:
+            cursor.execute("SAVEPOINT automatic_case_creation_probe")
+        new_request_id = f"automatic-case-request-{suffix}"
+        new_submission = WebControlPlaneService(
+            connection=connection,
+            repository_root=ROOT,
+        ).submit_change_request(
+            ChangeRequestInput(
+                change_request_id=new_request_id,
+                project_id=project_id,
+                analysis_case_id=None,
+                input_mode="natural_language",
+                requirement_text="自然言語要件から Analysis Case を自動作成する",
+                source_document_ref=None,
+                target_document_ref=None,
+                business_rules=(
+                    BusinessRuleInput(
+                        business_rule_id=f"automatic-case-rule-{suffix}",
+                        text="登録済み Repository の現在 Revision を使用する",
+                        source_refs=(),
+                    ),
+                ),
+                ambiguity_status="clear",
+                ambiguities=(),
+                submitted_by="developer@example.invalid",
+            )
+        )
+        generated_case_id = new_submission["change_request"]["analysis_case_id"]
+        assert isinstance(generated_case_id, str)
+        assert generated_case_id != case_id
+        assert new_submission.get("case_blocker") is None
+        assert isinstance(new_submission["copilot_task"], dict)
+        with connection.cursor() as cursor:
+            cursor.execute("ROLLBACK TO SAVEPOINT automatic_case_creation_probe")
+            cursor.execute("RELEASE SAVEPOINT automatic_case_creation_probe")
+
+        with connection.cursor() as cursor:
+            cursor.execute("SAVEPOINT automatic_copilot_scope_probe")
+        automatic_request_id = f"automatic-scope-request-{suffix}"
+        automatic_submission = WebControlPlaneService(
+            connection=connection,
+            repository_root=ROOT,
+        ).submit_change_request(
+            ChangeRequestInput(
+                change_request_id=automatic_request_id,
+                project_id=project_id,
+                analysis_case_id=case_id,
+                input_mode="natural_language",
+                requirement_text="確認済み Impact から実行範囲を自動準備する",
+                source_document_ref="document://expense-design",
+                target_document_ref=None,
+                business_rules=(
+                    BusinessRuleInput(
+                        business_rule_id=f"automatic-scope-rule-{suffix}",
+                        text="承認操作なしで限定範囲を Copilot Task に設定する",
+                        source_refs=("document://expense-design",),
+                    ),
+                ),
+                ambiguity_status="clear",
+                ambiguities=(),
+                submitted_by="developer@example.invalid",
+            )
+        )
+        automatic_task = automatic_submission["copilot_task"]
+        assert isinstance(automatic_task, dict)
+        automatic_task_id = str(automatic_task["task"]["coding_task_id"])
+        automatic_service = WebControlPlaneService(
+            connection=connection,
+            repository_root=ROOT,
+        )
+        with pytest.raises(ValueError, match="requires recorded code scope"):
+            automatic_service._provision_execution_scope(
+                record=ChangeAutomationRunRecord(
+                    automation_run_id=f"automatic-scope-run-{suffix}",
+                    change_request_id=automatic_request_id,
+                    project_id=project_id,
+                    status="running",
+                    current_stage="execution_approval",
+                    next_action="provision_execution_scope",
+                    blocking_reason=None,
+                    created=True,
+                ),
+                run_id=f"automatic-scope-run-{suffix}",
+            )
+        automatic_bound_task = CopilotCodingTaskService(
+            connection=connection,
+            repository_root=ROOT,
+        ).view(automatic_task_id)
+        assert automatic_bound_task["execution_scope"]["bound"] is False
+        assert automatic_bound_task["current_stage"] == "document_change"
+        automatic_tasks = CopilotCodingTaskService(
+            connection=connection,
+            repository_root=ROOT,
+        )
+        claimed_automatic = automatic_tasks.claim_next(
+            workspace_root=workspace,
+            consumer_id="vscode-explicit-document-ref",
+        )
+        assert claimed_automatic is not None
+        assert claimed_automatic["task"]["coding_task_id"] == automatic_task_id
+        automatic_tasks.accept(
+            coding_task_id=automatic_task_id,
+            workspace_root=workspace,
+            consumer_id="vscode-explicit-document-ref",
+            actor="developer@example.invalid",
+        )
+        explicit_context = automatic_tasks.get_mcp_context(
+            coding_task_id=automatic_task_id,
+            workspace_root=workspace,
+        )
+        assert explicit_context["document_discovery"]["status"] == "ready"
+        assert explicit_context["document_discovery"]["mode"] == "canonical_hybrid_rag"
+        assert explicit_context["document_discovery"]["explicit_document_refs"] == [
+            "document://expense-design"
+        ]
+        assert explicit_context["document_discovery"]["candidates"]
+        with connection.cursor() as cursor:
+            cursor.execute("ROLLBACK TO SAVEPOINT automatic_copilot_scope_probe")
+            cursor.execute("RELEASE SAVEPOINT automatic_copilot_scope_probe")
 
         packet_service = EditPacketService(connection=connection, contracts=contracts)
         with pytest.raises(ValueError, match="match forbidden globs"):
@@ -581,7 +674,7 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
             approved_by="reviewer@example.invalid",
             expires_at=datetime.now(UTC) + timedelta(hours=2),
             command_profile_binding_key=command_profile_binding_key,
-            allowed_test_command_refs=("targeted-unit",),
+            allowed_test_command_refs=("targeted-unit", "ui-e2e"),
         )
         grant_service = ApprovalGrantService(
             connection=connection,
@@ -609,7 +702,9 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
         with connection.cursor() as cursor:
             cursor.execute("SAVEPOINT copilot_coding_task_poc")
         change_request_id = f"change-request-copilot-{suffix}"
-        WebControlPlaneService(connection=connection, repository_root=ROOT).submit_change_request(
+        submitted_request = WebControlPlaneService(
+            connection=connection, repository_root=ROOT
+        ).submit_change_request(
             ChangeRequestInput(
                 change_request_id=change_request_id,
                 project_id=project_id,
@@ -629,6 +724,67 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
                 ambiguities=(),
                 submitted_by="reviewer@example.invalid",
             )
+        )
+        initial_task = submitted_request["copilot_task"]
+        assert isinstance(initial_task, dict)
+        initial_task_id = str(initial_task["task"]["coding_task_id"])
+        assert initial_task["current_stage"] == "document_change"
+        assert initial_task["execution_scope"]["bound"] is False
+        initial_tasks = CopilotCodingTaskService(
+            connection=connection,
+            repository_root=ROOT,
+        )
+        claimed_initial = initial_tasks.claim_next(
+            workspace_root=workspace,
+            consumer_id="vscode-document-phase",
+        )
+        assert claimed_initial is not None
+        assert claimed_initial["task"]["coding_task_id"] == initial_task_id
+        initial_tasks.accept(
+            coding_task_id=initial_task_id,
+            workspace_root=workspace,
+            consumer_id="vscode-document-phase",
+            actor="developer@example.invalid",
+        )
+        initial_context = initial_tasks.get_mcp_context(
+            coding_task_id=initial_task_id,
+            workspace_root=workspace,
+        )
+        assert initial_context["change_plan"]["stage"] == "document_change"
+        assert initial_context["execution_scope"]["bound"] is False
+        assert initial_context["document_discovery"]["status"] == "ready"
+        assert initial_context["document_discovery"]["mode"] == "canonical_hybrid_rag"
+        assert initial_context["document_discovery"]["candidates"]
+        discovered_document = initial_context["document_discovery"]["candidates"][0]
+        assert discovered_document["logical_name"] == "02_画面設計書_経費一覧.xlsx"
+        assert discovered_document["document_ref"].startswith("immutable://design/")
+        with pytest.raises(ValueError, match="requires recorded code scope"):
+            WebControlPlaneService(
+                connection=connection,
+                repository_root=ROOT,
+            )._provision_execution_scope(
+                record=ChangeAutomationRunRecord(
+                    automation_run_id=f"automation-run-{suffix}",
+                    change_request_id=change_request_id,
+                    project_id=project_id,
+                    status="running",
+                    current_stage="execution_approval",
+                    next_action="provision_execution_scope",
+                    blocking_reason=None,
+                    created=True,
+                ),
+                run_id=f"automation-run-{suffix}",
+            )
+        bound_initial = initial_tasks.view(initial_task_id)
+        assert bound_initial["current_stage"] == "document_change"
+        assert bound_initial["execution_scope"]["bound"] is False
+        initial_tasks.cancel(
+            coding_task_id=initial_task_id,
+            change_request_id=change_request_id,
+            actor="developer@example.invalid",
+            reason="Integration fixture continues with a pre-bound retry task",
+            idempotency_key="cancel-initial-document-phase",
+            consumer_id="vscode-document-phase",
         )
         cancelled_task_id = f"copilot-coding-task-cancelled-{suffix}"
         coding_tasks = CopilotCodingTaskService(
@@ -650,7 +806,17 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
         replayed_task = coding_tasks.publish(task_request)
         assert published_task["created"] is True
         assert replayed_task["created"] is False
-        assert published_task["task"]["execution_mode"] == "copilot_coding_plan"
+        assert published_task["task"]["execution_mode"] == "copilot_change_task"
+        assert published_task["task"]["schema_version"] == "v2"
+        assert published_task["current_stage"] == "document_change"
+        assert published_task["task"]["workflow"]["stage_order"] == [
+            "requirement",
+            "document_change",
+            "code_scope",
+            "compile_test",
+            "ui_validation",
+            "final_report",
+        ]
         claimed_task = coding_tasks.claim_next(
             workspace_root=copilot_workspace,
             consumer_id="vscode-integration",
@@ -737,8 +903,157 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
             },
         )
         assert task_context["coding_task"]["coding_task_id"] == coding_task_id
-        assert task_context["coding_plan"]["mode"] == "copilot_coding_plan"
+        assert "approval_grant_id" not in task_context["coding_task"]
+        assert "edit_packet_id" not in task_context["coding_task"]
+        assert "edit_packet" not in task_context
+        assert "approval" not in task_context
+        assert set(task_context["execution_scope"]) == {
+            "bound",
+            "base_repository_revision",
+            "editable_files",
+            "read_only_files",
+            "test_files",
+            "forbidden_globs",
+            "allowed_items",
+            "required_command_refs",
+            "out_of_scope_policy",
+        }
+        assert task_context["change_plan"]["mode"] == "copilot_change_task"
         assert task_context["context_package_available"] is False
+        generated_test_plan = _load_json(
+            ROOT / "contracts/examples/test-plan.v1.example.json"
+        )
+        generated_test_plan.update(
+            {
+                "test_plan_id": f"copilot-test-plan-{suffix}",
+                "change_request_id": change_request_id,
+                "project_id": project_id,
+            }
+        )
+        generated_test_plan["test_cases"][0].update(
+            {
+                "level": "ui",
+                "execution_mode": "browser",
+                "steps": ["経費検索画面で差戻し状態を検索する"],
+                "expected_results": ["差戻し状態の経費だけが表示される"],
+            }
+        )
+        generated_test_data_plan = _load_json(
+            ROOT / "contracts/examples/test-data-plan.v1.example.json"
+        )
+        generated_test_data_plan.update(
+            {
+                "test_data_plan_id": f"copilot-test-data-plan-{suffix}",
+                "test_plan_id": generated_test_plan["test_plan_id"],
+                "project_id": project_id,
+            }
+        )
+        generated_test_data_plan["generation_flows"][0]["steps"].append(
+            {
+                "step_id": "search-returned-expense",
+                "sequence": 2,
+                "channel": "ui",
+                "business_action": "差戻し状態の経費を検索する",
+                "screen_ref": "expense-list",
+                "ui_action_ref": "search-created-expense",
+                "inputs": {"status": "差戻し"},
+                "depends_on": ["load-default-seed"],
+                "output_bindings": [],
+                "postconditions": [
+                    {
+                        "assertion_id": "returned-expense-visible",
+                        "observe_via": "ui",
+                        "subject": "visible_expense_count",
+                        "operator": "count_equals",
+                        "expected": 1,
+                    }
+                ],
+            }
+        )
+        monkeypatch.setattr(
+            "operamind.application.copilot_coding_task."
+            "CopilotDocumentChangeService.materialize",
+            lambda _service, **_values: SimpleNamespace(
+                change_refs=(change.change_id,),
+                document_ids=(f"document-{suffix}",),
+                source_snapshot_id=after.snapshot_id,
+                target_snapshot_id=after.snapshot_id,
+            ),
+        )
+        document_outputs = task_dispatcher.call(
+            "copilot_record_change_outputs",
+            {
+                "coding_task_id": coding_task_id,
+                "workspace_root": str(copilot_workspace),
+                "output_stage": "document_change",
+                "document_ids": [f"document-{suffix}"],
+            },
+        )
+        assert document_outputs["recorded_stage"] == "document_change"
+        assert document_outputs["document_count"] == 1
+        assert document_outputs["document_change_count"] == 1
+        assert set(document_outputs) == {
+            "recorded_stage",
+            "next_stage",
+            "coding_task_state",
+            "document_count",
+            "document_change_count",
+            "flow_status",
+            "next_context",
+        }
+        assert set(document_outputs["flow_status"]) == {
+            "status",
+            "current_stage",
+            "progress_percent",
+            "blocking_reasons",
+        }
+        assert "automation" not in document_outputs
+        assert document_outputs["next_context"]["current_stage"] == "code_scope"
+        change_outputs = task_dispatcher.call(
+            "copilot_record_change_outputs",
+            {
+                "coding_task_id": coding_task_id,
+                "workspace_root": str(copilot_workspace),
+                "output_stage": "code_scope",
+                "code_scope": [
+                        {
+                            "target_path": "src/main/java/example/ExpenseService.java",
+                            "target_symbols": ["search(String status)"],
+                        "recommended_action": "modify",
+                        "test_file_refs": [
+                            "src/test/java/example/ExpenseServiceTest.java"
+                        ],
+                            "rationale": "差戻し検索のサービス分岐と回帰テストが影響範囲です。",
+                            "ui_impact": True,
+                        },
+                        {
+                            "target_path": "src/test/scripts/expense-status-search.sh",
+                            "target_symbols": [],
+                            "recommended_action": "add",
+                            "test_file_refs": [
+                                "src/test/scripts/expense-status-search.sh"
+                            ],
+                            "rationale": "差戻し検索の UI 回帰テストを追加します。",
+                            "ui_impact": False,
+                        },
+                    ],
+                },
+            )
+        assert change_outputs["recorded_stage"] == "code_scope"
+        assert change_outputs["coding_task_state"] == "in_progress"
+        assert change_outputs["code_scope"][0]["target_path"] == (
+            "src/main/java/example/ExpenseService.java"
+        )
+        assert set(change_outputs) == {
+            "recorded_stage",
+            "next_stage",
+            "coding_task_state",
+            "code_scope",
+            "flow_status",
+            "next_context",
+        }
+        assert change_outputs["next_context"]["execution_scope"]["bound"] is True
+        assert change_outputs["next_context"]["current_stage"] == "compile_test"
         with connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -765,17 +1080,6 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
         copilot_test_path.write_text(
             "class ExpenseServiceTest { int bridgeUpdated; }\n", encoding="utf-8"
         )
-        task_command_id = f"copilot-task-command-{suffix}"
-        task_command = task_dispatcher.call(
-            "copilot_run_task_command",
-            {
-                "coding_task_id": coding_task_id,
-                "workspace_root": str(copilot_workspace),
-                "command_execution_id": task_command_id,
-                "command_ref": "targeted-unit",
-            },
-        )
-        assert task_command["status"] == "passed"
         task_working_result_id = f"copilot-task-working-{suffix}"
         task_diff = task_dispatcher.call(
             "copilot_validate_task_diff",
@@ -787,6 +1091,80 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
         )
         assert task_diff["status"] == "in_scope"
         assert task_diff["coding_task_state"] == "in_progress"
+        assert set(task_diff) == {
+            "edit_result_id",
+            "created",
+            "status",
+            "command_evidence_status",
+            "changed_paths",
+            "out_of_scope_files",
+            "result_repository_revision",
+            "coding_task_state",
+            "changed_line_coverage",
+        }
+        planning_outputs = task_dispatcher.call(
+            "copilot_record_change_outputs",
+            {
+                "coding_task_id": coding_task_id,
+                "workspace_root": str(copilot_workspace),
+                "output_stage": "test_planning",
+                "test_plan": generated_test_plan,
+                "test_data_plan": generated_test_data_plan,
+            },
+        )
+        assert planning_outputs["test_plan_id"] == generated_test_plan["test_plan_id"]
+        assert planning_outputs["recorded_stage"] == "test_planning"
+        assert planning_outputs["next_stage"] == "compile_test"
+        assert planning_outputs["flow_status"]["status"] == "in_progress"
+        assert planning_outputs["flow_status"]["current_stage"] == "compile_test"
+        assert planning_outputs["next_context"] is not None
+        assert planning_outputs["next_context"]["current_stage"] == "compile_test"
+        assert set(planning_outputs) == {
+            "recorded_stage",
+            "next_stage",
+            "coding_task_state",
+            "test_plan_id",
+            "test_data_plan_id",
+            "flow_status",
+            "next_context",
+        }
+        task_command_id = f"copilot-task-command-{suffix}"
+        task_command = task_dispatcher.call(
+            "copilot_run_task_command",
+            {
+                "coding_task_id": coding_task_id,
+                "workspace_root": str(copilot_workspace),
+                "command_execution_id": task_command_id,
+                "command_ref": "targeted-unit",
+            },
+        )
+        assert task_command["status"] == "passed"
+        assert set(task_command) == {
+            "command_execution_id",
+            "created",
+            "command_ref",
+            "status",
+            "exit_code",
+            "stdout_digest",
+            "stderr_digest",
+            "stdout_bytes",
+            "stderr_bytes",
+            "output_truncated",
+            "started_at",
+            "completed_at",
+            "coding_task_state",
+        }
+        task_ui_command_id = f"copilot-task-ui-command-{suffix}"
+        task_ui_command = task_dispatcher.call(
+            "copilot_run_task_command",
+            {
+                "coding_task_id": coding_task_id,
+                "workspace_root": str(copilot_workspace),
+                "command_execution_id": task_ui_command_id,
+                "command_ref": "ui-e2e",
+            },
+        )
+        assert task_ui_command["status"] == "passed"
         _git_workspace(copilot_workspace, "add", "-A")
         _git_workspace(
             copilot_workspace,
@@ -806,7 +1184,7 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
                 "coding_task_id": coding_task_id,
                 "workspace_root": str(copilot_workspace),
                 "edit_result_id": task_committed_result_id,
-                "test_result_refs": [task_command_id],
+                "test_result_refs": [task_command_id, task_ui_command_id],
                 "tests_passed": True,
                 "changed_line_coverage": {
                     "evidence_refs": [task_command_id],
@@ -824,23 +1202,49 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
         )
         assert task_result["status"] == "in_scope"
         assert task_result["coding_task_state"] == "completed"
+        assert set(task_result) == {
+            "edit_result_id",
+            "created",
+            "status",
+            "command_evidence_status",
+            "changed_paths",
+            "out_of_scope_files",
+            "result_repository_revision",
+            "coding_task_state",
+            "changed_line_coverage",
+            "flow_status",
+        }
+        assert set(task_result["flow_status"]) == {
+            "status",
+            "current_stage",
+            "progress_percent",
+            "blocking_reasons",
+        }
+        assert "automation" not in task_result
         final_task = coding_tasks.view(coding_task_id)
         assert final_task["state"] == "completed"
-        assert [item["status"] for item in final_task["commands"]] == ["passed"]
+        assert [item["status"] for item in final_task["commands"]] == [
+            "passed",
+            "passed",
+        ]
         assert [item["validation_mode"] for item in final_task["edit_results"]] == [
             "working",
             "committed",
         ]
         assert [event["event_type"] for event in final_task["events"]] == [
             "published",
-            "claimed",
-            "accepted",
-            "context_loaded",
-            "claim_recovered",
-            "command_recorded",
-            "diff_recorded",
-            "result_recorded",
-        ]
+                "claimed",
+                "accepted",
+                "context_loaded",
+                "outputs_recorded",
+                "outputs_recorded",
+                "claim_recovered",
+                "diff_recorded",
+                "outputs_recorded",
+                "command_recorded",
+                "command_recorded",
+                "result_recorded",
+            ]
         with connection.cursor() as cursor:
             cursor.execute("ROLLBACK TO SAVEPOINT copilot_coding_task_poc")
             cursor.execute("RELEASE SAVEPOINT copilot_coding_task_poc")
@@ -949,79 +1353,6 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
             activated_by="reviewer@example.invalid",
             reason="Exercise grant-bound Profile version isolation",
         )
-        mcp_server = OperaMindMcpServer(CopilotToolDispatcher(connection=connection, root=ROOT))
-        initialized = mcp_server.handle(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": MCP_PROTOCOL_VERSION,
-                    "capabilities": {},
-                    "clientInfo": {"name": "integration-test", "version": "1.0.0"},
-                },
-            }
-        )
-        assert initialized is not None
-        assert mcp_server.handle({"jsonrpc": "2.0", "method": "notifications/initialized"}) is None
-        ready_cases_response = mcp_server.handle(
-            {
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {
-                    "name": "analysis_list_ready_cases",
-                    "arguments": {"workspace_root": str(workspace), "limit": 10},
-                },
-            }
-        )
-        assert ready_cases_response is not None
-        ready_cases = ready_cases_response["result"]["structuredContent"]["cases"]
-        assert [case["analysis_case_id"] for case in ready_cases] == [case_id]
-        assert ready_cases[0]["approval_grant_state"] == "active_editing"
-        impact_query_response = mcp_server.handle(
-            {
-                "jsonrpc": "2.0",
-                "id": 3,
-                "method": "tools/call",
-                "params": {
-                    "name": "impact_get_report",
-                    "arguments": {
-                        "project_id": project_id,
-                        "analysis_case_id": case_id,
-                        "impact_report_id": impact_request.impact_report_id,
-                    },
-                },
-            }
-        )
-        assert impact_query_response is not None
-        impact_query = impact_query_response["result"]["structuredContent"]
-        assert impact_query["artifact"]["impact_report_id"] == impact_request.impact_report_id
-        assert impact_query["current_status"] == "confirmed"
-        handoff_response = mcp_server.handle(
-            {
-                "jsonrpc": "2.0",
-                "id": 4,
-                "method": "tools/call",
-                "params": {
-                    "name": "copilot_get_edit_packet",
-                    "arguments": {
-                        "project_id": project_id,
-                        "analysis_case_id": case_id,
-                        "edit_packet_id": packet_request.edit_packet_id,
-                        "approval_grant_id": grant_id,
-                        "workspace_root": str(workspace),
-                    },
-                },
-            }
-        )
-        assert handoff_response is not None
-        handoff_result = handoff_response["result"]
-        assert handoff_result["isError"] is False
-        handoff = handoff_result["structuredContent"]
-        assert handoff["edit_packet"]["edit_packet_id"] == packet_request.edit_packet_id
-        assert handoff["approval"]["command_profile_version_id"] == command_profile_version_id
-        assert handoff["context_package_available"] is False
         command_execution_id = f"command-execution-{suffix}"
         command_request = ApprovedCommandRequest(
             command_execution_id=command_execution_id,
@@ -1044,28 +1375,19 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
         assert command_result.record.exit_code == 0
         assert command_result.command_profile_version_id == command_profile_version_id
         assert not command_replay.record.created
-        mcp_command_response = mcp_server.handle(
-            {
-                "jsonrpc": "2.0",
-                "id": 5,
-                "method": "tools/call",
-                "params": {
-                    "name": "copilot_run_approved_command",
-                    "arguments": {
-                        "project_id": project_id,
-                        "analysis_case_id": case_id,
-                        "edit_packet_id": packet_request.edit_packet_id,
-                        "approval_grant_id": grant_id,
-                        "workspace_root": str(workspace),
-                        "command_execution_id": command_execution_id,
-                        "command_ref": "targeted-unit",
-                    },
-                },
-            }
+        ui_command_execution_id = f"ui-command-execution-{suffix}"
+        ui_command_result = command_service.run(
+            ApprovedCommandRequest(
+                command_execution_id=ui_command_execution_id,
+                approval_grant_id=grant_id,
+                project_id=project_id,
+                analysis_case_id=case_id,
+                edit_packet_id=packet_request.edit_packet_id,
+                workspace_root=workspace,
+                command_ref="ui-e2e",
+            )
         )
-        assert mcp_command_response is not None
-        assert mcp_command_response["result"]["isError"] is False
-        assert mcp_command_response["result"]["structuredContent"]["created"] is False
+        assert ui_command_result.record.status == "passed"
         with pytest.raises(ValueError, match="does not allow command_ref"):
             command_service.run(
                 ApprovedCommandRequest(
@@ -1277,6 +1599,20 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
             "-m",
             "approved edit",
         )
+        with pytest.raises(ValueError, match="exact required command set"):
+            edit_result_service.run(
+                EditResultRequest(
+                    edit_result_id=f"edit-result-incomplete-tests-{suffix}",
+                    edit_packet_id=packet_request.edit_packet_id,
+                    approval_grant_id=grant_id,
+                    project_id=project_id,
+                    analysis_case_id=case_id,
+                    workspace_root=workspace,
+                    mode=EditValidationMode.COMMITTED,
+                    test_result_refs=(command_execution_id,),
+                    tests_passed=True,
+                )
+            )
         with pytest.raises(ValueError, match="command evidence does not exist"):
             edit_result_service.run(
                 EditResultRequest(
@@ -1300,7 +1636,7 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
                 analysis_case_id=case_id,
                 workspace_root=workspace,
                 mode=EditValidationMode.COMMITTED,
-                test_result_refs=(command_execution_id,),
+                test_result_refs=(command_execution_id, ui_command_execution_id),
                 tests_passed=True,
                 changed_line_coverage=ChangedLineCoverageEvidence(
                     evidence_refs=(command_execution_id,),
@@ -1336,69 +1672,6 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
         assert committed.result_repository_revision == _git_workspace(
             workspace, "rev-parse", "HEAD"
         )
-        assert (
-            grant_repository.authorize_ui(
-                grant_id=grant_id,
-                project_id=project_id,
-                edit_packet_id=packet_request.edit_packet_id,
-                scenario_refs=("expense-filter-default-all",),
-            ).state
-            == "ui_pending"
-        )
-        ui_invalidation_updates = (
-            (
-                "UPDATE impact_reports SET status = 'superseded' WHERE impact_report_id = %s",
-                impact_request.impact_report_id,
-            ),
-            (
-                "UPDATE code_graph_snapshots SET status = 'stale', is_current = false "
-                "WHERE code_graph_snapshot_id = %s",
-                graph_id,
-            ),
-            (
-                "UPDATE analysis_cases SET status = 'reanalysis_required' "
-                "WHERE analysis_case_id = %s",
-                case_id,
-            ),
-            (
-                "UPDATE edit_results SET command_evidence_status = 'legacy_unverified' "
-                "WHERE edit_result_id = %s",
-                committed.record.edit_result_id,
-            ),
-        )
-        for index, (statement, identity) in enumerate(ui_invalidation_updates):
-            savepoint = f"grant_ui_source_invalidation_{index}"
-            with connection.cursor() as cursor:
-                cursor.execute(f"SAVEPOINT {savepoint}")
-                cursor.execute(statement, (identity,))
-            with pytest.raises(ValueError, match="current for UI verification"):
-                grant_repository.authorize_ui(
-                    grant_id=grant_id,
-                    project_id=project_id,
-                    edit_packet_id=packet_request.edit_packet_id,
-                    scenario_refs=("expense-filter-default-all",),
-                )
-            with connection.cursor() as cursor:
-                cursor.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
-                cursor.execute(f"RELEASE SAVEPOINT {savepoint}")
-        verifying_cases_response = mcp_server.handle(
-            {
-                "jsonrpc": "2.0",
-                "id": 61,
-                "method": "tools/call",
-                "params": {
-                    "name": "analysis_list_ready_cases",
-                    "arguments": {"workspace_root": str(workspace), "limit": 10},
-                },
-            }
-        )
-        assert verifying_cases_response is not None
-        verifying_cases = verifying_cases_response["result"]["structuredContent"]["cases"]
-        assert [case["analysis_case_id"] for case in verifying_cases] == [case_id]
-        assert verifying_cases[0]["base_revision"] == commit_sha
-        assert verifying_cases[0]["head_revision"] == committed.result_repository_revision
-        assert verifying_cases[0]["edit_packet_status"] == "superseded"
-        assert verifying_cases[0]["approval_grant_state"] == "ui_pending"
         with connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -1408,926 +1681,16 @@ def test_scope_resolver_binds_document_evidence_to_edit_and_test_files(
                 """,
                 (committed.record.edit_result_id,),
             )
-            assert cursor.fetchall() == [(command_execution_id,)]
+            assert {str(row[0]) for row in cursor.fetchall()} == {
+                command_execution_id,
+                ui_command_execution_id,
+            }
         with connection.cursor() as cursor:
             cursor.execute(
                 "SELECT status FROM analysis_cases WHERE analysis_case_id = %s",
                 (case_id,),
             )
             assert cursor.fetchone() == ("verifying_ui",)
-
-        ui_service = UiVerificationService(connection=connection, contracts=contracts)
-        scenario_id = "expense-filter-default-all"
-        scenario_version_id = f"scenario-version-{suffix}"
-        assert ui_service.register_scenario(
-            VerificationScenarioWrite(
-                scenario_version_id=scenario_version_id,
-                project_id=project_id,
-                scenario_id=scenario_id,
-                scenario_version="v1",
-                title="既定値ですべての経費を表示する",
-                preconditions=("四件の経費データが存在する",),
-                steps=("経費一覧画面を開く",),
-                expected_visible_results=("All が選択され、四件すべてが表示される",),
-                evidence_requirements=("screenshot", "assertion"),
-                trigger_path="/expenses",
-                data_recipe_ref="expense-seed-v1",
-                review_status="approved",
-                activate=True,
-            )
-        )
-        assert not ui_service.register_scenario(
-            VerificationScenarioWrite(
-                scenario_version_id=scenario_version_id,
-                project_id=project_id,
-                scenario_id=scenario_id,
-                scenario_version="v1",
-                title="既定値ですべての経費を表示する",
-                preconditions=("四件の経費データが存在する",),
-                steps=("経費一覧画面を開く",),
-                expected_visible_results=("All が選択され、四件すべてが表示される",),
-                evidence_requirements=("screenshot", "assertion"),
-                trigger_path="/expenses",
-                data_recipe_ref="expense-seed-v1",
-                review_status="approved",
-                activate=True,
-            )
-        )
-        assert committed.result_repository_revision is not None
-        plan_id = f"ui-plan-{suffix}"
-        deployment_revision = f"deployment-{suffix}"
-        with connection.cursor() as cursor:
-            cursor.execute("SAVEPOINT legacy_command_evidence_probe")
-            cursor.execute(
-                """
-                UPDATE edit_results SET command_evidence_status = 'legacy_unverified'
-                WHERE edit_result_id = %s
-                """,
-                (committed.record.edit_result_id,),
-            )
-        with pytest.raises(ValueError, match="verified command evidence"):
-            ui_service.build_plan(
-                deployment=UiDeploymentWrite(
-                    project_id=project_id,
-                    environment_id=f"environment-legacy-{suffix}",
-                    base_url="http://127.0.0.1:8081",
-                    deployment_revision=f"deployment-legacy-{suffix}",
-                    repository_revision=committed.result_repository_revision,
-                ),
-                plan=UiExecutionPlanWrite(
-                    plan_id=f"ui-plan-legacy-{suffix}",
-                    project_id=project_id,
-                    analysis_case_id=case_id,
-                    edit_packet_id=packet_request.edit_packet_id,
-                    edit_result_id=committed.record.edit_result_id,
-                    environment_id=f"environment-legacy-{suffix}",
-                    deployment_revision=f"deployment-legacy-{suffix}",
-                ),
-            )
-        with connection.cursor() as cursor:
-            cursor.execute("ROLLBACK TO SAVEPOINT legacy_command_evidence_probe")
-            cursor.execute("RELEASE SAVEPOINT legacy_command_evidence_probe")
-        deployment_write = UiDeploymentWrite(
-            project_id=project_id,
-            environment_id=f"environment-{suffix}",
-            base_url="http://127.0.0.1:8080",
-            deployment_revision=deployment_revision,
-            repository_revision=committed.result_repository_revision,
-        )
-        plan_write = UiExecutionPlanWrite(
-            plan_id=plan_id,
-            project_id=project_id,
-            analysis_case_id=case_id,
-            edit_packet_id=packet_request.edit_packet_id,
-            edit_result_id=committed.record.edit_result_id,
-            environment_id=f"environment-{suffix}",
-            deployment_revision=deployment_revision,
-        )
-        plan = ui_service.build_plan(deployment=deployment_write, plan=plan_write)
-        plan_replay = ui_service.build_plan(deployment=deployment_write, plan=plan_write)
-        assert plan.created
-        assert not plan_replay.created
-        assert plan.status == "preflight_pending"
-        with connection.cursor() as cursor:
-            cursor.execute("SAVEPOINT plan_identity_probe")
-            cursor.execute(
-                """
-                UPDATE ui_execution_plans SET repository_revision = 'drifted-revision'
-                WHERE ui_execution_plan_id = %s
-                """,
-                (plan_id,),
-            )
-        with pytest.raises(PersistenceConflictError, match="different scope"):
-            ui_service.build_plan(deployment=deployment_write, plan=plan_write)
-        with connection.cursor() as cursor:
-            cursor.execute("ROLLBACK TO SAVEPOINT plan_identity_probe")
-            cursor.execute("RELEASE SAVEPOINT plan_identity_probe")
-        plan_query_response = mcp_server.handle(
-            {
-                "jsonrpc": "2.0",
-                "id": 6,
-                "method": "tools/call",
-                "params": {
-                    "name": "verification_get_ui_plan",
-                    "arguments": {"project_id": project_id, "plan_id": plan_id},
-                },
-            }
-        )
-        assert plan_query_response is not None
-        plan_query = plan_query_response["result"]["structuredContent"]
-        assert plan_query["deployment_revision"] == deployment_revision
-        assert plan_query["repository_revision"] == committed.result_repository_revision
-        assert plan_query["repository_binding_status"] == "verified"
-        assert plan_query["scenario_versions"] == [
-            {
-                "scenario_id": scenario_id,
-                "scenario_version_id": scenario_version_id,
-                "execution_order": 1,
-            }
-        ]
-        canonical_proposal = UiKnowledgeProposalService(
-            connection=connection,
-            contracts=contracts,
-        ).propose(
-            UiKnowledgeProposalRequest(
-                project_id=project_id,
-                document_snapshot_id=after.snapshot_id,
-                environment_id=f"environment-{suffix}",
-                deployment_revision=deployment_revision,
-                snapshot_id=f"ui-knowledge-proposal-{suffix}",
-                snapshot_version="proposal-1",
-            )
-        )
-        assert canonical_proposal.snapshot is None
-        assert {item.code for item in canonical_proposal.issues} == {
-            "business_name_missing",
-            "screen_name_missing",
-        }
-        checks = tuple(
-            UiPreflightCheckWrite(
-                check_id=f"preflight-{check_type}-{suffix}",
-                check_type=check_type,
-                status="passed",
-                evidence_ref=f"preflight-evidence:{check_type}",
-            )
-            for check_type in (
-                "environment",
-                "authentication",
-                "test_data",
-                "trigger_path",
-                "locator",
-            )
-        )
-        with pytest.raises(ValueError, match="each required check"):
-            ui_service.record_preflight(
-                project_id=project_id,
-                plan_id=plan_id,
-                attempt_id=f"preflight-incomplete-{suffix}",
-                checks=checks[:-1],
-            )
-        with connection.cursor() as cursor:
-            cursor.execute("SAVEPOINT preflight_source_probe")
-            cursor.execute(
-                "UPDATE ui_environments SET status = 'inactive' WHERE environment_id = %s",
-                (deployment_write.environment_id,),
-            )
-        with pytest.raises(ValueError, match="source is no longer current"):
-            ui_service.record_preflight(
-                project_id=project_id,
-                plan_id=plan_id,
-                attempt_id=f"preflight-stale-source-{suffix}",
-                checks=checks,
-            )
-        with connection.cursor() as cursor:
-            cursor.execute("ROLLBACK TO SAVEPOINT preflight_source_probe")
-            cursor.execute("RELEASE SAVEPOINT preflight_source_probe")
-        blocked_checks = tuple(
-            UiPreflightCheckWrite(
-                check_id=f"preflight-blocked-{check.check_type}-{suffix}",
-                check_type=check.check_type,
-                status="blocked" if check.check_type == "environment" else "passed",
-                evidence_ref=check.evidence_ref,
-                reason="Target is starting" if check.check_type == "environment" else None,
-            )
-            for check in checks
-        )
-        blocked_preflight = ui_service.record_preflight(
-            project_id=project_id,
-            plan_id=plan_id,
-            attempt_id=f"preflight-attempt-blocked-{suffix}",
-            checks=blocked_checks,
-        )
-        assert blocked_preflight.status == "blocked"
-        ready = ui_service.record_preflight(
-            project_id=project_id,
-            plan_id=plan_id,
-            attempt_id=f"preflight-attempt-passed-{suffix}",
-            checks=checks,
-        )
-        assert ready.status == "ready"
-        ready_replay = ui_service.record_preflight(
-            project_id=project_id,
-            plan_id=plan_id,
-            attempt_id=f"preflight-attempt-passed-{suffix}",
-            checks=checks,
-        )
-        assert ready_replay.status == "ready"
-        packet_test_files = set(packet.artifact["test_files"])
-        impact_item_id = str(
-            next(
-                item["impact_item_id"]
-                for item in packet.artifact["allowed_items"]
-                if item["target_path"] not in packet_test_files
-            )
-        )
-        knowledge_snapshot_id = f"ui-knowledge-{suffix}"
-        knowledge = UiKnowledgeSnapshot.from_dict(
-            {
-                "snapshot_id": knowledge_snapshot_id,
-                "project_id": project_id,
-                "environment_id": f"environment-{suffix}",
-                "deployment_revision": deployment_revision,
-                "snapshot_version": "1.0.0",
-                "review_status": "approved",
-                "reviewed_by": "qa@example.com",
-                "activate": True,
-                "targets": [
-                    {
-                        "target_ref": "expense.result-rows",
-                        "business_name": "経費検索結果",
-                        "screen_name": "経費一覧",
-                        "trigger_path": "/expenses",
-                        "source_fact_refs": [evidence_ref],
-                        "candidates": [
-                            {
-                                "candidate_id": f"locator-expense-rows-{suffix}",
-                                "locator": {
-                                    "strategy": "test_id",
-                                    "value": "expense-row",
-                                },
-                                "priority": 1,
-                                "reliability_score": 0.97,
-                                "source": "screen_design_and_runtime",
-                            }
-                        ],
-                    }
-                ],
-            }
-        )
-        knowledge_repository = UiKnowledgeRepository(connection)
-        assert knowledge_repository.store(knowledge).created
-        assert not knowledge_repository.store(knowledge).created
-        assert (
-            knowledge_repository.load_approved(
-                project_id=project_id,
-                snapshot_id=knowledge_snapshot_id,
-                environment_id=f"environment-{suffix}",
-                deployment_revision=deployment_revision,
-            )
-            == knowledge
-        )
-        with connection.cursor() as cursor:
-            cursor.execute("SAVEPOINT ui_knowledge_identity_probe")
-            cursor.execute(
-                """
-                UPDATE ui_locator_candidates SET locator_value = 'drifted-expense-row'
-                WHERE ui_knowledge_snapshot_id = %s
-                """,
-                (knowledge_snapshot_id,),
-            )
-        with pytest.raises(PersistenceConflictError, match="normalized identity differs"):
-            knowledge_repository.load_approved(
-                project_id=project_id,
-                snapshot_id=knowledge_snapshot_id,
-                environment_id=f"environment-{suffix}",
-                deployment_revision=deployment_revision,
-            )
-        with pytest.raises(PersistenceConflictError, match="normalized identity differs"):
-            knowledge_repository.store(knowledge)
-        with connection.cursor() as cursor:
-            cursor.execute("ROLLBACK TO SAVEPOINT ui_knowledge_identity_probe")
-            cursor.execute("RELEASE SAVEPOINT ui_knowledge_identity_probe")
-        replacement_payload: dict[str, Any] = json.loads(json.dumps(knowledge.to_dict()))
-        replacement_payload["snapshot_id"] = f"ui-knowledge-replacement-{suffix}"
-        replacement_payload["snapshot_version"] = "1.1.0"
-        replacement_payload["targets"][0]["candidates"][0]["candidate_id"] = (
-            f"locator-expense-rows-replacement-{suffix}"
-        )
-        replacement = UiKnowledgeSnapshot.from_dict(replacement_payload)
-        assert knowledge_repository.store(replacement).active
-        assert not knowledge_repository.store(knowledge).active
-        assert not knowledge_repository.load_approved(
-            project_id=project_id,
-            snapshot_id=knowledge_snapshot_id,
-        ).activate
-        runtime_observation_request = UiRuntimeObservationRequest(
-            project_id=project_id,
-            source_snapshot_id=knowledge_snapshot_id,
-            observation_run_id=f"ui-observation-run-{suffix}",
-            result_snapshot_id=f"ui-knowledge-observed-{suffix}",
-            result_snapshot_version="1.0.1-draft",
-        )
-        runtime_service = UiRuntimeObservationService(
-            connection=connection,
-            observer=_PassingUiKnowledgeRuntimeObserver(),
-        )
-        runtime_observed = runtime_service.observe(runtime_observation_request)
-        runtime_replay = runtime_service.observe(runtime_observation_request)
-        assert runtime_observed.record.created
-        assert not runtime_replay.record.created
-        assert runtime_observed.record.status == "completed"
-        with connection.cursor() as cursor:
-            cursor.execute("SAVEPOINT runtime_observation_identity_probe")
-            cursor.execute(
-                """
-                UPDATE ui_locator_observations SET locator_value = 'drifted-runtime-locator'
-                WHERE ui_locator_observation_run_id = %s
-                """,
-                (runtime_observation_request.observation_run_id,),
-            )
-        with pytest.raises(PersistenceConflictError, match="Observation rows differ"):
-            UiLocatorObservationRepository(connection).store(
-                run_id=runtime_observation_request.observation_run_id,
-                source=knowledge_repository.load(
-                    project_id=project_id,
-                    snapshot_id=knowledge_snapshot_id,
-                ),
-                result=runtime_observed.observation,
-            )
-        with connection.cursor() as cursor:
-            cursor.execute("ROLLBACK TO SAVEPOINT runtime_observation_identity_probe")
-            cursor.execute("RELEASE SAVEPOINT runtime_observation_identity_probe")
-        observed_snapshot = knowledge_repository.load(
-            project_id=project_id,
-            snapshot_id=runtime_observation_request.result_snapshot_id,
-        )
-        assert observed_snapshot.review_status == "draft"
-        assert observed_snapshot.targets[0].candidates[0].reliability_score == 0.97
-        knowledge_review_request = UiKnowledgeReviewRequest(
-            project_id=project_id,
-            source_snapshot_id=runtime_observation_request.result_snapshot_id,
-            review_event_id=f"ui-knowledge-review-{suffix}",
-            result_snapshot_id=f"ui-knowledge-reviewed-{suffix}",
-            result_snapshot_version="1.0.1",
-            decision="approved",
-            reviewed_by="qa@example.invalid",
-            reason="runtime Locator observation passed",
-            activate=True,
-        )
-        knowledge_review_service = UiKnowledgeReviewService(connection=connection)
-        knowledge_review = knowledge_review_service.review(knowledge_review_request)
-        knowledge_review_replay = knowledge_review_service.review(knowledge_review_request)
-        assert knowledge_review.record.created
-        assert not knowledge_review_replay.record.created
-        assert knowledge_review.record.active
-        assert knowledge_review.snapshot.review_status == "approved"
-        assert knowledge_review.snapshot.activate
-        with connection.cursor() as cursor:
-            cursor.execute("SAVEPOINT knowledge_review_result_identity_probe")
-            cursor.execute(
-                """
-                UPDATE ui_locator_candidates SET reliability_score = 0.81
-                WHERE ui_knowledge_snapshot_id = %s
-                """,
-                (knowledge_review_request.result_snapshot_id,),
-            )
-        with pytest.raises(PersistenceConflictError, match="normalized identity differs"):
-            knowledge_review_service.review(knowledge_review_request)
-        with connection.cursor() as cursor:
-            cursor.execute("ROLLBACK TO SAVEPOINT knowledge_review_result_identity_probe")
-            cursor.execute("RELEASE SAVEPOINT knowledge_review_result_identity_probe")
-        assert (
-            knowledge_review.snapshot.targets[0].candidates[0].candidate_id
-            == observed_snapshot.targets[0].candidates[0].candidate_id
-        )
-        assert (
-            knowledge_repository.load_approved(
-                project_id=project_id,
-                snapshot_id=knowledge_review_request.result_snapshot_id,
-            )
-            == knowledge_review.snapshot
-        )
-        manifest_id = f"browser-manifest-{suffix}"
-        browser_manifest = BrowserExecutionManifest.from_dict(
-            {
-                "manifest_id": manifest_id,
-                "plan_id": plan_id,
-                "project_id": project_id,
-                "browser": {
-                    "name": "chromium",
-                    "channel": "chrome",
-                    "headless": True,
-                    "viewport": {"width": 1280, "height": 720},
-                },
-                "review_status": "approved",
-                "reviewed_by": "qa@example.com",
-                "ui_knowledge_snapshot_id": knowledge_review_request.result_snapshot_id,
-                "scenarios": [
-                    {
-                        "scenario_id": scenario_id,
-                        "trigger_path": "/expenses",
-                        "impact_item_refs": [impact_item_id],
-                        "actions": [],
-                        "assertions": [
-                            {
-                                "assertion_id": "all-expenses-visible",
-                                "kind": "count_equals",
-                                "locator": {"target_ref": "expense.result-rows"},
-                                "expected": {"source": "literal", "value": "4"},
-                                "failure_category": "business_assertion",
-                            }
-                        ],
-                        "preflight_assertions": [
-                            {
-                                "assertion_id": "expense-data-ready",
-                                "kind": "count_equals",
-                                "locator": {"target_ref": "expense.result-rows"},
-                                "expected": {"source": "literal", "value": "4"},
-                                "failure_category": "test_data",
-                            }
-                        ],
-                        "redaction_locators": [],
-                    }
-                ],
-            }
-        )
-        browser_registration = BrowserExecutionService(
-            connection=connection,
-            contracts=contracts,
-        )
-        wrong_trigger: dict[str, Any] = json.loads(json.dumps(browser_manifest.to_dict()))
-        wrong_trigger["manifest_id"] = f"browser-manifest-wrong-trigger-{suffix}"
-        wrong_trigger["review_status"] = "draft"
-        wrong_trigger["reviewed_by"] = None
-        wrong_trigger["scenarios"][0]["trigger_path"] = "/unapproved-route"
-        with pytest.raises(ValueError, match="trigger_path differs"):
-            browser_registration.register_manifest(
-                BrowserExecutionManifest.from_dict(wrong_trigger)
-            )
-        wrong_coverage: dict[str, Any] = json.loads(json.dumps(browser_manifest.to_dict()))
-        wrong_coverage["manifest_id"] = f"browser-manifest-wrong-coverage-{suffix}"
-        wrong_coverage["review_status"] = "draft"
-        wrong_coverage["reviewed_by"] = None
-        wrong_coverage["scenarios"][0]["impact_item_refs"] = ["impact-item-outside-packet"]
-        with pytest.raises(ValueError, match="cover every Packet Impact Item"):
-            browser_registration.register_manifest(
-                BrowserExecutionManifest.from_dict(wrong_coverage)
-            )
-        assert browser_registration.register_manifest(browser_manifest).created
-        assert not browser_registration.register_manifest(browser_manifest).created
-        manifest_repository = UiBrowserManifestRepository(connection)
-        assert (
-            manifest_repository.load_approved(
-                project_id=project_id,
-                plan_id=plan_id,
-            ).manifest.manifest_id
-            == manifest_id
-        )
-        with connection.cursor() as cursor:
-            cursor.execute("SAVEPOINT manifest_identity_probe")
-            cursor.execute(
-                """
-                UPDATE ui_browser_scenario_specs SET trigger_path = '/drifted-route'
-                WHERE browser_manifest_id = %s
-                """,
-                (manifest_id,),
-            )
-        with pytest.raises(PersistenceConflictError, match="normalized Scenario content"):
-            browser_registration.register_manifest(browser_manifest)
-        with pytest.raises(PersistenceConflictError, match="normalized identity differs"):
-            manifest_repository.load_approved(project_id=project_id, plan_id=plan_id)
-        with connection.cursor() as cursor:
-            cursor.execute("ROLLBACK TO SAVEPOINT manifest_identity_probe")
-            cursor.execute("RELEASE SAVEPOINT manifest_identity_probe")
-
-        automated_plan_id = f"ui-plan-automated-preflight-{suffix}"
-        automated_plan = ui_service.build_plan(
-            deployment=UiDeploymentWrite(
-                project_id=project_id,
-                environment_id=f"environment-{suffix}",
-                base_url="http://127.0.0.1:8080",
-                deployment_revision=deployment_revision,
-                repository_revision=committed.result_repository_revision,
-            ),
-            plan=UiExecutionPlanWrite(
-                plan_id=automated_plan_id,
-                project_id=project_id,
-                analysis_case_id=case_id,
-                edit_packet_id=packet_request.edit_packet_id,
-                edit_result_id=committed.record.edit_result_id,
-                environment_id=f"environment-{suffix}",
-                deployment_revision=deployment_revision,
-            ),
-        )
-        assert automated_plan.status == "preflight_pending"
-        automated_manifest_payload: dict[str, Any] = json.loads(
-            json.dumps(browser_manifest.to_dict())
-        )
-        automated_manifest_payload["manifest_id"] = f"browser-manifest-automated-{suffix}"
-        automated_manifest_payload["plan_id"] = automated_plan_id
-        automated_manifest = BrowserExecutionManifest.from_dict(automated_manifest_payload)
-        assert browser_registration.register_manifest(automated_manifest).created
-        automated_preflight = BrowserPreflightService(
-            connection=connection,
-            probe=_PassingBrowserPreflightProbe(),
-        ).inspect(
-            BrowserPreflightRequest(
-                project_id=project_id,
-                plan_id=automated_plan_id,
-                manifest_id=automated_manifest.manifest_id,
-                attempt_id=f"preflight-attempt-automated-{suffix}",
-            )
-        )
-        assert automated_preflight.status == "ready"
-
-        with connection.cursor() as cursor:
-            cursor.execute("SAVEPOINT run_deployment_source_probe")
-            cursor.execute(
-                "UPDATE ui_deployments SET status = 'stale' "
-                "WHERE environment_id = %s AND deployment_revision = %s",
-                (deployment_write.environment_id, deployment_revision),
-            )
-        with pytest.raises(ValueError, match="source is no longer current"):
-            ui_service.start_run(
-                project_id=project_id,
-                plan_id=plan_id,
-                run_id=f"ui-run-retired-deployment-{suffix}",
-                approval_grant_id=grant_id,
-            )
-        with connection.cursor() as cursor:
-            cursor.execute("ROLLBACK TO SAVEPOINT run_deployment_source_probe")
-            cursor.execute("RELEASE SAVEPOINT run_deployment_source_probe")
-
-        with connection.cursor() as cursor:
-            cursor.execute("SAVEPOINT revoked_ui_completion_probe")
-        revoked_run_id = f"ui-run-revoked-after-start-{suffix}"
-        ui_service.start_run(
-            project_id=project_id,
-            plan_id=plan_id,
-            run_id=revoked_run_id,
-            approval_grant_id=grant_id,
-        )
-        assert grant_service.revoke(
-            event_id=f"approval-revocation-after-ui-start-{suffix}",
-            grant_id=grant_id,
-            project_id=project_id,
-            revoked_by="reviewer@example.invalid",
-            reason="Exercise completion-time UI reauthorization",
-        )
-        revoked_screenshot_id = f"evidence-revoked-screenshot-{suffix}"
-        revoked_assertion_id = f"evidence-revoked-assertion-{suffix}"
-        with pytest.raises(ValueError, match="state: revoked"):
-            ui_service.complete_run(
-                verification_result_id=f"ui-verification-revoked-{suffix}",
-                project_id=project_id,
-                run_id=revoked_run_id,
-                scenario_results=(
-                    UiScenarioResultWrite(
-                        scenario_id=scenario_id,
-                        status="passed",
-                        impact_item_refs=(impact_item_id,),
-                        evidence_refs=(revoked_screenshot_id, revoked_assertion_id),
-                        failure_category="none",
-                    ),
-                ),
-                evidence=(
-                    UiExecutionEvidenceWrite(
-                        evidence_id=revoked_screenshot_id,
-                        scenario_id=scenario_id,
-                        evidence_type="screenshot",
-                        evidence_ref=f"evidence://{revoked_screenshot_id}",
-                        content_digest=hashlib.sha256(b"revoked screenshot").hexdigest(),
-                        sanitized=True,
-                    ),
-                    UiExecutionEvidenceWrite(
-                        evidence_id=revoked_assertion_id,
-                        scenario_id=scenario_id,
-                        evidence_type="assertion",
-                        evidence_ref=f"evidence://{revoked_assertion_id}",
-                        content_digest=hashlib.sha256(b"revoked assertion").hexdigest(),
-                        sanitized=True,
-                    ),
-                ),
-            )
-        revoked_recovery_result_id = f"ui-recovery-revoked-{suffix}"
-        revoked_recovery = ui_service.recover_run(
-            verification_result_id=revoked_recovery_result_id,
-            project_id=project_id,
-            run_id=revoked_run_id,
-            recovery=UiRunRecovery(
-                recovery_id=revoked_recovery_result_id,
-                actor="operator@example.invalid",
-                reason="Grant was revoked while the browser Run was active",
-                stale_before=datetime.now(UTC),
-            ),
-        )
-        assert revoked_recovery.record.status == "blocked"
-        with connection.cursor() as cursor:
-            cursor.execute("ROLLBACK TO SAVEPOINT revoked_ui_completion_probe")
-            cursor.execute("RELEASE SAVEPOINT revoked_ui_completion_probe")
-
-        with connection.cursor() as cursor:
-            cursor.execute("SAVEPOINT failed_ui_probe")
-        failed_run_id = f"ui-run-failed-{suffix}"
-        ui_service.start_run(
-            project_id=project_id,
-            plan_id=plan_id,
-            run_id=failed_run_id,
-            approval_grant_id=grant_id,
-        )
-        failed_evidence_id = f"evidence-failed-assertion-{suffix}"
-        failed = ui_service.complete_run(
-            verification_result_id=f"ui-verification-failed-{suffix}",
-            project_id=project_id,
-            run_id=failed_run_id,
-            scenario_results=(
-                UiScenarioResultWrite(
-                    scenario_id=scenario_id,
-                    status="failed",
-                    impact_item_refs=(impact_item_id,),
-                    evidence_refs=(failed_evidence_id,),
-                    failure_category="business_assertion",
-                    summary="The default filter did not show every expense.",
-                ),
-            ),
-            evidence=(
-                UiExecutionEvidenceWrite(
-                    evidence_id=failed_evidence_id,
-                    scenario_id=scenario_id,
-                    evidence_type="assertion",
-                    evidence_ref=f"evidence://{failed_evidence_id}",
-                    content_digest=hashlib.sha256(b"assertion failed").hexdigest(),
-                    sanitized=True,
-                ),
-            ),
-        )
-        assert failed.record.status == "failed"
-        assert failed.record.case_status == "failed"
-        with connection.cursor() as cursor:
-            cursor.execute("ROLLBACK TO SAVEPOINT failed_ui_probe")
-            cursor.execute("RELEASE SAVEPOINT failed_ui_probe")
-
-        with connection.cursor() as cursor:
-            cursor.execute("SAVEPOINT reanalysis_ui_probe")
-        reanalysis_run_id = f"ui-run-reanalysis-{suffix}"
-        ui_service.start_run(
-            project_id=project_id,
-            plan_id=plan_id,
-            run_id=reanalysis_run_id,
-            approval_grant_id=grant_id,
-        )
-        reanalysis_screenshot_id = f"evidence-reanalysis-screenshot-{suffix}"
-        reanalysis_assertion_id = f"evidence-reanalysis-assertion-{suffix}"
-        reanalysis = ui_service.complete_run(
-            verification_result_id=f"ui-verification-reanalysis-{suffix}",
-            project_id=project_id,
-            run_id=reanalysis_run_id,
-            scenario_results=(
-                UiScenarioResultWrite(
-                    scenario_id=scenario_id,
-                    status="passed",
-                    impact_item_refs=(impact_item_id,),
-                    evidence_refs=(reanalysis_screenshot_id, reanalysis_assertion_id),
-                    failure_category="none",
-                ),
-            ),
-            evidence=(
-                UiExecutionEvidenceWrite(
-                    evidence_id=reanalysis_screenshot_id,
-                    scenario_id=scenario_id,
-                    evidence_type="screenshot",
-                    evidence_ref=f"evidence://{reanalysis_screenshot_id}",
-                    content_digest=hashlib.sha256(b"reanalysis screenshot").hexdigest(),
-                    sanitized=True,
-                ),
-                UiExecutionEvidenceWrite(
-                    evidence_id=reanalysis_assertion_id,
-                    scenario_id=scenario_id,
-                    evidence_type="assertion",
-                    evidence_ref=f"evidence://{reanalysis_assertion_id}",
-                    content_digest=hashlib.sha256(b"reanalysis assertion").hexdigest(),
-                    sanitized=True,
-                ),
-            ),
-            out_of_scope_files=("src/main/java/example/Unapproved.java",),
-        )
-        assert reanalysis.record.status == "reanalysis_required"
-        assert reanalysis.record.case_status == "reanalysis_required"
-        with connection.cursor() as cursor:
-            cursor.execute("ROLLBACK TO SAVEPOINT reanalysis_ui_probe")
-            cursor.execute("RELEASE SAVEPOINT reanalysis_ui_probe")
-
-        blocked_run_id = f"ui-run-blocked-{suffix}"
-        untrusted_execution = BrowserExecutionService(
-            connection=connection,
-            contracts=contracts,
-            executor=_UntrustedBrowserExecutor(scenario_id),
-        ).execute(
-            BrowserExecutionRequest(
-                project_id=project_id,
-                plan_id=plan_id,
-                manifest_id=manifest_id,
-                run_id=blocked_run_id,
-                verification_result_id=f"ui-verification-blocked-{suffix}",
-                approval_grant_id=grant_id,
-            )
-        )
-        ui_blocked = untrusted_execution.verification
-        assert ui_blocked.record.status == "blocked"
-        assert ui_blocked.record.case_status == "verifying_ui"
-
-        executor_error_run_id = f"ui-run-executor-error-{suffix}"
-        with pytest.raises(BrowserExecutionRuntimeError, match="recorded as blocked"):
-            BrowserExecutionService(
-                connection=connection,
-                contracts=contracts,
-                executor=_ExplodingBrowserExecutor(),
-            ).execute(
-                BrowserExecutionRequest(
-                    project_id=project_id,
-                    plan_id=plan_id,
-                    manifest_id=manifest_id,
-                    run_id=executor_error_run_id,
-                    verification_result_id=f"ui-verification-executor-error-{suffix}",
-                    approval_grant_id=grant_id,
-                )
-            )
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT status FROM ui_execution_runs WHERE ui_execution_run_id = %s",
-                (executor_error_run_id,),
-            )
-            assert cursor.fetchone() == ("blocked",)
-
-        interrupted_run_id = f"ui-run-interrupted-{suffix}"
-        interrupted_result_id = f"ui-verification-interrupted-{suffix}"
-        ui_service.start_run(
-            project_id=project_id,
-            plan_id=plan_id,
-            run_id=interrupted_run_id,
-            approval_grant_id=grant_id,
-        )
-        recovery = UiRunRecovery(
-            recovery_id=interrupted_result_id,
-            actor="operator@example.invalid",
-            reason="browser worker process was interrupted",
-            stale_before=datetime.now(UTC),
-        )
-        recovered = ui_service.recover_run(
-            verification_result_id=interrupted_result_id,
-            project_id=project_id,
-            run_id=interrupted_run_id,
-            recovery=recovery,
-        )
-        recovered_replay = ui_service.recover_run(
-            verification_result_id=interrupted_result_id,
-            project_id=project_id,
-            run_id=interrupted_run_id,
-            recovery=recovery,
-        )
-        assert recovered.record.created
-        assert not recovered_replay.record.created
-        assert recovered.artifact["status"] == "blocked"
-        assert recovered.artifact["recovery"] == recovery.to_dict()
-
-        run_id = f"ui-run-{suffix}"
-        result_id = f"ui-verification-result-{suffix}"
-        browser_execution = BrowserExecutionService(
-            connection=connection,
-            contracts=contracts,
-            executor=_PassingBrowserExecutor(scenario_id, impact_item_id),
-        ).execute(
-            BrowserExecutionRequest(
-                project_id=project_id,
-                plan_id=plan_id,
-                manifest_id=manifest_id,
-                run_id=run_id,
-                verification_result_id=result_id,
-                approval_grant_id=grant_id,
-            )
-        )
-        ui_result = browser_execution.verification
-        assert ui_result.record.created
-        assert browser_execution.run.created
-        assert ui_result.artifact["status"] == "passed"
-        assert ui_result.artifact["repository_revision"] == committed.result_repository_revision
-        assert ui_result.artifact["unresolved_impact_item_ids"] == []
-        assert grant_repository.inspect(grant_id).state == "completed"
-
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                UPDATE ui_execution_plans
-                SET status = 'blocked',
-                    blocking_reasons = '["retired_for_revalidation"]'::jsonb
-                WHERE ui_execution_plan_id = %s AND status = 'ready'
-                """,
-                (automated_plan_id,),
-            )
-        revalidation_plan_id = f"ui-plan-revalidation-{suffix}"
-        revalidation_plan = ui_service.build_plan(
-            deployment=deployment_write,
-            plan=UiExecutionPlanWrite(
-                plan_id=revalidation_plan_id,
-                project_id=project_id,
-                analysis_case_id=case_id,
-                edit_packet_id=packet_request.edit_packet_id,
-                edit_result_id=committed.record.edit_result_id,
-                environment_id=deployment_write.environment_id,
-                deployment_revision=deployment_write.deployment_revision,
-            ),
-        )
-        assert revalidation_plan.status == "preflight_pending"
-        revalidation_manifest_payload: dict[str, Any] = json.loads(
-            json.dumps(browser_manifest.to_dict())
-        )
-        revalidation_manifest_id = f"browser-manifest-revalidation-{suffix}"
-        revalidation_manifest_payload["manifest_id"] = revalidation_manifest_id
-        revalidation_manifest_payload["plan_id"] = revalidation_plan_id
-        revalidation_manifest = BrowserExecutionManifest.from_dict(revalidation_manifest_payload)
-        assert browser_registration.register_manifest(revalidation_manifest).created
-        revalidation_preflight = BrowserPreflightService(
-            connection=connection,
-            probe=_PassingBrowserPreflightProbe(),
-        ).inspect(
-            BrowserPreflightRequest(
-                project_id=project_id,
-                plan_id=revalidation_plan_id,
-                manifest_id=revalidation_manifest_id,
-                attempt_id=f"browser-preflight-revalidation-{suffix}",
-            )
-        )
-        assert revalidation_preflight.status == "ready"
-        revalidation_execution = BrowserExecutionService(
-            connection=connection,
-            contracts=contracts,
-            executor=_PassingBrowserExecutor(scenario_id, impact_item_id),
-        ).execute(
-            BrowserExecutionRequest(
-                project_id=project_id,
-                plan_id=revalidation_plan_id,
-                manifest_id=revalidation_manifest_id,
-                run_id=f"ui-run-revalidation-{suffix}",
-                verification_result_id=f"ui-verification-revalidation-{suffix}",
-                approval_grant_id=grant_id,
-            )
-        )
-        assert revalidation_execution.verification.artifact["status"] == "passed"
-        assert grant_repository.inspect(grant_id).state == "completed"
-        validation_query_response = mcp_server.handle(
-            {
-                "jsonrpc": "2.0",
-                "id": 7,
-                "method": "tools/call",
-                "params": {
-                    "name": "validation_get_result",
-                    "arguments": {
-                        "project_id": project_id,
-                        "verification_result_id": result_id,
-                    },
-                },
-            }
-        )
-        assert validation_query_response is not None
-        validation_query = validation_query_response["result"]["structuredContent"]
-        assert validation_query["artifact"] == ui_result.artifact
-        assert validation_query["current_status"] == "passed"
-        grant_after_completion_replay = grant_service.issue(grant_request)
-        assert not grant_after_completion_replay.record.created
-        assert grant_after_completion_replay.record.state == "completed"
-        run_after_completion_replay = ui_service.start_run(
-            project_id=project_id,
-            plan_id=plan_id,
-            run_id=run_id,
-            approval_grant_id=grant_id,
-        )
-        assert not run_after_completion_replay.created
-        assert run_after_completion_replay.status == "completed"
-        with connection.cursor() as cursor:
-            cursor.execute("SAVEPOINT completed_run_identity_probe")
-            cursor.execute(
-                """
-                UPDATE ui_execution_plans SET repository_revision = 'drifted-after-run'
-                WHERE ui_execution_plan_id = %s
-                """,
-                (plan_id,),
-            )
-        with pytest.raises(PersistenceConflictError, match="normalized identity differs"):
-            UiVerificationRepository(connection).find_run(
-                project_id=project_id,
-                plan_id=plan_id,
-                run_id=run_id,
-                approval_grant_id=grant_id,
-            )
-        with connection.cursor() as cursor:
-            cursor.execute("ROLLBACK TO SAVEPOINT completed_run_identity_probe")
-            cursor.execute("RELEASE SAVEPOINT completed_run_identity_probe")
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT status FROM analysis_cases WHERE analysis_case_id = %s",
-                (case_id,),
-            )
-            assert cursor.fetchone() == ("passed",)
 
         blocked = impact_service.run(
             ImpactReportRequest(
@@ -2634,166 +1997,6 @@ def _code_graph_artifact(
             },
         ],
     }
-
-
-class _ExplodingBrowserExecutor:
-    def execute(
-        self,
-        *,
-        manifest: BrowserExecutionManifest,
-        base_url: str,
-        run_id: str,
-        storage_state: Path | None = None,
-    ) -> BrowserExecutionOutput:
-        raise ValueError("simulated Evidence Store failure")
-
-
-class _PassingBrowserPreflightProbe:
-    def inspect(
-        self,
-        *,
-        manifest: BrowserExecutionManifest,
-        base_url: str,
-        attempt_id: str,
-        storage_state: Path | None = None,
-    ) -> tuple[BrowserPreflightObservation, ...]:
-        locator = manifest.scenarios[0].assertions[0].locator
-        assert locator.target_ref is None
-        assert locator.strategy is not None and locator.strategy.value == "test_id"
-        assert locator.value == "expense-row"
-        assert base_url == "http://127.0.0.1:8080"
-        return tuple(
-            BrowserPreflightObservation(
-                check_type=check_type,
-                status="passed",
-                evidence_ref=f"preflight://{attempt_id}/{check_type}",
-            )
-            for check_type in (
-                "environment",
-                "authentication",
-                "test_data",
-                "trigger_path",
-                "locator",
-            )
-        )
-
-
-class _PassingUiKnowledgeRuntimeObserver:
-    def observe(
-        self,
-        *,
-        source: UiKnowledgeSnapshot,
-        base_url: str,
-        observation_run_id: str,
-        result_snapshot_id: str,
-        result_snapshot_version: str,
-        storage_state: Path | None = None,
-    ) -> UiRuntimeObservationResult:
-        assert base_url == "http://127.0.0.1:8080"
-        assert storage_state is None
-        candidate = source.targets[0].candidates[0]
-        observation = UiRuntimeLocatorObservation(
-            observation_id=runtime_observation_id(
-                observation_run_id,
-                source.targets[0].target_ref,
-                candidate.candidate_id,
-            ),
-            target_ref=source.targets[0].target_ref,
-            candidate_id=candidate.candidate_id,
-            locator=candidate.locator,
-            status=UiLocatorObservationStatus.UNIQUE_VISIBLE,
-            match_count=1,
-            visible_count=1,
-            discovered=False,
-        )
-        snapshot = UiRuntimeObservationMerger().merge(
-            source=source,
-            observations=(observation,),
-            result_snapshot_id=result_snapshot_id,
-            result_snapshot_version=result_snapshot_version,
-        )
-        return UiRuntimeObservationResult(
-            status="completed",
-            snapshot=snapshot,
-            observations=(observation,),
-            issues=(),
-        )
-
-
-class _UntrustedBrowserExecutor:
-    def __init__(self, scenario_id: str) -> None:
-        self._scenario_id = scenario_id
-
-    def execute(
-        self,
-        *,
-        manifest: BrowserExecutionManifest,
-        base_url: str,
-        run_id: str,
-        storage_state: Path | None = None,
-    ) -> BrowserExecutionOutput:
-        return BrowserExecutionOutput(
-            scenario_results=(
-                BrowserScenarioOutcome(
-                    scenario_id=self._scenario_id,
-                    status="passed",
-                    impact_item_refs=("impact-item-outside-approved-manifest",),
-                    evidence_refs=(),
-                    failure_category="none",
-                    summary="Untrusted executor tried to claim success.",
-                ),
-            ),
-            evidence=(),
-        )
-
-
-class _PassingBrowserExecutor:
-    def __init__(self, scenario_id: str, impact_item_id: str) -> None:
-        self._scenario_id = scenario_id
-        self._impact_item_id = impact_item_id
-
-    def execute(
-        self,
-        *,
-        manifest: BrowserExecutionManifest,
-        base_url: str,
-        run_id: str,
-        storage_state: Path | None = None,
-    ) -> BrowserExecutionOutput:
-        assert manifest.scenarios[0].scenario_id == self._scenario_id
-        assert base_url == "http://127.0.0.1:8080"
-        assert storage_state is None
-        screenshot_id = f"evidence-screenshot-{run_id}"
-        assertion_id = f"evidence-assertion-{run_id}"
-        evidence = (
-            StoredBrowserEvidence(
-                evidence_id=screenshot_id,
-                scenario_id=self._scenario_id,
-                evidence_type="screenshot",
-                evidence_ref=f"evidence://{manifest.project_id}/{run_id}/{screenshot_id}",
-                content_digest=hashlib.sha256(b"sanitized screenshot").hexdigest(),
-            ),
-            StoredBrowserEvidence(
-                evidence_id=assertion_id,
-                scenario_id=self._scenario_id,
-                evidence_type="assertion",
-                evidence_ref=f"evidence://{manifest.project_id}/{run_id}/{assertion_id}",
-                content_digest=hashlib.sha256(b"assertion passed").hexdigest(),
-            ),
-        )
-        return BrowserExecutionOutput(
-            scenario_results=(
-                BrowserScenarioOutcome(
-                    scenario_id=self._scenario_id,
-                    status="passed",
-                    impact_item_refs=(self._impact_item_id,),
-                    evidence_refs=(screenshot_id, assertion_id),
-                    failure_category="none",
-                    summary="All filter selected and every seeded expense is visible.",
-                ),
-            ),
-            evidence=evidence,
-        )
 
 
 def _load_json(path: Path) -> dict[str, Any]:

@@ -1,0 +1,74 @@
+{
+  "profile_type": "CommandExecutionProfile",
+  "profile_id": "springboot15-thymeleaf-gradle",
+  "profile_version": "1.0.0",
+  "templates": [
+    {
+      "command_ref": "springboot15-compile",
+      "argv": [
+        "./gradlew",
+        "classes",
+        "testClasses",
+        "--no-daemon"
+      ],
+      "working_directory": ".",
+      "timeout_seconds": 900,
+      "expected_exit_codes": [
+        0
+      ],
+      "environment_keys": [
+        "PATH",
+        "HOME",
+        "JAVA_HOME",
+        "GRADLE_USER_HOME",
+        "LANG"
+      ],
+      "output_limit_bytes": 524288,
+      "failure_policy": "record_and_block"
+    },
+    {
+      "command_ref": "springboot15-test",
+      "argv": [
+        "./gradlew",
+        "test",
+        "--no-daemon"
+      ],
+      "working_directory": ".",
+      "timeout_seconds": 1200,
+      "expected_exit_codes": [
+        0
+      ],
+      "environment_keys": [
+        "PATH",
+        "HOME",
+        "JAVA_HOME",
+        "GRADLE_USER_HOME",
+        "LANG"
+      ],
+      "output_limit_bytes": 524288,
+      "failure_policy": "record_and_block"
+    },
+    {
+      "command_ref": "springboot15-build",
+      "argv": [
+        "./gradlew",
+        "build",
+        "--no-daemon"
+      ],
+      "working_directory": ".",
+      "timeout_seconds": 1800,
+      "expected_exit_codes": [
+        0
+      ],
+      "environment_keys": [
+        "PATH",
+        "HOME",
+        "JAVA_HOME",
+        "GRADLE_USER_HOME",
+        "LANG"
+      ],
+      "output_limit_bytes": 1048576,
+      "failure_policy": "record_and_block"
+    }
+  ]
+}

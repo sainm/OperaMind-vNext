@@ -3,8 +3,8 @@
 ## 当前交付
 
 - Python 3.12 项目和严格 Ruff/Mypy/Pytest 配置。
-- 25 個のコア Artifact のバージョン化 catalog と Draft 2020-12 Schema 検証。
-- 25 個のコア Artifact の v1 実行可能 Example と format 検証。
+- 26 個のコア Artifact のバージョン化 catalog と Draft 2020-12 Schema 検証。
+- 26 個のコア Artifact の v1 実行可能 Example と format 検証。
 - Golden Dataset manifest、引用文件、案例身份和 MVP readiness 校验。
 - Golden RAG expectation Schema、三类 Query 冻结 ID/阈值 readiness 校验，以及离线 Recall@5/10、MRR、无关率和跨项目泄漏 evaluator。
 - Golden UI expectation Schema、Project/Case 绑定、Scenario ID/基线结果完整性和业务/QA 批准 readiness 门禁。
@@ -42,7 +42,7 @@ python3.12 -m venv .venv
   --require-mvp-ready
 ```
 
-`--require-ready` 只检查冻结 Golden Dataset，当前显式 Golden 命令已经通过。`--require-mvp-ready` 还要求 `readiness/mvp-readiness.json` 中真实 Provider、人工审批、GitHub Copilot、绑定 target Deployment E2E 和完整 PostgreSQL/Edge 回归全部具有经审核、SHA-256 固定且符合 `readiness/mvp-evidence.schema.json` 的类型化证据。Golden 证据必须与本次命令选择并校验的 manifest 完全一致；完整回归证据的 `operamind-source-tree-v1` 摘要会由校验器重新计算。当前 source tree 必须在 WSL + Podman + Edge 中重建全回归 Evidence，且 `github_copilot_live` 仍为 pending，因此第二个命令按预期失败；不能用代码存在、空证据摘要或 Fake 测试替代真实证据。
+`--require-ready` 只检查冻结 Golden Dataset 的离线回归质量，不是个别 Change Request 的运行时 Impact 门禁。`--require-mvp-ready` 还要求 `readiness/mvp-readiness.json` 中真实 Provider、范围授权、GitHub Copilot、绑定 target Deployment E2E 和完整 PostgreSQL/Edge 回归全部具有经审核、SHA-256 固定且符合 `readiness/mvp-evidence.schema.json` 的类型化证据。Golden 证据必须与本次命令选择并校验的 manifest 完全一致；完整回归证据的 `operamind-source-tree-v1` 摘要会由校验器重新计算。当前 source tree 必须在 WSL + Podman + Edge 中重建全回归 Evidence，且 `github_copilot_live` 仍为 pending，因此第二个命令按预期失败；不能用代码存在、空证据摘要或 Fake 测试替代真实证据。
 
 ## PostgreSQL migration
 
@@ -74,5 +74,5 @@ OPERAMIND_TEST_DATABASE_URL="$OPERAMIND_TEST_DATABASE_URL" \
 
 - 当前已冻结一个由 VisionDemo Silver 检查依据支撑的 Golden 案例，并记录对话审核身份，因此可以宣称 Golden ready。业务负责人／开发／QA 的分角色审核仍可作为治理增强；MVP ready 只因 `github_copilot_live` 外部 gate 尚未通过而不能宣称。
 - Repository-wide MVP readiness manifest 对缺失或漂移证据保持 pending；`operamind-readiness` 从 Canonical PostgreSQL 和真实测试 observation 幂等生成证据、摘要并原子更新 manifest，只有所有真实/本地证据均存在、digest 匹配并经审核后，`--require-mvp-ready` 才可能通过。
-- `0001` 建立 P0 身份、Revision、Analysis Case 和 Artifact exchange 基线；`0002-0004` 增加 P1 Canonical Document/Profile/Change/Review；`0005-0007` 增加 P2 Canonical Node、pgvector Search Index、RAG 状态事件和 Relation Build；`0008-0011` 增加 P3/P4 Code Graph、Impact、Edit Packet 和 Edit Result；`0012-0028` 固定 UI 验证、Browser Manifest、UI Knowledge、Approval Grant、安全命令、Evidence 完整性、历史隔离、Repository Binding 与恢复摘要；`0029-0041` 增加 Readiness、日文 Web、Change Orchestration、Test Data／Closure、Test Case 自然语言修订／撤销／重跑和一键编排；`0042-0046` 增加 Code Graph 增量 lineage、Copilot Bridge 恢复、Runtime Route Evidence 和 Unresolved Evidence Report；`0047-0050` 增加 Agent-neutral Task、Worker Registry／Operation 和优先级调度；`0051-0052` 增加人工 Web 写操作的数据库级幂等 Receipt 和变更行覆盖率；`0053-0054` 增加 UI Locator Profile、Profile Drift 影响传播和可恢复再构筑台账；`0055` 增加 Golden RAG 质量报告与正式分析门禁；`0056` 增加多 Sheet Snapshot 与逐 Fact Variant Provenance。所有 Artifact 复用 P0 不可变 Artifact 存储。
-- 已提供 Embedding Adapter、pgvector Build、hybrid retrieval、Context Package、显式 opt-in 的真实 Provider live 合约测试入口、Approval Grant、无 shell安全命令执行器、十三工具 Copilot stdio MCP Server、loopback local Bridge、可安装 VSIX、Playwright Runner、Readiness Evidence 同步器和日文 FastAPI/Web 控制面。真实本地 Nomic Provider 与 target deployment E2E 已有证据；真实 GitHub Copilot 完成会话仍是外部门禁。
+- `0001` 建立 P0 身份、Revision、Analysis Case 和 Artifact exchange 基线；`0002-0004` 增加 P1 Canonical Document/Profile/Change/Review；`0005-0007` 增加 P2 Canonical Node、pgvector Search Index、RAG 状态事件和 Relation Build；`0008-0011` 增加 P3/P4 Code Graph、Impact、Edit Packet 和 Edit Result；`0012-0028` 固定 UI 验证、Browser Manifest、UI Knowledge、Approval Grant、安全命令、Evidence 完整性、历史隔离、Repository Binding 与恢复摘要；`0029-0041` 增加 Readiness、日文 Web、Change Orchestration、Test Data／Closure 与历史修订能力；`0042-0054` 增加增量 Graph、Bridge 恢复、内部 Task／Worker 与 Profile drift 台账；`0055` 增加 Golden RAG 离线质量报告；`0056` 增加多 Sheet Snapshot 与逐 Fact Variant Provenance；`0057-0059` 增加统一 Copilot Change Task、阶段输出和同一 Task 的执行范围绑定生命周期。所有 Artifact 复用 P0 不可变 Artifact 存储。
+- 已提供 Embedding Adapter、pgvector Build、requirement/hybrid retrieval、Context Package、内部 Approval Grant、无 shell 安全命令执行器、统一 Change Task 的五个主 MCP Tool、loopback local Bridge、可安装 VSIX、TestData/UI Runner、Readiness Evidence 同步器和六工程日文 Web。真实本地 Nomic Provider 与既存 target deployment E2E 有历史证据；重构后的完整 GitHub Copilot 会话和最终 source tree E2E 仍需重新生成。

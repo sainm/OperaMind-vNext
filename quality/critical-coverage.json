@@ -14,10 +14,19 @@
       "src/operamind/infrastructure/postgres/approval_grant_repository.py"
     ],
     "copilot": [
-      "src/operamind/application/copilot_checkpoint.py",
       "src/operamind/application/copilot_coding_task.py",
-      "src/operamind/application/copilot_handoff.py",
+      "src/operamind/application/copilot_document_change.py",
+      "src/operamind/application/copilot_task_context.py",
+      "src/operamind/application/copilot_impact.py",
+      "src/operamind/application/project_stack.py",
       "src/operamind/infrastructure/postgres/copilot_coding_task_repository.py"
+    ],
+    "main_change_flow": [
+      "src/operamind/application/main_change_flow.py",
+      "src/operamind/application/main_flow_coordinator.py",
+      "src/operamind/application/main_flow_execution.py",
+      "src/operamind/web/routers/change_requests.py",
+      "src/operamind/web/routers/projects.py"
     ],
     "task_scheduling": [
       "src/operamind/application/orchestration_task.py",

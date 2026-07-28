@@ -321,7 +321,7 @@ def test_events_and_recovery_are_normalized_for_web_output() -> None:
     }
 
 
-def test_latest_active_scope_fails_closed_and_returns_optional_environment() -> None:
+def test_latest_active_scope_fails_closed_and_returns_authorization() -> None:
     repository = _repository(Cursor())
     with pytest.raises(ValueError, match="include a timezone"):
         repository.latest_active_scope(
@@ -344,7 +344,7 @@ def test_latest_active_scope_fails_closed_and_returns_optional_environment() -> 
         "authorization_id": "authorization-1",
         "blocking_reason": None,
     }
-    repository = _repository(Cursor(one=[(1,), ("https://example.test",)]))
+    repository = _repository(Cursor(one=[(1,)]))
     repository._case_execution_authorizations = SimpleNamespace(
         state=lambda **_kwargs: authorization
     )
@@ -352,7 +352,6 @@ def test_latest_active_scope_fails_closed_and_returns_optional_environment() -> 
         orchestration_id="orchestration-1", project_id="project-1", at=NOW
     ) == {
         "approval_grant_id": "grant-1",
-        "base_url": "https://example.test",
         "authorization_status": "active",
         "authorization_id": "authorization-1",
     }
@@ -378,17 +377,7 @@ def test_latest_active_scope_fails_closed_and_returns_optional_environment() -> 
         )
 
 
-def test_base_url_and_latest_run_views(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert (
-        _repository(Cursor(one=[None])).base_url_for_orchestration(
-            orchestration_id="orchestration-1", project_id="project-1"
-        )
-        is None
-    )
-    assert _repository(Cursor(one=[("https://example.test",)])).base_url_for_orchestration(
-        orchestration_id="orchestration-1", project_id="project-1"
-    ) == "https://example.test"
-
+def test_latest_run_views(monkeypatch: pytest.MonkeyPatch) -> None:
     repository = _repository(Cursor())
     with pytest.raises(ValueError, match="must not be blank"):
         repository.latest_for_orchestration(" ")

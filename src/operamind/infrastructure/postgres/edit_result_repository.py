@@ -27,6 +27,7 @@ class EditResultPacketScope:
     workspace_root: str
     packet_status: str
     writable_files: tuple[str, ...]
+    required_command_refs: tuple[str, ...]
     required_ui_scenario_refs: tuple[str, ...]
 
 
@@ -110,6 +111,7 @@ class EditResultRepository:
             workspace_root=str(row[3]),
             packet_status=str(row[4]),
             writable_files=tuple(sorted({*editable, *tests})),
+            required_command_refs=tuple(sorted(grant.allowed_test_command_refs)),
             required_ui_scenario_refs=tuple(str(value) for value in cast(list[object], row[7])),
         )
 
@@ -261,7 +263,7 @@ class EditResultRepository:
             """
             SELECT request.command_execution_id, request.approval_grant_id,
                    request.project_id, request.analysis_case_id, request.edit_packet_id,
-                   result.status
+                   request.command_ref, result.status
             FROM command_execution_requests AS request
             JOIN command_execution_results AS result
               ON result.command_execution_id = request.command_execution_id
@@ -289,7 +291,14 @@ class EditResultRepository:
             raise ValueError(
                 f"Edit Result command evidence is outside the Grant/Packet scope: {mismatched}"
             )
-        statuses = {command_execution_id: str(row[4]) for command_execution_id, row in rows.items()}
+        actual_command_refs = {str(row[4]) for row in rows.values()}
+        if actual_command_refs != set(scope.required_command_refs):
+            raise ValueError(
+                "Edit Result command evidence does not cover the exact required command set: "
+                f"expected={list(scope.required_command_refs)} "
+                f"actual={sorted(actual_command_refs)}"
+            )
+        statuses = {command_execution_id: str(row[5]) for command_execution_id, row in rows.items()}
         if write.tests_passed and any(status != "passed" for status in statuses.values()):
             raise ValueError(
                 "Edit Result cannot claim tests passed with non-passing command evidence"

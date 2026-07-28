@@ -16,10 +16,10 @@ from operamind.application.test_data_execution import (
 from operamind.application.test_data_execution import (
     TestDataExecutionRequest as DataExecutionRequest,
 )
-from operamind.application.visiondemo_target_e2e import (
+from operamind.contracts import ContractCatalog
+from tests.fixtures.visiondemo_target_e2e import (
     build_visiondemo_cross_screen_template,
 )
-from operamind.contracts import ContractCatalog
 
 ROOT = Path(__file__).resolve().parents[2]
 

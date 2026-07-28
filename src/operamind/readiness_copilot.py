@@ -11,6 +11,7 @@ from typing import Any
 
 COPILOT_RECEIPT_REQUIRED_TOOLS = (
     "copilot_get_coding_task",
+    "copilot_record_change_outputs",
     "copilot_run_task_command",
     "copilot_validate_task_diff",
     "copilot_record_task_result",
@@ -103,6 +104,8 @@ def inspect_vscode_copilot_session(
             confirmation = invocation.get("isConfirmed")
             if not isinstance(confirmation, Mapping) or not confirmation.get("type"):
                 raise ValueError(f"OperaMind MCP tool approval is not confirmed: {tool_id}")
+    if required_tools == COPILOT_RECEIPT_REQUIRED_TOOLS:
+        _require_ordered_change_task(invocations)
 
     response_id = request.get("responseId")
     if not isinstance(response_id, str) or not response_id:
@@ -135,6 +138,49 @@ def _jsonl_records(data: bytes) -> list[dict[str, Any]]:
             raise ValueError(f"Invalid VS Code session record at line {line_number}")
         records.append(value)
     return records
+
+
+def _require_ordered_change_task(invocations: list[dict[str, Any]]) -> None:
+    names = [
+        next(
+            (
+                required
+                for required in COPILOT_RECEIPT_REQUIRED_TOOLS
+                if str(invocation["toolId"]) == required
+                or str(invocation["toolId"]).endswith("_" + required)
+            ),
+            "",
+        )
+        for invocation in invocations
+    ]
+    names = [name for name in names if name]
+    output_indexes = [
+        index
+        for index, name in enumerate(names)
+        if name == "copilot_record_change_outputs"
+    ]
+    if len(output_indexes) != 3:
+        raise ValueError(
+            "Unified Change Task requires three ordered "
+            "copilot_record_change_outputs calls"
+        )
+    get_index = names.index("copilot_get_coding_task")
+    diff_index = names.index("copilot_validate_task_diff")
+    command_index = names.index("copilot_run_task_command")
+    result_index = names.index("copilot_record_task_result")
+    if not (
+        get_index
+        < output_indexes[0]
+        < output_indexes[1]
+        < diff_index
+        < output_indexes[2]
+        < command_index
+        < result_index
+    ):
+        raise ValueError(
+            "Unified Change Task MCP calls are not in document, scope, diff, "
+            "test-plan, command, result order"
+        )
 
 
 def _walk(value: object) -> Iterator[dict[str, Any]]:

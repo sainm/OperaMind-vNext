@@ -1,6 +1,6 @@
 # Core Artifact Contracts
 
-本目录保存 vNext 主链路的二十四个核心 JSON Schema：
+本目录保存 vNext 主链路的二十六个核心 JSON Schema：
 
 1. `DocumentIngestionResult`
 2. `StructuredChange`
@@ -26,6 +26,8 @@
 22. `CopilotCodingTask`
 23. `RuntimeRouteEvidence`
 24. `UnresolvedEvidenceReport`
+25. `GoldenRagQualityReport`
+26. `ChangedLineCoverageReport`
 
 Contract 用于 API、MCP、数据库 Repository、Golden Dataset 和 UI 之间的边界校验。数据库规范化表不是由这些 JSON 代替；Artifact 只提供稳定交换格式。
 
@@ -42,11 +44,11 @@ ImpactReport 与 ImpactConfirmation v1 在 P4 使用原有字段落地。新 Rep
 
 ApprovalGrant v1 从 active Edit Packet 派生精确文件、Revision、测试命令引用和 UI Scenario 范围。Grant 本体不可变，`edit_completed`、`completed`、`revoked` 只通过追加式事件记录。
 
-CopilotCodingTask v1 是 Web、本地 Bridge、VS Code 扩展、MCP 与未来 API Provider 共用的传输无关任务契约。POC 只创建 `copilot_coding_plan`、`local_bridge`、`vscode_github_copilot` 组合；契约预留 `api_provider` route，但当前应用服务拒绝创建该 route。任务只引用 Packet、Grant 和 Revision，不内嵌源码、完整文档或本地 Workspace 路径。
+CopilotCodingTask v2 是 Web、本地 Bridge、VS Code 扩展、MCP 与未来 API Provider 共用的统一变更任务契约。新任务使用 `copilot_change_task`，携带需求上下文、固定六阶段顺序以及设计差异、代码差异、TestPlan、TestDataPlan 四项必需产物；v1 `copilot_coding_plan` 仅用于读取既有历史。POC 使用 `local_bridge` 与 `vscode_github_copilot`，契约仍预留 `api_provider` route。
 
 UiVerificationResult v1 在 P5 由规范化 Plan/Run/Scenario Result/Evidence 生成。Artifact 保存最终状态和 Evidence ID，不内嵌截图或日志；Deployment Revision 必须绑定 committed Edit Result 的 Repository Revision。
 
-双入口变更闭环使用 ChangeRequest 和 DocumentChangeProposal 统一自然语言与设计文档入口，再生成 TestPlan、TestDataPlan、AcceptanceCriteria、BusinessCoverageReport 和 ChangeClosureResult。确定性检查自动执行；业务歧义或越界修改进入人工确认。
+主变更闭环只从 Web 的自然语言 `ChangeRequest` 开始。VS Code GitHub Copilot 在同一个 `CopilotCodingTask` 中提交设计书差分、代码范围、TestPlan 和 TestDataPlan；`DocumentChangeProposal` 仅作为内部设计书变更 Artifact，不再构成第二个产品入口。确定性检查自动执行；业务歧义或越界修改进入人工确认。
 
 ChangeOrchestrationPlan 将已确认的文档差异、Impact Report、审核済み Golden Case、验收标准、测试计划、跨画面测试数据流、业务覆盖率和 UI Scenario 绑定为同一次可追溯编排。TestDataPlan 的 generation_flows 按顺序传递输出变量，并要求每一步的后置条件和最终业务断言；无法解析的画面、动作、变量或清理步骤必须阻断执行。
 

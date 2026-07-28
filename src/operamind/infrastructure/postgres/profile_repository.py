@@ -262,6 +262,41 @@ class ProfileRepository:
             profile=profile,
         )
 
+    def list_active_by_type(
+        self, *, project_id: str, profile_type: str
+    ) -> tuple[ActiveProfileBinding, ...]:
+        """Return every active project binding of one validated Profile type."""
+
+        if not project_id.strip() or not profile_type.strip():
+            raise ValueError("Project ID and Profile type must not be blank")
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT b.binding_key, b.active_profile_version_id,
+                       b.activated_by, b.activated_at,
+                       v.profile_type, v.profile_id, v.semantic_version,
+                       v.payload, v.payload_digest
+                FROM project_profile_bindings AS b
+                JOIN profile_versions AS v
+                  ON v.profile_version_id = b.active_profile_version_id
+                WHERE b.project_id = %s AND v.profile_type = %s
+                ORDER BY b.binding_key
+                """,
+                (project_id, profile_type),
+            )
+            rows = cursor.fetchall()
+        return tuple(
+            ActiveProfileBinding(
+                project_id=project_id,
+                binding_key=str(row[0]),
+                profile_version_id=str(row[1]),
+                activated_by=str(row[2]),
+                activated_at=cast(datetime, row[3]),
+                profile=self._validated_version(str(row[1]), tuple(row[4:])),
+            )
+            for row in rows
+        )
+
     def _validated_version(
         self,
         profile_version_id: str,

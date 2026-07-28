@@ -24,7 +24,7 @@ STAGE_LABELS = {
     "impact_confirmation": "影響範囲の確認",
     "planning": "コード・テスト編成",
     "code_change": "VS Code GitHub Copilot によるコード変更",
-    "execution_approval": "実行範囲の承認",
+    "execution_approval": "実行範囲の自動準備",
     "test_data_execution": "テストデータ生成・検証",
     "ui_verification": "UI テスト・結果検証",
     "closure": "変更クローズ判定",
@@ -64,6 +64,14 @@ def decide_change_automation(
             "指摘内容に従って設計書を修正し、差分を再生成してください。",
         )
     if review.get("status") != "confirmed":
+        if _document_diff_is_deterministic(diff):
+            return ChangeAutomationDecision(
+                "document_confirmation",
+                "running",
+                "auto_confirm_document_diff",
+                None,
+                "高信頼かつ確認事項のない設計書差分を自動確認します。",
+            )
         return _waiting(
             "document_confirmation",
             "confirm_document_diff",
@@ -86,20 +94,27 @@ def decide_change_automation(
         )
     confirmation = _dict(workspace.get("confirmation"))
     if confirmation.get("id") is None or impact.get("status") != "confirmed":
+        if _impact_is_deterministic(_dict(workspace.get("impact_artifact"))):
+            return ChangeAutomationDecision(
+                "impact_confirmation",
+                "running",
+                "auto_confirm_impact",
+                None,
+                "未知項目のない確定的な影響範囲を自動確認します。",
+            )
         return _waiting(
             "impact_confirmation",
             "confirm_impact",
             "影響項目ごとに承認または却下を選択してください。",
         )
-    if not has_orchestration:
+    grant = _dict(workspace.get("approval_grant"))
+    if grant.get("id") is None:
         return ChangeAutomationDecision(
-            stage="planning",
+            stage="execution_approval",
             status="running",
-            next_action="generate_orchestration",
+            next_action="provision_execution_scope",
             blocking_reason=None,
-            message=(
-                "確認済み証跡からコード範囲、Case、データ、カバレッジ、UI シナリオを生成します。"
-            ),
+            message="確認済み影響範囲からコード変更とテストの実行範囲を自動準備します。",
         )
     edit_result = _dict(workspace.get("edit_result"))
     if edit_result.get("id") is None:
@@ -109,14 +124,33 @@ def decide_change_automation(
             "生成されたコード範囲を VS Code 上の GitHub Copilot で変更し、"
             "結果を取り込んでください。",
         )
-    if edit_result.get("status") not in {"succeeded", "passed", "completed"}:
+    validation_mode = edit_result.get("validation_mode")
+    if validation_mode == "working":
+        if edit_result.get("status") == "in_scope":
+            return _waiting(
+                "code_change",
+                "apply_code_change_with_copilot",
+                "コード差分は実行範囲内です。VS Code 上の GitHub Copilot で "
+                "TestPlan と TestDataPlan を生成し、コンパイルとテストを完了してください。",
+            )
+        return _blocked("code_change", "作業中のコード差分が実行範囲外です。")
+    if (
+        validation_mode != "committed"
+        or edit_result.get("status") != "in_scope"
+        or edit_result.get("tests_passed") is not True
+        or edit_result.get("command_evidence_status") != "verified"
+    ):
         return _blocked("code_change", "コード変更結果が成功状態ではありません。")
-    grant = _dict(workspace.get("approval_grant"))
-    if grant.get("id") is None:
-        return _waiting(
-            "execution_approval",
-            "issue_approval_grant",
-            "テストと UI 検証の対象範囲を確認し、Approval Grant を発行してください。",
+    if not has_orchestration:
+        return ChangeAutomationDecision(
+            stage="planning",
+            status="running",
+            next_action="generate_orchestration",
+            blocking_reason=None,
+            message=(
+                "変更済みコードと Copilot TestPlan からテストデータ、"
+                "カバレッジ、UI シナリオを生成します。"
+            ),
         )
     management = execution or {}
     data_result = _dict(management.get("test_data_execution"))
@@ -156,3 +190,32 @@ def _blocked(stage: str, reason: str) -> ChangeAutomationDecision:
 
 def _dict(value: object) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _document_diff_is_deterministic(diff: dict[str, object]) -> bool:
+    changes = diff.get("changes")
+    return bool(changes) and isinstance(changes, list) and all(
+        isinstance(change, dict)
+        and change.get("confidence") == "high"
+        and change.get("review_status") == "accepted"
+        and not change.get("unknowns")
+        for change in changes
+    )
+
+
+def _impact_is_deterministic(report: dict[str, Any]) -> bool:
+    items = report.get("items")
+    return (
+        report.get("status") == "awaiting_confirmation"
+        and report.get("ui_impact_status") != "unknown"
+        and not report.get("blocking_unknowns")
+        and bool(items)
+        and isinstance(items, list)
+        and all(
+            isinstance(item, dict)
+            and item.get("impact_level") != "unknown"
+            and item.get("requires_confirmation") is False
+            and not item.get("unknowns")
+            for item in items
+        )
+    )

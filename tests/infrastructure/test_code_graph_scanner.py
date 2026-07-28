@@ -627,6 +627,86 @@ public class {name} {{ @GetMapping("/expense/page") String page() {{ return "x";
     }
 
 
+def test_thymeleaf_routes_link_html_templates_to_spring_mvc_endpoints(
+    tmp_path: Path,
+) -> None:
+    java_root = tmp_path / "src/main/java/example"
+    templates = tmp_path / "src/main/resources/templates"
+    java_root.mkdir(parents=True)
+    templates.mkdir(parents=True)
+    (java_root / "ExpenseController.java").write_text(
+        """package example;
+import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+@Controller
+public class ExpenseController {
+  @GetMapping("/expenses") String list() { return "expenses/list"; }
+  @GetMapping("/expenses/search") String search() { return "expenses/list"; }
+  @PostMapping("/expenses/{id}") String update() { return "expenses/detail"; }
+}
+""",
+        encoding="utf-8",
+    )
+    (templates / "list.html").write_text(
+        """<!doctype html>
+<html xmlns:th="http://www.thymeleaf.org">
+  <a th:href="@{/expenses}">一覧</a>
+  <form th:action="@{/expenses/search}" method="get"></form>
+  <form th:action="@{/expenses/{id}(id=${expense.id})}" method="post"></form>
+  <a th:href="${runtimeRoute}">実行時リンク</a>
+</html>
+""",
+        encoding="utf-8",
+    )
+    profile = load_profile()
+    profile["framework_markers"].append("org.thymeleaf")
+    profile["anchor_extractors"].append("web_ui_route")
+    files = WorkspaceScanner().discover(
+        workspace_root=tmp_path,
+        scan_roots=("src/main",),
+        excluded_globs=(),
+        languages=tuple(cast(list[str], profile["languages"])),
+    )
+
+    result = CodeGraphScanner().scan(
+        code_graph_snapshot_id="graph-thymeleaf",
+        project_id="project-1",
+        repository_id="repository-1",
+        repository_revision="abc123",
+        scan_roots=("src/main",),
+        profile=profile,
+        files=files,
+    )
+
+    ContractCatalog.load(ROOT / "contracts").validate_artifact(result.artifact)
+    assert result.diagnostics == ()
+    artifact_files = cast(list[dict[str, Any]], result.artifact["files"])
+    template = next(value for value in artifact_files if value["path"].endswith("list.html"))
+    assert template["language"] == "xml"
+    assert {
+        str(symbol["signature"])
+        for symbol in cast(list[dict[str, Any]], template["symbols"])
+        if symbol["symbol_type"] == "ui_route"
+    } == {
+        "route:GET:/expenses",
+        "route:GET:/expenses/search",
+        "route:POST:/expenses/{id}",
+        "route:GET:dynamic:$?runtimeRoute?",
+    }
+    edges = cast(list[dict[str, Any]], result.artifact["edges"])
+    route_calls = [
+        edge
+        for edge in edges
+        if edge["extractor"] == "web_ui_route" and edge["edge_type"] == "calls"
+    ]
+    assert len(route_calls) == 4
+    assert sum(edge["resolution_status"] == "resolved" for edge in route_calls) == 3
+    assert [
+        edge["to_ref"] for edge in route_calls if edge["resolution_status"] == "unresolved"
+    ] == ["unresolved:endpoint:GET:dynamic:$?runtimeRoute?"]
+
+
 def test_java_type_flow_and_field_access_are_not_project_specific(tmp_path: Path) -> None:
     source = tmp_path / "src/main/java/example"
     source.mkdir(parents=True)

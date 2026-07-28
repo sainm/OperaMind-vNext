@@ -1,187 +1,116 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="760" viewBox="0 0 1600 760" role="img" aria-labelledby="title desc">
-  <title id="title">OperaMind vNext メインフロー</title>
-  <desc id="desc">設計書の変更から影響分析、承認済みコード変更、UI 検証によるクローズまでの一連の流れ</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="720" viewBox="0 0 1600 720" role="img" aria-labelledby="title desc">
+  <title id="title">OperaMind の六工程変更閉ループ</title>
+  <desc id="desc">利用者の変更要件から設計書差分、コード範囲、コード変更とテスト、データ生成後の UI 検証、最終レポートまでを示す</desc>
   <defs>
     <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#071426"/>
-      <stop offset="0.55" stop-color="#0b1c31"/>
-      <stop offset="1" stop-color="#111b3b"/>
+      <stop offset="0" stop-color="#f4f8f6"/>
+      <stop offset="1" stop-color="#e8f0ee"/>
     </linearGradient>
-    <linearGradient id="titleAccent" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#48d9c5"/>
-      <stop offset="0.55" stop-color="#56b7ff"/>
-      <stop offset="1" stop-color="#9f8cff"/>
-    </linearGradient>
-    <linearGradient id="inputCard" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#123a43"/>
-      <stop offset="1" stop-color="#102b3b"/>
-    </linearGradient>
-    <linearGradient id="analysisCard" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#123651"/>
-      <stop offset="1" stop-color="#142845"/>
-    </linearGradient>
-    <linearGradient id="editCard" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#25345f"/>
-      <stop offset="1" stop-color="#24294e"/>
-    </linearGradient>
-    <linearGradient id="verifyCard" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#2e315e"/>
-      <stop offset="1" stop-color="#252447"/>
-    </linearGradient>
-    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
-      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#020711" flood-opacity="0.55"/>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#16352c" flood-opacity="0.12"/>
     </filter>
-    <filter id="softGlow" x="-80%" y="-80%" width="260%" height="260%">
-      <feGaussianBlur stdDeviation="7" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
-    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="userSpaceOnUse">
-      <path d="M0 0 L12 6 L0 12 Z" fill="#69caff"/>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#58766d"/>
     </marker>
     <style>
-      .sans { font-family: Inter, "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif; }
-      .phase { font-size: 18px; font-weight: 700; letter-spacing: 0.12em; }
-      .step-no { font-size: 14px; font-weight: 800; }
-      .node-title { font-size: 20px; font-weight: 700; fill: #f4f8ff; }
-      .node-sub { font-size: 13px; font-weight: 500; fill: #a9bdd4; }
-      .flow { fill: none; stroke: #69caff; stroke-width: 3; stroke-linecap: round; marker-end: url(#arrow); }
-      .flow-muted { fill: none; stroke: #426a8c; stroke-width: 2; stroke-dasharray: 6 7; }
+      text { font-family: "Noto Sans JP", "Yu Gothic", sans-serif; fill: #17342b; }
+      .eyebrow { font-size: 16px; font-weight: 700; letter-spacing: 0.14em; fill: #287561; }
+      .title { font-size: 36px; font-weight: 800; }
+      .subtitle { font-size: 17px; fill: #526a62; }
+      .number { font-size: 15px; font-weight: 800; fill: #fff; }
+      .stage-title { font-size: 20px; font-weight: 800; }
+      .stage-owner { font-size: 14px; font-weight: 700; fill: #527067; }
+      .lane-title { font-size: 18px; font-weight: 800; }
+      .lane-text { font-size: 15px; fill: #506961; }
+      .note { font-size: 14px; fill: #587169; }
+      .arrow { stroke: #58766d; stroke-width: 3; fill: none; marker-end: url(#arrow); }
     </style>
   </defs>
+  <rect width="1600" height="720" rx="28" fill="url(#background)"/>
+  <circle cx="1450" cy="20" r="260" fill="#68b7a1" opacity="0.10"/>
+  <circle cx="80" cy="740" r="230" fill="#6d8fec" opacity="0.08"/>
 
-  <rect width="1600" height="760" rx="32" fill="url(#background)"/>
-  <circle cx="1425" cy="65" r="250" fill="#684dff" opacity="0.08"/>
-  <circle cx="170" cy="730" r="290" fill="#28e4c2" opacity="0.06"/>
-  <path d="M0 650 C300 560 520 760 830 660 S1320 560 1600 650" fill="none" stroke="#65c8ff" stroke-opacity="0.07" stroke-width="2"/>
+  <text x="72" y="66" class="eyebrow">OPERAMIND vNEXT</text>
+  <text x="72" y="112" class="title">一つの Change Task、六つの見える工程</text>
+  <text x="72" y="145" class="subtitle">編集 AI: VS Code GitHub Copilot ／ 内部制御: 自動・非表示</text>
 
-  <g class="sans">
-    <text x="72" y="78" fill="#f5f8ff" font-size="34" font-weight="800">OperaMind vNext</text>
-    <text x="72" y="116" fill="#9db1c9" font-size="18" font-weight="500">設計変更から検証済みのコード変更まで、証拠をつないで制御する</text>
-    <rect x="72" y="138" width="600" height="4" rx="2" fill="url(#titleAccent)"/>
-
-    <g opacity="0.96">
-      <rect x="72" y="184" width="294" height="44" rx="14" fill="#103844" stroke="#36d8c4" stroke-opacity="0.45"/>
-      <text x="96" y="212" class="phase" fill="#54e5d0">01  設計変更の構造化</text>
-      <rect x="390" y="184" width="454" height="44" rx="14" fill="#102e4a" stroke="#51baff" stroke-opacity="0.45"/>
-      <text x="414" y="212" class="phase" fill="#70c9ff">02  コンテキストと影響分析</text>
-      <rect x="868" y="184" width="294" height="44" rx="14" fill="#252d57" stroke="#8e8cff" stroke-opacity="0.48"/>
-      <text x="892" y="212" class="phase" fill="#aaa5ff">03  承認済み変更</text>
-      <rect x="1186" y="184" width="342" height="44" rx="14" fill="#30294e" stroke="#c38cff" stroke-opacity="0.45"/>
-      <text x="1210" y="212" class="phase" fill="#d1a3ff">04  UI 検証とクローズ</text>
+  <g filter="url(#shadow)">
+    <g transform="translate(72 205)">
+      <rect width="220" height="138" rx="20" fill="#ffffff" stroke="#b8d3ca"/>
+      <circle cx="30" cy="30" r="18" fill="#287561"/>
+      <text x="30" y="35" text-anchor="middle" class="number">1</text>
+      <text x="24" y="78" class="stage-title">変更要件</text>
+      <text x="24" y="108" class="stage-owner">利用者 / Web</text>
     </g>
-
-    <g filter="url(#shadow)">
-      <g transform="translate(72 270)">
-        <rect width="210" height="112" rx="20" fill="url(#inputCard)" stroke="#3fe0ca" stroke-opacity="0.55"/>
-        <circle cx="30" cy="28" r="16" fill="#3fe0ca"/>
-        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#06231f">1</text>
-        <text x="24" y="68" class="node-title">複数の設計書</text>
-        <text x="24" y="93" class="node-sub">版・章・業務キー</text>
-      </g>
-      <g transform="translate(72 426)">
-        <rect width="210" height="112" rx="20" fill="url(#inputCard)" stroke="#3fe0ca" stroke-opacity="0.42"/>
-        <circle cx="30" cy="28" r="16" fill="#42d6c3"/>
-        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#06231f">2</text>
-        <text x="24" y="68" class="node-title">Profile マッチング</text>
-        <text x="24" y="93" class="node-sub">動的な記述パターン</text>
-      </g>
-      <g transform="translate(72 582)">
-        <rect width="210" height="112" rx="20" fill="url(#inputCard)" stroke="#3fe0ca" stroke-opacity="0.36"/>
-        <circle cx="30" cy="28" r="16" fill="#3bc9bd"/>
-        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#06231f">3</text>
-        <text x="24" y="68" class="node-title">Semantic Diff</text>
-        <text x="24" y="93" class="node-sub">Canonical Snapshot</text>
-      </g>
-
-      <g transform="translate(390 270)">
-        <rect width="210" height="112" rx="20" fill="url(#analysisCard)" stroke="#5cc2ff" stroke-opacity="0.58"/>
-        <circle cx="30" cy="28" r="16" fill="#5cc2ff"/>
-        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#081e33">4</text>
-        <text x="24" y="68" class="node-title">Real RAG</text>
-        <text x="24" y="93" class="node-sub">Vector + Keyword</text>
-      </g>
-      <g transform="translate(634 270)">
-        <rect width="210" height="112" rx="20" fill="url(#analysisCard)" stroke="#5cc2ff" stroke-opacity="0.48"/>
-        <circle cx="30" cy="28" r="16" fill="#63bbff"/>
-        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#081e33">5</text>
-        <text x="24" y="68" class="node-title">Context Package</text>
-        <text x="24" y="93" class="node-sub">根拠を再構築</text>
-      </g>
-      <g transform="translate(390 500)">
-        <rect width="210" height="112" rx="20" fill="url(#analysisCard)" stroke="#5cc2ff" stroke-opacity="0.42"/>
-        <circle cx="30" cy="28" r="16" fill="#68adff"/>
-        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#081e33">6</text>
-        <text x="24" y="68" class="node-title">Code Graph Scope</text>
-        <text x="24" y="93" class="node-sub">編集・参照・テスト範囲</text>
-      </g>
-      <g transform="translate(634 500)">
-        <rect width="210" height="112" rx="20" fill="url(#analysisCard)" stroke="#5cc2ff" stroke-opacity="0.38"/>
-        <circle cx="30" cy="28" r="16" fill="#719fff"/>
-        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#081e33">7</text>
-        <text x="24" y="68" class="node-title">Impact Report</text>
-        <text x="24" y="93" class="node-sub">候補・証拠・未知項目</text>
-      </g>
-
-      <g transform="translate(868 270)">
-        <rect width="294" height="112" rx="20" fill="url(#editCard)" stroke="#9998ff" stroke-opacity="0.56"/>
-        <circle cx="30" cy="28" r="16" fill="#9897ff"/>
-        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#151434">8</text>
-        <text x="24" y="68" class="node-title">ユーザー承認</text>
-        <text x="24" y="93" class="node-sub">Impact Item を明示的に確認</text>
-      </g>
-      <g transform="translate(868 426)">
-        <rect width="294" height="112" rx="20" fill="url(#editCard)" stroke="#9998ff" stroke-opacity="0.46"/>
-        <circle cx="30" cy="28" r="16" fill="#a28eff"/>
-        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#151434">9</text>
-        <text x="24" y="68" class="node-title">Edit Packet</text>
-        <text x="24" y="93" class="node-sub">承認済みの最小コンテキスト</text>
-      </g>
-      <g transform="translate(868 582)">
-        <rect width="294" height="112" rx="20" fill="url(#editCard)" stroke="#9998ff" stroke-opacity="0.38"/>
-        <circle cx="30" cy="28" r="16" fill="#ad86ff"/>
-        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#151434">10</text>
-        <text x="24" y="68" class="node-title">VS Code Copilot</text>
-        <text x="24" y="93" class="node-sub">許可リスト内だけを変更</text>
-      </g>
-
-      <g transform="translate(1186 270)">
-        <rect width="342" height="112" rx="20" fill="url(#verifyCard)" stroke="#c797ff" stroke-opacity="0.54"/>
-        <circle cx="30" cy="28" r="16" fill="#c797ff"/>
-        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#231232">11</text>
-        <text x="24" y="68" class="node-title">OperaMind UI Test</text>
-        <text x="24" y="93" class="node-sub">Playwright・業務シナリオ・証拠</text>
-      </g>
-      <g transform="translate(1186 500)">
-        <rect width="342" height="112" rx="20" fill="url(#verifyCard)" stroke="#c797ff" stroke-opacity="0.45"/>
-        <circle cx="30" cy="28" r="16" fill="#d08fff"/>
-        <text x="30" y="33" text-anchor="middle" class="step-no" fill="#231232">12</text>
-        <text x="24" y="68" class="node-title">Validation Closure</text>
-        <text x="24" y="93" class="node-sub">passed / failed / reanalysis</text>
-      </g>
+    <g transform="translate(320 205)">
+      <rect width="220" height="138" rx="20" fill="#eef8f5" stroke="#7fc1ae"/>
+      <circle cx="30" cy="30" r="18" fill="#287561"/>
+      <text x="30" y="35" text-anchor="middle" class="number">2</text>
+      <text x="24" y="78" class="stage-title">設計書差分</text>
+      <text x="24" y="108" class="stage-owner">RAG + Copilot</text>
     </g>
-
-    <path class="flow" d="M177 382 L177 416"/>
-    <path class="flow" d="M177 538 L177 572"/>
-    <path class="flow" d="M282 638 C330 638 330 326 380 326"/>
-    <path class="flow" d="M600 326 L624 326"/>
-    <path class="flow" d="M739 382 C739 432 495 432 495 490"/>
-    <path class="flow" d="M600 556 L624 556"/>
-    <path class="flow" d="M844 556 C860 556 860 326 858 326"/>
-    <path class="flow" d="M1015 382 L1015 416"/>
-    <path class="flow" d="M1015 538 L1015 572"/>
-    <path class="flow" d="M1162 638 C1174 638 1174 326 1176 326"/>
-    <path class="flow" d="M1357 382 L1357 490"/>
-
-    <g transform="translate(310 260)">
-      <circle cx="0" cy="0" r="5" fill="#49ddc8" filter="url(#softGlow)"/>
-      <path class="flow-muted" d="M0 0 L48 0"/>
+    <g transform="translate(568 205)">
+      <rect width="220" height="138" rx="20" fill="#eef4ff" stroke="#8ba8de"/>
+      <circle cx="30" cy="30" r="18" fill="#526fb5"/>
+      <text x="30" y="35" text-anchor="middle" class="number">3</text>
+      <text x="24" y="78" class="stage-title">コード範囲</text>
+      <text x="24" y="108" class="stage-owner">Code Graph</text>
     </g>
-    <g transform="translate(810 644)">
-      <circle cx="0" cy="0" r="5" fill="#61baff" filter="url(#softGlow)"/>
-      <path class="flow-muted" d="M0 0 L32 0"/>
+    <g transform="translate(816 205)">
+      <rect width="220" height="138" rx="20" fill="#f2efff" stroke="#9e90dd"/>
+      <circle cx="30" cy="30" r="18" fill="#755fc2"/>
+      <text x="30" y="35" text-anchor="middle" class="number">4</text>
+      <text x="24" y="78" class="stage-title">変更・テスト</text>
+      <text x="24" y="108" class="stage-owner">Copilot + MCP</text>
     </g>
-    <g transform="translate(1148 250)">
-      <circle cx="0" cy="0" r="5" fill="#a898ff" filter="url(#softGlow)"/>
+    <g transform="translate(1064 205)">
+      <rect width="220" height="138" rx="20" fill="#fff6e8" stroke="#d9aa62"/>
+      <circle cx="30" cy="30" r="18" fill="#b47724"/>
+      <text x="30" y="35" text-anchor="middle" class="number">5</text>
+      <text x="24" y="78" class="stage-title">データ・UI</text>
+      <text x="24" y="108" class="stage-owner">TestData → UI</text>
+    </g>
+    <g transform="translate(1312 205)">
+      <rect width="220" height="138" rx="20" fill="#fff0f1" stroke="#d7979d"/>
+      <circle cx="30" cy="30" r="18" fill="#ae525d"/>
+      <text x="30" y="35" text-anchor="middle" class="number">6</text>
+      <text x="24" y="78" class="stage-title">最終レポート</text>
+      <text x="24" y="108" class="stage-owner">Evidence / Closure</text>
     </g>
   </g>
+
+  <path d="M292 274H312" class="arrow"/>
+  <path d="M540 274H560" class="arrow"/>
+  <path d="M788 274H808" class="arrow"/>
+  <path d="M1036 274H1056" class="arrow"/>
+  <path d="M1284 274H1304" class="arrow"/>
+
+  <g transform="translate(72 405)">
+    <rect width="460" height="204" rx="22" fill="#ffffff" stroke="#bfd4cd"/>
+    <text x="28" y="40" class="lane-title">Web — 入力と結果だけ</text>
+    <text x="28" y="78" class="lane-text">• 変更要件を登録</text>
+    <text x="28" y="108" class="lane-text">• 六工程の差分、範囲、結果、阻断理由を表示</text>
+    <text x="28" y="138" class="lane-text">• Screenshot と最終 Report を表示</text>
+    <text x="28" y="178" class="note">Approval / Worker / Queue の操作画面は持たない</text>
+  </g>
+
+  <g transform="translate(570 405)">
+    <rect width="460" height="204" rx="22" fill="#f4f1ff" stroke="#b2a6e2"/>
+    <text x="28" y="40" class="lane-title">VS Code GitHub Copilot — 一つの会話</text>
+    <text x="28" y="78" class="lane-text">• document_change: RAG 対象設計書を変更</text>
+    <text x="28" y="108" class="lane-text">• code_scope: 読み取り専用 Scope を提示</text>
+    <text x="28" y="138" class="lane-text">• Diff 検証後に Code / TestPlan を完成</text>
+    <text x="28" y="178" class="note">任意 Shell と Packet 外ファイルは拒否</text>
+  </g>
+
+  <g transform="translate(1068 405)">
+    <rect width="464" height="204" rx="22" fill="#edf8f4" stroke="#8bc5b3"/>
+    <text x="28" y="40" class="lane-title">OperaMind — 検証と自動実行</text>
+    <text x="28" y="78" class="lane-text">• Canonical RAG / Code Graph / Git Diff を検証</text>
+    <text x="28" y="108" class="lane-text">• TestDataPlan でデータ生成後に UI を実行</text>
+    <text x="28" y="138" class="lane-text">• Coverage / Screenshot / Closure を結合</text>
+    <text x="28" y="178" class="note">欠落・drift・範囲外は fail closed</text>
+  </g>
+
+  <text x="800" y="674" text-anchor="middle" class="note">Canonical PostgreSQL + immutable Artifact / Local Bridge + MCP / local Embedding</text>
 </svg>

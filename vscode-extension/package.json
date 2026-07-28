@@ -1,7 +1,7 @@
 {
   "name": "operamind-copilot-bridge",
   "displayName": "OperaMind Copilot Bridge",
-  "description": "Receive approved OperaMind Coding Plan tasks without handoff files.",
+  "description": "Deliver bounded OperaMind change tasks to VS Code GitHub Copilot.",
   "version": "0.3.1",
   "publisher": "operamind-local",
   "private": true,
@@ -30,7 +30,7 @@
     "commands": [
       {
         "command": "operamind.checkForTasks",
-        "title": "OperaMind: 承認済みタスクを確認"
+        "title": "OperaMind: 変更タスクを確認"
       },
       {
         "command": "operamind.configureBridgeToken",

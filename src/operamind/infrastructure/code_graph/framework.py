@@ -100,10 +100,18 @@ _VALUE_FIELD = re.compile(
     re.DOTALL,
 )
 _ENVIRONMENT_FIELD = re.compile(r"\bEnvironment\s+(?P<name>[A-Za-z_$][\w$]*)\b")
-_HTML_ROUTE = re.compile(
-    r"<(?P<tag>a|form)\b[^>]*?\b(?P<attribute>href|action)\s*=\s*"
-    r"(?P<quote>['\"])(?P<route>/[^'\"]+)(?P=quote)",
+_HTML_ROUTE_TAG = re.compile(
+    r"<(?P<tag>a|form)\b(?P<attributes>[^>]*)>",
     re.IGNORECASE | re.DOTALL,
+)
+_HTML_ROUTE_ATTRIBUTE = re.compile(
+    r"\b(?P<attribute>(?:th:)?(?:href|action))\s*=\s*"
+    r"(?P<quote>['\"])(?P<route>.*?)(?P=quote)",
+    re.IGNORECASE | re.DOTALL,
+)
+_HTML_METHOD_ATTRIBUTE = re.compile(
+    r"\b(?:th:)?method\s*=\s*(?P<quote>['\"])(?P<method>GET|POST)(?P=quote)",
+    re.IGNORECASE,
 )
 _JS_ROUTE = re.compile(r"\b(?:url|href)\s*:\s*(?P<expression>[^,\n}]+)", re.IGNORECASE)
 _JS_LOCATION_ROUTE = re.compile(
@@ -421,9 +429,7 @@ def _extract_ui_routes(
     route_aliases = _static_route_aliases(content)
     candidates: list[tuple[str, str, int]] = []
     if file.language == "xml":
-        for match in _HTML_ROUTE.finditer(content):
-            method = "POST" if match.group("tag").casefold() == "form" else "GET"
-            candidates.append((method, _normalize_route(match.group("route")), match.start()))
+        candidates.extend(_html_route_candidates(content))
         expression_patterns = (_JS_ROUTE, _JS_LOCATION_ROUTE)
     else:
         expression_patterns = (_JS_ROUTE, _JS_LOCATION_ROUTE)
@@ -498,6 +504,49 @@ def _extract_ui_routes(
         )
         routes.append(_UiRoute(symbol, method, route, file.path, line))
     return symbols, edges, routes
+
+
+def _html_route_candidates(content: str) -> list[tuple[str, str, int]]:
+    candidates: list[tuple[str, str, int]] = []
+    for tag_match in _HTML_ROUTE_TAG.finditer(content):
+        tag = tag_match.group("tag").casefold()
+        attributes = tag_match.group("attributes")
+        route_match = _HTML_ROUTE_ATTRIBUTE.search(attributes)
+        if route_match is None:
+            continue
+        raw_attribute = route_match.group("attribute").casefold()
+        attribute = raw_attribute.removeprefix("th:")
+        if (tag, attribute) not in {("a", "href"), ("form", "action")}:
+            continue
+        raw_route = route_match.group("route").strip()
+        route = _thymeleaf_route(raw_route)
+        if route is None:
+            if raw_route.startswith("/"):
+                route = _normalize_route(raw_route)
+            elif raw_attribute.startswith("th:"):
+                route = _dynamic_route(raw_route)
+            else:
+                continue
+        method = "GET"
+        if tag == "form":
+            method_match = _HTML_METHOD_ATTRIBUTE.search(attributes)
+            if method_match is not None:
+                method = method_match.group("method").upper()
+        candidates.append((method, route, tag_match.start()))
+    return candidates
+
+
+def _thymeleaf_route(value: str) -> str | None:
+    if not value.startswith("@{") or not value.endswith("}"):
+        return None
+    expression = value[2:-1].strip()
+    if not expression.startswith("/"):
+        return _dynamic_route(expression)
+    parameter_start = expression.find("(")
+    route = expression[:parameter_start].strip() if parameter_start >= 0 else expression
+    if not route or any(marker in route for marker in ("${", "*{", "#{")):
+        return _dynamic_route(expression)
+    return _normalize_route(route)
 
 
 def _route_endpoint_edges(

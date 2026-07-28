@@ -15,9 +15,6 @@ from operamind.infrastructure.postgres.code_graph_repository import (
     CodeGraphSnapshotRepository,
 )
 from operamind.infrastructure.postgres.errors import PersistenceConflictError
-from operamind.infrastructure.postgres.rag_quality_repository import (
-    GoldenRagQualityRepository,
-)
 
 type ImpactItemLedgerRow = tuple[
     str,
@@ -79,7 +76,6 @@ class ImpactRepository:
         self._contracts = contracts
         self._artifacts = ArtifactRepository(connection, contracts)
         self._graphs = CodeGraphSnapshotRepository(connection, contracts)
-        self._rag_quality = GoldenRagQualityRepository(connection, contracts)
 
     def publish_report(
         self,
@@ -356,18 +352,12 @@ class ImpactRepository:
             context_artifact = self._artifacts.get(str(report_artifact["context_package_id"]))
             if (
                 context_artifact is None
-                or context_artifact.get("artifact_type") != "ContextPackage"
+                or context_artifact.get("artifact_type")
+                not in {"ContextPackage", "CopilotImpactContext"}
             ):
                 raise PersistenceConflictError(
                     f"Impact Report Context Package is unavailable: {report_id}"
                 )
-            retrieval_policy = cast(dict[str, object], context_artifact["retrieval_policy"])
-            self._rag_quality.require_passed_gate(
-                project_id=project_id,
-                document_snapshot_id=str(context_artifact["document_snapshot_id"]),
-                embedding_profile_version_id=str(retrieval_policy["embedding_profile_version_id"]),
-                search_index_build_id=str(context_artifact["search_index_build_id"]),
-            )
             cursor.execute(
                 """
                 SELECT reason FROM profile_drift_impacts

@@ -1,10 +1,10 @@
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from operamind.application.change_loop_case import ChangeLoopCase
 from operamind.application.change_orchestration import (
     ChangeOrchestrationBlockedError,
     ChangeOrchestrationInput,
@@ -12,14 +12,13 @@ from operamind.application.change_orchestration import (
 )
 
 ROOT = Path(__file__).parents[2]
-CASE_ROOT = ROOT / "golden-dataset/cases/visiondemo-expense-status-filter-golden"
 
 
-def test_canonical_orchestration_generates_scope_tests_data_coverage_and_ui() -> None:
+def test_canonical_orchestration_binds_copilot_plans_to_scope_and_coverage() -> None:
     result = ChangeOrchestrationPlanner(repository_root=ROOT).plan(_input())
 
     assert result.orchestration["status"] == "ready"
-    assert result.orchestration["reviewed_case_id"] == ("visiondemo-expense-status-filter-golden")
+    assert result.orchestration["reviewed_case_id"] == "copilot-task-001"
     assert result.orchestration["code_scope"] == [
         {
             "impact_item_id": "impact-expense-service",
@@ -36,8 +35,7 @@ def test_canonical_orchestration_generates_scope_tests_data_coverage_and_ui() ->
         for criterion in result.acceptance_criteria["criteria"]
     } == {("rule-expense-status-change",)}
     assert result.test_data_plan["status"] == "ready"
-    assert result.test_data_plan["generation_flows"]
-    assert len(result.orchestration["ui_scenarios"]) == 3
+    assert len(result.orchestration["ui_scenarios"]) == 1
 
 
 def test_orchestration_rejects_unreviewed_structured_change() -> None:
@@ -48,37 +46,25 @@ def test_orchestration_rejects_unreviewed_structured_change() -> None:
 
     with pytest.raises(ChangeOrchestrationBlockedError, match="must be accepted"):
         ChangeOrchestrationPlanner(repository_root=ROOT).plan(
-            ChangeOrchestrationInput(
-                change_request=value.change_request,
-                analysis_case_id=value.analysis_case_id,
+            replace(
+                value,
                 structured_changes=tuple(changes),
                 accepted_structured_change_refs=frozenset(),
-                impact_report=value.impact_report,
-                impact_report_state=value.impact_report_state,
-                impact_confirmation=value.impact_confirmation,
-                reviewed_case=value.reviewed_case,
             )
         )
 
 
-def test_orchestration_rejects_stale_reviewed_case_revision() -> None:
-    value = _input()
-    report = deepcopy(value.impact_report)
-    report["repository_revision"] = "b" * 40
+@pytest.mark.parametrize(
+    "missing_field",
+    ["copilot_coding_task_id", "generated_test_plan", "generated_test_data_plan"],
+)
+def test_orchestration_requires_complete_copilot_planning_outputs(
+    missing_field: str,
+) -> None:
+    value = replace(_input(), **{missing_field: None})
 
-    with pytest.raises(ChangeOrchestrationBlockedError, match="revision differs"):
-        ChangeOrchestrationPlanner(repository_root=ROOT).plan(
-            ChangeOrchestrationInput(
-                change_request=value.change_request,
-                analysis_case_id=value.analysis_case_id,
-                structured_changes=value.structured_changes,
-                accepted_structured_change_refs=value.accepted_structured_change_refs,
-                impact_report=report,
-                impact_report_state=value.impact_report_state,
-                impact_confirmation=value.impact_confirmation,
-                reviewed_case=value.reviewed_case,
-            )
-        )
+    with pytest.raises(ChangeOrchestrationBlockedError, match="outputs are incomplete"):
+        ChangeOrchestrationPlanner(repository_root=ROOT).plan(value)
 
 
 def _input() -> ChangeOrchestrationInput:
@@ -164,6 +150,92 @@ def _input() -> ChangeOrchestrationInput:
         "rejected_item_ids": [],
         "confirmed_at": "2026-07-18T00:00:00Z",
     }
+    test_plan = {
+        "artifact_type": "TestPlan",
+        "schema_version": "v1",
+        "test_plan_id": "test-plan-expense-status",
+        "change_request_id": request["change_request_id"],
+        "project_id": request["project_id"],
+        "status": "ready",
+        "test_cases": [
+            {
+                "test_case_id": "expense-filter-default-all",
+                "title": "既定値ですべての経費を表示する",
+                "level": "ui",
+                "execution_mode": "deterministic",
+                "business_rule_refs": ["rule-expense-status-change"],
+                "acceptance_criteria_refs": ["criterion-expense-status"],
+                "preconditions": ["既定データが存在する"],
+                "steps": ["経費一覧を開く"],
+                "expected_results": ["すべての経費が表示される"],
+                "test_data_refs": ["expense-default-seed"],
+            }
+        ],
+    }
+    test_data_plan = {
+        "artifact_type": "TestDataPlan",
+        "schema_version": "v1",
+        "test_data_plan_id": "test-data-expense-status",
+        "test_plan_id": test_plan["test_plan_id"],
+        "project_id": request["project_id"],
+        "status": "ready",
+        "data_sets": [
+            {
+                "test_data_id": "expense-default-seed",
+                "test_case_refs": ["expense-filter-default-all"],
+                "setup_actions": [
+                    {
+                        "action_id": "load-default-seed",
+                        "action_type": "fixture",
+                        "target": "classpath:data.sql",
+                        "payload": {"expected_expense_count": 4},
+                    }
+                ],
+                "cleanup_policy": "isolated_environment",
+            }
+        ],
+        "generation_flows": [
+            {
+                "flow_id": "flow-expense-default-seed",
+                "title": "既定の経費データを生成する",
+                "test_data_refs": ["expense-default-seed"],
+                "test_case_refs": ["expense-filter-default-all"],
+                "steps": [
+                    {
+                        "step_id": "load-default-seed",
+                        "sequence": 1,
+                        "channel": "fixture",
+                        "business_action": "既定データをロードする",
+                        "target": "classpath:data.sql",
+                        "inputs": {"expected_expense_count": 4},
+                        "depends_on": [],
+                        "output_bindings": [],
+                        "postconditions": [
+                            {
+                                "assertion_id": "default-expense-count",
+                                "observe_via": "fixture",
+                                "subject": "expected_expense_count",
+                                "operator": "equals",
+                                "expected": 4,
+                            }
+                        ],
+                    }
+                ],
+                "final_assertions": [
+                    {
+                        "assertion_id": "all-expenses-visible",
+                        "observe_via": "ui",
+                        "subject": "経費一覧",
+                        "operator": "count_equals",
+                        "expected": 4,
+                    }
+                ],
+                "cleanup_policy": "isolated_environment",
+                "cleanup_steps": [],
+            }
+        ],
+        "blocking_reasons": [],
+    }
     return ChangeOrchestrationInput(
         change_request=request,
         analysis_case_id="case-expense-status",
@@ -172,5 +244,7 @@ def _input() -> ChangeOrchestrationInput:
         impact_report=report,
         impact_report_state="confirmed",
         impact_confirmation=confirmation,
-        reviewed_case=ChangeLoopCase.load(CASE_ROOT),
+        copilot_coding_task_id="copilot-task-001",
+        generated_test_plan=test_plan,
+        generated_test_data_plan=test_data_plan,
     )

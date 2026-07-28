@@ -13,7 +13,7 @@
 - Office ZIP 在解析前执行文件大小、条目数、总展开量、加密成员和路径穿越检查。
 - 从 Variant 表头别名提取带单元格/表格位置的 Observed Record，并映射为 Canonical Fact。
 - XLSX 逐 Sheet 独立匹配 Variant；画面概要、画面项目、事件和 API 一览／详细表可以进入同一 Snapshot。只匹配文件名的无关 Sheet 会作为 `ignored_sections` 显式返回，命中表头但未达到唯一自动匹配条件的 Sheet 会阻断，不静默丢弃。
-- Change Draft 与可执行 Diff 复用同一个 Canonical Snapshot Builder，不再分别执行整份工作簿与逐 Sheet 匹配。
+- Copilot Change Task 与可执行 Diff 复用同一个 Canonical Snapshot Builder，不再分别执行整份工作簿与逐 Sheet 匹配。
 - 按 Stable Key 对齐 before/after Canonical Snapshot，生成 Contract v1 `StructuredChange`。
 - `operamind-diff` 将 Profile 匹配、Office 提取、Canonical 映射、Diff 和 Contract 校验串成可执行入口。
 - migration `0002_p1_canonical_documents` 和 PostgreSQL Repository 持久化 Profile、项目激活审计、Document Snapshot、Fact 与 StructuredChange。
@@ -120,34 +120,11 @@ operamind-ingest \
 
 P1 导入／Diff 命令本身不建立 Embedding Index，因此它生成的首个结果如实使用 `embedding_index_status=not_started`、`indexed_target_count=0` 和 `status=needs_review`，不会伪装成 `ready_for_impact`。后续 P2 命令已经实现索引、检索和 readiness 推进。
 
-## StructuredChange 人工审阅
+## StructuredChange の確認境界
 
-首次接受或拒绝不提供上一事件 ID：
+主変更フローでは、高信頼かつ unknown のない設計差分を OperaMind が内部で自動確認します。低信頼、競合、出典不足、または判断が必要な差分は `document_change` 工程を blocked にし、業務上理解できる理由だけを Web に表示します。
 
-```bash
-operamind-review-change \
-  --project-id visiondemo \
-  --change-id change-001 \
-  --review-event-id review-001 \
-  --decision accepted \
-  --reviewed-by reviewer@example.com \
-  --reason 'Compared with the source design'
-```
-
-需要反转已有决策时，必须显式携带当前事件 ID：
-
-```bash
-operamind-review-change \
-  --project-id visiondemo \
-  --change-id change-001 \
-  --review-event-id review-002 \
-  --decision rejected \
-  --reviewed-by lead-reviewer@example.com \
-  --reason 'Source evidence was re-evaluated' \
-  --expected-previous-review-event-id review-001
-```
-
-Repository 对 Change 行加锁并检查预期上一事件。两个审核者从同一旧页面提交时，只有第一个决策能追加；第二个返回 stale review 错误。完全相同的 event ID 重放是 no-op，同一 ID 的不同内容返回 `PersistenceConflictError`。事件的复合外键还保证 previous event 属于同 Project、同 Change 且 previous status 与上一决策一致。
+手動 Review CLI や独立した承認画面は公開しません。修正された設計書と差分は同じ VS Code GitHub Copilot Change Task から記録し、再分析が必要な場合は新しい Change Task と不変 Review Event を作成します。Repository は行ロック、前イベント整合性、同一 ID の冪等性、および Project／Change の複合外部キーを引き続き強制します。
 
 ## P1 PostgreSQL 持久化
 
@@ -208,4 +185,4 @@ Stable Key 格式：
 ## 当前后续边界
 
 - P2 的追加式 RAG readiness、三类 Query Plan、Profile 驱动 Relation Build、质量 evaluator、确定性 Context Package、真实 Provider test 与 readiness Evidence 已完成；模型压缩保真属于 MVP 后增强，不是当前 readiness 条件。
-- Golden 案例已经冻结。正式 Golden retrieval 命令、质量报告和 Impact 门禁已实现并通过真实 PostgreSQL/pgvector 回归；VisionDemo 运维数据库上的正式 Report 仍需在本地 Embedding Provider 与固定 Canonical Snapshot 可用时采集，详见 [后续任务清单](NEXT-TASKS.md)。
+- Golden 案例已经冻结。正式 Golden retrieval 命令、质量报告和 Impact 门禁已实现并通过真实 PostgreSQL/pgvector 回归；VisionDemo 运维数据库上的正式 Report 仍需在本地 Embedding Provider 与固定 Canonical Snapshot 可用时采集。製品フローの再構成状況は [主変更閉ループ再構成](RECONSTRUCTION.md) を参照してください。

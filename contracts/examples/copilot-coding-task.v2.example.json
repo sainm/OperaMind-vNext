@@ -1,0 +1,111 @@
+{
+  "artifact_type": "CopilotCodingTask",
+  "schema_version": "v2",
+  "coding_task_id": "change-task-001",
+  "change_session_id": null,
+  "change_request_id": "change-request-001",
+  "project_id": "project-001",
+  "analysis_case_id": null,
+  "repository_id": null,
+  "edit_packet_id": null,
+  "approval_grant_id": null,
+  "base_repository_revision": null,
+  "attempt_number": 1,
+  "execution_mode": "copilot_change_task",
+  "initial_stage": "document_change",
+  "provider_contract": {
+    "interface": "coding_task_provider_v1",
+    "route": "local_bridge",
+    "provider_id": "vscode_github_copilot"
+  },
+  "task_summary": "费用状态检索增加差戻し选项。",
+  "change_context": {
+    "requirement_text": "费用状态检索增加差戻し选项。",
+    "source_document_ref": "docs/expense-search.xlsx",
+    "target_document_ref": null,
+    "business_rules": [
+      {
+        "business_rule_id": "expense-status-returned",
+        "text": "差戻し状态必须可检索",
+        "source_refs": ["docs/expense-search.xlsx"]
+      }
+    ],
+    "ambiguity_status": "clear"
+  },
+  "target_project": {
+    "detection_status": "supported",
+    "stack_id": "springboot15-thymeleaf-gradle",
+    "framework": "Spring Boot 1.5",
+    "template_engine": "Thymeleaf",
+    "build_system": "Gradle Wrapper",
+    "source_kinds": [
+      "Java",
+      "Thymeleaf HTML",
+      "Gradle"
+    ],
+    "change_constraints": [
+      "Spring Boot 1.5、Thymeleaf、Gradle Wrapper を維持する",
+      "変更要件に含まれない Framework / Build Tool の更新を行わない",
+      "JAVA_HOME に設定された対象工程互換 JDK を使用する"
+    ],
+    "compile_command": [
+      "./gradlew",
+      "classes",
+      "testClasses",
+      "--no-daemon"
+    ],
+    "test_command": [
+      "./gradlew",
+      "test",
+      "--no-daemon"
+    ],
+    "build_command": [
+      "./gradlew",
+      "build",
+      "--no-daemon"
+    ],
+    "evidence": [
+      "gradlew",
+      "gradle/wrapper/gradle-wrapper.properties",
+      "build.gradle",
+      "build.gradle:Spring Boot 1.5",
+      "src/main/resources/templates/expense/list.html"
+    ],
+    "missing_signals": []
+  },
+  "workflow": {
+    "stage_order": [
+      "requirement",
+      "document_change",
+      "code_scope",
+      "compile_test",
+      "ui_validation",
+      "final_report"
+    ],
+    "required_outputs": [
+      "document_diff",
+      "code_diff",
+      "test_plan",
+      "test_data_plan"
+    ]
+  },
+  "output_protocol": {
+    "stage_order": [
+      "document_change",
+      "code_scope",
+      "test_planning"
+    ],
+    "tool": "copilot_record_change_outputs",
+    "test_planning_requires_validated_diff": true
+  },
+  "mcp_server_name": "operaMind",
+  "required_mcp_tools": [
+    "copilot_get_coding_task",
+    "copilot_record_change_outputs",
+    "copilot_run_task_command",
+    "copilot_validate_task_diff",
+    "copilot_record_task_result"
+  ],
+  "created_by": "product-owner@example.invalid",
+  "created_at": "2026-07-28T12:00:00Z"
+}

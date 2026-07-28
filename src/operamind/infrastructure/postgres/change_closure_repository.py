@@ -147,6 +147,7 @@ class ChangeClosureRepository:
                 (project_id, case_id, orchestration_created_at),
             )
             ui_row = cursor.fetchone()
+            ui_artifact_id: str | None = None
             ui_test_case_refs: tuple[tuple[str, tuple[str, ...]], ...] = ()
             if ui_row is not None:
                 cursor.execute(
@@ -169,6 +170,24 @@ class ChangeClosureRepository:
                     )
                     for mapping in cursor.fetchall()
                 )
+                ui_artifact_id = str(ui_row[0])
+            else:
+                cursor.execute(
+                    """
+                    SELECT artifact_id
+                    FROM artifact_records
+                    WHERE project_id = %s
+                      AND analysis_case_id = %s
+                      AND artifact_type = 'UiVerificationResult'
+                      AND created_at >= %s
+                    ORDER BY created_at DESC, artifact_id DESC
+                    LIMIT 1
+                    """,
+                    (project_id, case_id, orchestration_created_at),
+                )
+                direct_ui_row = cursor.fetchone()
+                if direct_ui_row is not None:
+                    ui_artifact_id = str(direct_ui_row[0])
         edit_result = None
         if edit_row is not None:
             edit_result = {
@@ -195,8 +214,18 @@ class ChangeClosureRepository:
         if data_row is not None and data_row[0] is not None:
             data_result = self._required_artifact(str(data_row[0]), "TestDataExecutionResult")
         ui_result = None
-        if ui_row is not None:
-            ui_result = self._required_artifact(str(ui_row[0]), "UiVerificationResult")
+        if ui_artifact_id is not None:
+            ui_result = self._required_artifact(ui_artifact_id, "UiVerificationResult")
+            if ui_row is None:
+                ui_test_case_refs = tuple(
+                    (
+                        str(result["scenario_id"]),
+                        (str(result["scenario_id"]),),
+                    )
+                    for result in cast(
+                        list[dict[str, Any]], ui_result["scenario_results"]
+                    )
+                )
         return ChangeClosureEvidence(
             change_request=self._required_artifact(request_id, "ChangeRequest"),
             orchestration=self._required_artifact(orchestration_id, "ChangeOrchestrationPlan"),
