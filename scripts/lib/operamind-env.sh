@@ -12,8 +12,7 @@ operamind_env_key_is_allowed() {
       OPERAMIND_POSTGRES_PASSWORD | OPERAMIND_POSTGRES_PORT | \
       OPERAMIND_TEST_DATABASE_URL | OPERAMIND_TEST_DATA_BINDING_PROFILE | \
       OPERAMIND_VISIONDEMO_BASE_URL | OPERAMIND_VISIONDEMO_H2_JAR | \
-      OPERAMIND_VISIONDEMO_JAVA | OPERAMIND_VISIONDEMO_JDBC_URL | OPERAMIND_WEB_TOKEN | \
-      OPERAMIND_WORKER_TOKEN)
+      OPERAMIND_VISIONDEMO_JAVA | OPERAMIND_VISIONDEMO_JDBC_URL | OPERAMIND_WORKER_TOKEN)
       return 0
       ;;
     *) return 1 ;;
@@ -79,7 +78,6 @@ operamind_validate_wsl_environment() {
     OPERAMIND_DATABASE_URL \
     OPERAMIND_TEST_DATABASE_URL \
     OPERAMIND_BRIDGE_TOKEN \
-    OPERAMIND_WEB_TOKEN \
     OPERAMIND_MAX_ACTIVE_TASKS_PER_RUN \
     OPERAMIND_POSTGRES_CONTAINER \
     OPERAMIND_POSTGRES_PORT \
@@ -97,11 +95,6 @@ operamind_validate_wsl_environment() {
   [[ "${OPERAMIND_BRIDGE_TOKEN}" =~ ^[A-Za-z0-9._~+-]+$ ]] \
     && ((${#OPERAMIND_BRIDGE_TOKEN} >= 32 && ${#OPERAMIND_BRIDGE_TOKEN} <= 256)) || {
     printf 'OPERAMIND_BRIDGE_TOKEN must be a 32-256 character opaque token.\n' >&2
-    return 1
-  }
-  [[ "${OPERAMIND_WEB_TOKEN}" =~ ^[A-Za-z0-9._~+-]+$ ]] \
-    && ((${#OPERAMIND_WEB_TOKEN} >= 32 && ${#OPERAMIND_WEB_TOKEN} <= 256)) || {
-    printf 'OPERAMIND_WEB_TOKEN must be a 32-256 character opaque token.\n' >&2
     return 1
   }
   [[ "${OPERAMIND_MAX_ACTIVE_TASKS_PER_RUN}" =~ ^[1-9][0-9]*$ ]] || {

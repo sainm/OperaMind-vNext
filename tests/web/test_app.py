@@ -467,31 +467,23 @@ class FakeService:
         return {"readiness_stage": "p6", "manifest_status": "pending", "gates": []}
 
 
-def client_with_fake(
-    *, bridge_token: str | None = None, web_token: str | None = None
-) -> tuple[TestClient, FakeService]:
+def client_with_fake(*, bridge_token: str | None = None) -> tuple[TestClient, FakeService]:
     fake = FakeService()
     app = create_app(
         repository_root=ROOT,
         database_url="postgresql:///unused",
         bridge_token=bridge_token,
-        web_token=web_token,
     )
     app.dependency_overrides[get_service] = lambda: fake
     return TestClient(app), fake
 
 
-def test_web_token_protects_static_and_api_but_not_health_or_local_bridge_auth() -> None:
-    client, _ = client_with_fake(bridge_token="bridge-secret", web_token="web-secret")
+def test_local_web_needs_no_user_authentication_and_bridge_keeps_its_token() -> None:
+    client, _ = client_with_fake(bridge_token="bridge-secret")
 
     assert client.get("/health").status_code == 200
-    assert client.get("/").status_code == 401
-    assert client.get("/api/v1/projects").status_code == 401
-    assert client.get("/", auth=("operamind", "web-secret")).status_code == 200
-    assert (
-        client.get("/api/v1/projects", headers={"Authorization": "Bearer web-secret"}).status_code
-        == 200
-    )
+    assert client.get("/").status_code == 200
+    assert client.get("/api/v1/projects").status_code == 200
     bridge = client.get(
         "/api/v1/local-bridge/tasks/next",
         params={"workspace_root": "/workspace/linked", "consumer_id": "vscode-1"},
@@ -508,6 +500,15 @@ def test_app_keeps_orchestration_parallelism_as_deployment_state() -> None:
     )
 
     assert app.state.orchestration_scheduling_policy.max_active_tasks_per_run == 4
+
+
+def test_profile_registry_css_keeps_binding_metadata_visible() -> None:
+    stylesheet = (ROOT / "src/operamind/web/static/app.css").read_text(encoding="utf-8")
+    page = (ROOT / "src/operamind/web/static/index.html").read_text(encoding="utf-8")
+
+    assert ".profile-registry-layout>section,.profile-binding-card>div{min-width:0}" in stylesheet
+    assert ".profile-binding-card{grid-template-columns:1fr;align-items:start}" in stylesheet
+    assert 'href="/app.css?v=20260727-profile-layout1"' in page
 
 
 def test_health_static_page_and_read_routes() -> None:

@@ -12,7 +12,7 @@ GitHub Actions の `.github/workflows/quality.yml` は、Python 3.12、ロック
 4. リポジトリ全体の statement coverage 80%
 5. readiness／Golden RAG、Approval、Copilot、Task scheduling、Recovery の各重要ファイル coverage 80%
 
-ローカルでは空の専用テスト DB を用意し、次のように同じゲートを再現します。
+ローカルでは `CREATEDB` 権限を持つテスト用 Role の接続先を指定し、次のように同じゲートを再現します。指定した DB は管理接続としてのみ使用されます。Pytest は収集前に `template0` からランダム名の DB を作成し、全 migration を一度適用して `OPERAMIND_TEST_DATABASE_URL` を一時的に差し替え、終了時に残存接続を切断して DB を削除します。元の DB が汚れていても、その Schema やデータは複製も変更もされません。作成、migration、cleanup のいずれかが失敗した場合はテスト全体を fail closed にします。
 
 ```bash
 export OPERAMIND_TEST_DATABASE_URL='postgresql://.../operamind_test'
@@ -27,6 +27,8 @@ export OPERAMIND_TEST_DATABASE_URL='postgresql://.../operamind_test'
   --cov-fail-under=80
 .venv/bin/python scripts/check_critical_coverage.py
 ```
+
+`tests/conftest.py` がセッション DB の lifecycle を所有し、`src/operamind/testing/postgres.py` が安全な DB 名、`template0`、migration、`DROP DATABASE ... WITH (FORCE)` を実装します。既存 DB を直接テスト対象として再利用するモードはありません。
 
 `scripts/check_critical_coverage.py` は平均値だけを見ません。ポリシーに列挙された各ファイルを個別に検査し、レポートからファイルが消えた場合も失敗します。閾値や対象ファイルを変更すると source-tree digest も変わるため、古い full-regression Evidence は自動的に stale になります。
 

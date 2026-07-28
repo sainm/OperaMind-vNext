@@ -23,13 +23,12 @@ def _copy_scripts(tmp_path: Path) -> Path:
     return repository
 
 
-def _valid_wsl_environment(*, bridge_token: str = "a" * 64, web_token: str = "b" * 64) -> str:
+def _valid_wsl_environment(*, bridge_token: str = "a" * 64) -> str:
     return "\n".join(
         (
             "OPERAMIND_DATABASE_URL=postgresql://operamind:test@127.0.0.1:5432/operamind",
             "OPERAMIND_TEST_DATABASE_URL=postgresql://operamind:test@127.0.0.1:5432/operamind_test",
             f"OPERAMIND_BRIDGE_TOKEN={bridge_token}",
-            f"OPERAMIND_WEB_TOKEN={web_token}",
             "OPERAMIND_MAX_ACTIVE_TASKS_PER_RUN=1",
             "OPERAMIND_POSTGRES_CONTAINER=operamind-postgres",
             "OPERAMIND_POSTGRES_PORT=5432",
@@ -84,18 +83,6 @@ def test_install_wsl_parses_valid_environment_without_shell_evaluation(tmp_path:
     )
     assert valid.returncode == 0, valid.stderr
     assert "podman ps" in valid.stdout
-
-    (repository / ".env.wsl").write_text(_valid_wsl_environment(web_token="weak"), encoding="utf-8")
-    weak_web_token = _run(
-        str(repository / "scripts/install-wsl.sh"),
-        "status",
-        "--dry-run",
-        cwd=repository,
-        env=os.environ.copy(),
-    )
-    assert weak_web_token.returncode != 0
-    assert "WEB_TOKEN must be" in weak_web_token.stderr
-
 
 def test_install_wsl_rejects_unknown_and_duplicate_environment_keys(tmp_path: Path) -> None:
     repository = _copy_scripts(tmp_path)

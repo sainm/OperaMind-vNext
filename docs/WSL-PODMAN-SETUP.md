@@ -30,7 +30,7 @@ chmod +x scripts/install-wsl.sh
 - 全 migration と pgvector extension
 - Playwright 1.61 の Chromium、および本プロジェクトの `channel="msedge"` に必要な Linux 版 Microsoft Edge
 - VSIX ビルドに必要な Node.js 22 と OperaMind Copilot Bridge VSIX
-- Git 管理外の `.env.wsl`（DB Password、Web Token、Bridge Token は自動生成）
+- Git 管理外の `.env.wsl`（DB Password、Bridge Token は自動生成）
 
 Playwright は WSL 内で headless 実行します。画面表示は不要です。headed 実行を行う場合だけ WSLg が必要です。
 
@@ -40,7 +40,7 @@ Playwright は WSL 内で headless 実行します。画面表示は不要です
 ./scripts/install-wsl.sh start
 ```
 
-Windows 側のブラウザーで `http://127.0.0.1:8765` を開きます。Basic 認証ダイアログではユーザー名 `operamind`、パスワードに `.env.wsl` の `OPERAMIND_WEB_TOKEN` を入力します。Web は `Ctrl+C` で停止し、PostgreSQL は次のコマンドで停止します。
+Windows 側のブラウザーで `http://127.0.0.1:8765` を開きます。単機利用を前提とするためユーザー認証はありません。Web は `Ctrl+C` で停止し、PostgreSQL は次のコマンドで停止します。
 
 ```bash
 ./scripts/install-wsl.sh stop
@@ -108,7 +108,7 @@ export EMBED_MODEL='text-embedding-nomic-embed-text-v1.5'
 
 OperaMind Web / PostgreSQL / Playwright / Edge は WSL 内、LM Studio と VS Code は Windows 側という分離にします。
 
-生成された `vscode-extension/dist/operamind-copilot-bridge.vsix` は Windows 側の VS Code から `Extensions: Install from VSIX...` でインストールします。Web 起動時は `.env.wsl` の `OPERAMIND_WEB_TOKEN` を Bearer/Basic 認証に使用し、Bridge Token は `.env.wsl` の `OPERAMIND_BRIDGE_TOKEN` と同じ値を VS Code SecretStorage に登録します。
+生成された `vscode-extension/dist/operamind-copilot-bridge.vsix` は Windows 側の VS Code から `Extensions: Install from VSIX...` でインストールします。Bridge Token は `.env.wsl` の `OPERAMIND_BRIDGE_TOKEN` と同じ値を VS Code SecretStorage に登録します。
 
 ## オプション
 

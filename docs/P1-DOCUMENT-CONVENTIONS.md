@@ -163,7 +163,7 @@ Repository 写入使用确定性 ID 作为幂等键。相同内容重放成功�
 
 `PersistedDocumentDiffService` 先在数据库事务外完成安全提取与 Diff，再在一个外层事务中写入全部持久化结果；各 Repository 的内层事务成为 savepoint。任何末端 Artifact 校验、范围或冲突错误都会回滚此前的 Profile、Snapshot、Fact 和 Change 写入。
 
-数据库集成测试需要独立数据库：
+数据库集成测试需要具有 `CREATEDB` 权限的测试管理连接。Pytest 会为每次 Session 自动创建、迁移和清理随机数据库；环境变量指向的原数据库不会被用作测试 Schema：
 
 ```bash
 OPERAMIND_TEST_DATABASE_URL="$OPERAMIND_TEST_DATABASE_URL" \

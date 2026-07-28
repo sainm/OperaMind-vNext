@@ -222,6 +222,18 @@ def _resolve_context(
             )
         )
         matched.append((node, location_matches, source_matches))
+    if len(matched) > 1:
+        primary_location = locations[0]
+        primary_matches = [
+            value
+            for value in matched
+            if any(
+                _source_ref_in_location(source_ref, document, primary_location)
+                for source_ref in value[0].source_refs
+            )
+        ]
+        if len(primary_matches) == 1:
+            matched = primary_matches
     if len(matched) != 1:
         raise ValueError(
             "Golden semantic ref must resolve to exactly one indexed Canonical node: "

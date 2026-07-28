@@ -55,7 +55,7 @@ OPERAMIND_DATABASE_URL="$OPERAMIND_DATABASE_URL" \
 
 Runner 在一个事务内取得 PostgreSQL advisory lock，按版本顺序执行 migration，并保存源文件 SHA-256。再次执行输出 `Database schema is up to date`；已应用文件被重写时必须失败。
 
-使用独立测试数据库运行 Repository round-trip：
+使用具有 `CREATEDB` 权限的测试管理连接运行 Repository round-trip。Pytest 会自动创建、迁移并删除随机数据库，不会修改 URL 指向的原数据库：
 
 ```bash
 OPERAMIND_TEST_DATABASE_URL="$OPERAMIND_TEST_DATABASE_URL" \

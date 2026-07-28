@@ -239,19 +239,17 @@ create_environment_file() {
     return
   fi
   if ((DRY_RUN)); then
-    log "Would create ${ENV_FILE} with generated PostgreSQL, Web, and Bridge secrets."
+    log "Would create ${ENV_FILE} with generated PostgreSQL and Bridge secrets."
     return
   fi
-  local password bridge_token web_token
+  local password bridge_token
   password="$(openssl rand -hex 24)"
   bridge_token="$(openssl rand -hex 32)"
-  web_token="$(openssl rand -hex 32)"
   umask 077
   cat >"${ENV_FILE}" <<EOF
 OPERAMIND_DATABASE_URL=postgresql://operamind:${password}@127.0.0.1:5432/operamind
 OPERAMIND_TEST_DATABASE_URL=postgresql://operamind:${password}@127.0.0.1:5432/operamind_test
 OPERAMIND_BRIDGE_TOKEN=${bridge_token}
-OPERAMIND_WEB_TOKEN=${web_token}
 OPERAMIND_MAX_ACTIVE_TASKS_PER_RUN=1
 OPERAMIND_POSTGRES_CONTAINER=operamind-postgres
 OPERAMIND_POSTGRES_PORT=5432
@@ -269,7 +267,6 @@ load_environment() {
       export OPERAMIND_DATABASE_URL=postgresql://operamind:DRY_RUN_SECRET@127.0.0.1:5432/operamind
       export OPERAMIND_TEST_DATABASE_URL=postgresql://operamind:DRY_RUN_SECRET@127.0.0.1:5432/operamind_test
       export OPERAMIND_BRIDGE_TOKEN=DRY_RUN_SECRET_DRY_RUN_SECRET_0001
-      export OPERAMIND_WEB_TOKEN=DRY_RUN_SECRET_DRY_RUN_SECRET_000002
       export OPERAMIND_MAX_ACTIVE_TASKS_PER_RUN=1
       return
     fi

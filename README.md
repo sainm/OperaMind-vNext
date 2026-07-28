@@ -78,13 +78,12 @@ UI Scenario は `test_case_refs` によって TestPlan の業務テスト Case �
 ```bash
 export OPERAMIND_DATABASE_URL='postgresql:///operamind?host=/private/tmp&port=5432'
 export OPERAMIND_BRIDGE_TOKEN='<random-local-secret>'
-export OPERAMIND_WEB_TOKEN='<random-local-web-secret>'
 # 既定値は 1。将来の複数 Subagent 実行時だけ変更する。
 export OPERAMIND_MAX_ACTIVE_TASKS_PER_RUN='1'
 operamind-web --root . --host 127.0.0.1 --port 8765
 ```
 
-起動時に未適用 migration を実行し、`http://127.0.0.1:8765/` で画面を公開します。Web は常に loopback host に限定され、`OPERAMIND_WEB_TOKEN` の Bearer または Basic 認証が必要です。`/health` と local Bridge の専用 token 認証だけが例外です。Evidence は本文や秘密情報ではなく、Canonical DB に保存されたコマンド結果の digest と UI Evidence の参照だけを表示します。
+起動時に未適用 migration を実行し、`http://127.0.0.1:8765/` で画面を公開します。単機利用を前提とするため Web は常に loopback host に限定し、ユーザー認証は要求しません。local Bridge は引き続き専用 Token で保護します。Evidence は本文や秘密情報ではなく、Canonical DB に保存されたコマンド結果の digest と UI Evidence の参照だけを表示します。
 
 ### VS Code Copilot の無ファイル Bridge
 
