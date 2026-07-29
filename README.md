@@ -82,6 +82,7 @@ PostgreSQL 統合テストでは、管理用接続だけを `OPERAMIND_TEST_DATA
 - [Code Graph](docs/P3-CODE-GRAPH.md)
 - [Impact Analysis](docs/P4-IMPACT.md)
 - [UI Verification](docs/P5-UI-VERIFICATION.md)
+- [汎用手動 E2E テスト手順](docs/MANUAL-E2E-TEST.md)
 - [品質ベースライン](docs/QUALITY-BASELINE.md)
 - [Windows / WSL セットアップ](docs/WSL-PODMAN-SETUP.md)
 - [机器切换后续交接](docs/MACHINE-SWITCH-HANDOFF.md)
