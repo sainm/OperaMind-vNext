@@ -202,8 +202,8 @@ def _all_inputs(source_digest: str) -> dict[str, ReadinessEvidenceInput]:
             {
                 "project_id": "visiondemo",
                 "analysis_case_id": "case-1",
-                "ui_execution_plan_id": "plan-1",
-                "ui_execution_run_id": "run-1",
+                "orchestration_id": "orchestration-1",
+                "test_data_run_id": "run-1",
                 "verification_result_id": "verification-1",
                 "environment_id": "environment-1",
                 "deployment_revision": "deployment-1",

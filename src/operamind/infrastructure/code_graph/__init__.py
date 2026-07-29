@@ -31,12 +31,6 @@ from operamind.infrastructure.code_graph.workspace import (
     WorkspaceScanLimits,
     WorkspaceScanner,
 )
-from operamind.infrastructure.code_graph.workspace_edit import (
-    PreEditedWorkspaceVerifier,
-    SafeWorkspaceEditor,
-    TextReplacement,
-    WorkspaceEditResult,
-)
 
 __all__ = [
     "STRUTS1_EXTRACTOR",
@@ -50,15 +44,11 @@ __all__ = [
     "GitWorktreeDiffInspector",
     "IncrementalCodeGraphScanner",
     "IncrementalScanPlan",
-    "PreEditedWorkspaceVerifier",
-    "SafeWorkspaceEditor",
     "SemanticAdapterRegistry",
     "SemanticFileExtraction",
     "SemanticRelation",
     "SemanticSymbol",
     "Struts1GraphResult",
-    "TextReplacement",
-    "WorkspaceEditResult",
     "WorkspaceScanLimits",
     "WorkspaceScanner",
     "extract_struts1_graph",

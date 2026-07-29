@@ -171,6 +171,13 @@ def test_task_definition_rejects_executor_specific_contracts() -> None:
         ),
     )
     assert task is not None
+    assert task.expected_output_types == (
+        "AcceptanceCriteria",
+        "TestPlan",
+        "TestDataPlan",
+        "BusinessCoverageReport",
+        "ChangeOrchestrationPlan",
+    )
     with pytest.raises(ValueError, match="agent, subagent, and human"):
         replace(task, eligible_executor_kinds=("agent",))
 

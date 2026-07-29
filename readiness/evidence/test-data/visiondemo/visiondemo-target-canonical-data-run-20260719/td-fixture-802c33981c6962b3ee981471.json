@@ -1,6 +1,0 @@
-{
-  "observed": {
-    "expected_expense_count": 4
-  },
-  "target": "VisionDemo/src/main/resources/data.sql"
-}

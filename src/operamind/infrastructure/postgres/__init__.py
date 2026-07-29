@@ -41,15 +41,6 @@ from operamind.infrastructure.postgres.change_orchestration_repository import (
     ChangeOrchestrationRecord,
     ChangeOrchestrationRepository,
 )
-from operamind.infrastructure.postgres.code_graph_query_repository import (
-    CodeAnchorMatchLoad,
-    CodeEdgeLoad,
-    CodeGraphQueryRepository,
-    CodeGraphQueryScope,
-    CodeNodeLocation,
-    CodeTestFileBinding,
-    CodeUnresolvedEdgeLoad,
-)
 from operamind.infrastructure.postgres.code_graph_repository import (
     CodeGraphPublishResult,
     CodeGraphRepositoryScope,
@@ -225,16 +216,9 @@ __all__ = [
     "ChangeOrchestrationRecord",
     "ChangeOrchestrationRepository",
     "ChangeRequestRecord",
-    "CodeAnchorMatchLoad",
-    "CodeEdgeLoad",
     "CodeGraphPublishResult",
-    "CodeGraphQueryRepository",
-    "CodeGraphQueryScope",
     "CodeGraphRepositoryScope",
     "CodeGraphSnapshotRepository",
-    "CodeNodeLocation",
-    "CodeTestFileBinding",
-    "CodeUnresolvedEdgeLoad",
     "CommandExecutionRecord",
     "CommandExecutionRepository",
     "CommandExecutionRequestWrite",

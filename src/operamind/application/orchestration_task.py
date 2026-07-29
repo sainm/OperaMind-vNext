@@ -168,7 +168,13 @@ ACTION_POLICIES: dict[str, _ActionPolicy] = {
     "generate_orchestration": _ActionPolicy(
         "deterministic_action",
         ("change_planning",),
-        ("ChangeOrchestration", "TestDataPlan", "UiExecutionPlan"),
+        (
+            "AcceptanceCriteria",
+            "TestPlan",
+            "TestDataPlan",
+            "BusinessCoverageReport",
+            "ChangeOrchestrationPlan",
+        ),
         ("生成物可追溯到已确认的需求、设计差分和影响项。",),
     ),
     "provision_execution_scope": _ActionPolicy(

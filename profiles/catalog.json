@@ -5,7 +5,6 @@
     "DocumentConventionProfile": "schemas/document-convention-profile.schema.json",
     "DocumentRelationProfile": "schemas/document-relation-profile.schema.json",
     "CodeFrameworkProfile": "schemas/code-framework-profile.schema.json",
-    "CommandExecutionProfile": "schemas/command-execution-profile.schema.json",
-    "UiLocatorProfile": "schemas/ui-locator-profile.schema.json"
+    "CommandExecutionProfile": "schemas/command-execution-profile.schema.json"
   }
 }

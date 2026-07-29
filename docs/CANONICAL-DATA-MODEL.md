@@ -28,7 +28,7 @@ profile_activation_events
 
 Profile Version 全局不可变；每次按版本或当前 Binding 回读都会重新验证 Profile Schema，并比对类型、业务 ID、语义版本、规范化 payload 与 `payload_digest`，防止合法 Schema 的内容漂移静默改变运行行为。Project Binding 保存当前指针，Activation Event 追加保存 previous/next version、操作者和原因。重复 event ID 只有内容完全一致时才视作幂等重放。
 
-`0053` 将 UI Knowledge 的已审核 Locator 集合纳入 `UiLocatorProfile`，并增加 Profile Drift Event、受影响 Artifact 和再构筑请求台账。Binding 从旧 Version 切换到新 Version 时，系统按现有 Canonical 外键关系向 Snapshot、Impact、Test Plan、Evidence 和 Closure 传播 `stale`／`blocked`；历史 Artifact 保持不可变，状态通过独立 Drift 台账和 fail-closed 读取投影表达。
+`0053` 曾将 UI Knowledge 的已审核 Locator 集合纳入 `UiLocatorProfile`，并增加 Profile Drift Event、受影响 Artifact 和再构筑请求台账。重构后的新 Change Request 不再登记或激活 `UiLocatorProfile`；Catalog、Schema、示例和运行时 Drift 分支已经删除。迁移文件继续保留，避免破坏已经升级的数据库；旧 Artifact 只能作为不可变历史读取，不能成为新的 Profile Replacement。
 
 `0054` 把一次再构筑扩展为 Batch、五阶段 Request 依赖、短期 Claim、追加式 Event 和不可变 Artifact Replacement 台账。升级时，同一 Drift 下可能并存的多个旧活动 Request 会合并到一个 fail-closed Batch，不会因活动 Batch 唯一约束而使迁移回滚。登记入口只排队，不伪造 Artifact；Worker 生成结果后，服务端从 Canonical 表独立验证替代 ID、项目、类型、通过状态、激活 Profile Version 和新的 Drift 状态。单个 Impact 只有在替代关系写入后才设置 `resolved_at`，全部 Impact 都通过后 Drift Event 才变为 `resolved`。失败、Lease 耗尽或 Canonical 验收不通过会保持原 Drift，后续阶段改为 `blocked`；显式 Requeue 保留历史 Claim／Event 并重新开放未完成 Request。
 
@@ -139,7 +139,7 @@ test_case_execution_authorizations
 
 `0032` 将 `TestDataPlan` 落为追加式执行台账。每个 Run 固定 Change Orchestration、Approval Grant、Project 和 Case；按 generation flow 顺序记录 fixture、HTTP、SQL、UI 四类受限步骤及变量输出、后置断言、清理结果和脱敏 Evidence。任何步骤失败都会停止后续 setup，但仍执行已进入流程的 cleanup；运行中的记录只能通过显式结束状态关闭，不能覆盖历史结果。
 
-`BusinessDataTemplate` 作为版本化 Artifact 保存在通用不可变 Artifact Ledger 中，可由不同 TestPlan 实例重复使用。模板在实例化前校验主从实体 DAG、主先从后的生成顺序、从先主后的删除顺序、共享变量生产者／消费者和参数前置条件。生成的 `TestDataPlan.template_instances` 只固定 Template 身份、参数名称、前置条件结果和实体顺序，不保存参数值；失败前置条件令 Plan 保持 `blocked`。
+`TestDataPlan` 由同一 Copilot Change Task 根据已验证的设计差分与代码差分直接生成，不再经过独立模板实例化层。Plan 必须明确跨画面数据、步骤依赖、变量生产者与消费者、最终断言和逆序 cleanup；无法确定的数据条件直接写入 `blocking_reasons` 并保持 `blocked`。
 
 `0033` 增加不可变 `ChangeClosureResult`。关闭计算同时核对 committed 且范围内的 Edit Result、确定性命令测试、Test Data 执行和清理、100% 业务覆盖以及受影响 UI 的最终结果。证据缺失为 `blocked`，越界修改为 `reanalysis_required`，组件失败为 `failed`；只有全部适用条件通过才是 `passed`。相同 Orchestration 和组件摘要只允许内容一致的幂等重放。
 
@@ -149,11 +149,11 @@ test_case_execution_authorizations
 
 `0037` 增加 Test Case 改订后的执行授权台账。系统分别摘要 TestDataPlan、UI Scenario 和执行边界；边界不变时在新 Run 预约事务内追加 `reused` 记录，边界变化时必须由可信 Web 确认确切目标摘要后追加 `reconfirmed` 记录。记录固定 Revision、目标 Orchestration、Grant、新旧范围摘要、变化维度、确认者和 payload digest。已完成 Grant 只能在 Project／Case、Repository、Packet、Scenario 白名单和运行权限仍一致且未过期／撤销时复用，不恢复编辑权限。Closure 和 Web Evidence 查询均按目标 Orchestration／创建时间隔离，旧 Version 的 UI 结果不能成为新 Version 的证据。
 
-`0038` 增加 UI Knowledge 审核截图台账。每条 Evidence 同时绑定 Observation Run、Observation、Project、source Snapshot 和业务 Target，数据库只保存受限本地 Evidence Ref、SHA-256 与脱敏标记。唯一约束保证同一 Run／Target 只有一张审核截图；复合外键阻止跨 Run、跨 Snapshot 或跨 Target 冒用。Web 查询按 result Snapshot 反查观测，图片读取时再次校验 Project、Snapshot、允许目录与文件 digest。approve/reject 继续通过追加 Review Event 生成新的不可变 Snapshot，不修改 draft 或 Evidence 历史。
+`0038` 曾增加 UI Knowledge 审核截图台账。该台账现仅保留升级前 Evidence 的不可变引用和审计关系；新流程的截图由 `TestDataExecutionResult` 的受限 UI Step 产生，并直接绑定 Flow、Step、Phase、内容摘要和本地 Evidence Ref。
 
 `0039` 增加 Test Case Revision 撤销关系。撤销必须创建 `revision_kind=undo` 的补偿性 Revision，并通过 `undo_of_revision_id` 绑定被撤销 Revision；外键保证同 Project，唯一索引保证一个 Revision 只产生一个直接撤销。撤销把前一版本的完整 AcceptanceCriteria、TestPlan、TestDataPlan 与 Coverage 内容复制到新的不可变 Artifact ID，当前 Version 及其 Run／Evidence／Closure 转为 stale 历史。恢复后的 Version 仍需重新比较执行范围，并在可复用或重新确认的 Grant 下启动新 Run。
 
-### UI Verification
+### 旧 UI Verification（历史兼容）
 
 ```text
 verification_scenarios
@@ -180,7 +180,9 @@ ui_locator_observation_evidence
 ui_knowledge_review_events
 ```
 
-`0012` 已实现 Scenario/Plan/Run/Result 模型；`0013` 增加 approved Browser Manifest 和逐 Scenario 的有限执行 DSL；`0014` 将五类 Preflight 归入追加式 Attempt，blocked 记录不会被覆盖，修复条件后可新建 Attempt；`0015` 增加与 Project/Environment/Deployment Revision 严格绑定的 UI Knowledge Snapshot、业务目标与带优先级/可靠性评分的 Locator candidate；`0016` 增加追加式 runtime observation run、逐候选 match/visible 计数以及 source/result Snapshot provenance；`0017` 以追加式 Review Event 把 draft 审核为新的 approved/rejected Snapshot，避免覆盖观测结果；`0038` 为一意且可见的业务目标增加元素级脱敏截图 Evidence。Plan 固定 active/approved Scenario 与 committed Edit Result 对应的 Deployment Revision；Preflight、Run 启动和非 blocked closure 都重新核对 Plan、Edit Result、Packet、Deployment、Environment 和固定 Scenario 映射。UI Knowledge 以及 Browser Manifest 的规范化 header/target/candidate/spec 会在读取时重构并复核 payload digest，防止 Locator 或执行 DSL 漂移。自动 Browser Preflight 全部通过后才能启动 Run。Evidence 只保存脱敏引用和 SHA-256，Scenario Result 与最终 `UiVerificationResult`/Case 状态在同一事务内关闭。进程中断留下的 running Run 只能通过带固定时间边界、操作人和原因的 `recover-run` 生成不可变 blocked Result，不能直接改库；Plan 和 Grant 保持可重试。
+`0012-0017` 与 `0038` 建立的 Scenario、Browser Manifest、Preflight、UI Knowledge 和 Locator Observation 表属于已停止的旧执行管线。迁移文件不能从已经升级的数据库删除，因此表结构仍保留，但 production source 已不查询这些表；新 Change Request 不创建 Browser Manifest、UI Knowledge Snapshot、Preflight Attempt 或旧 UI Run，也没有对应的 Web 管理入口。历史结果只通过不可变 Artifact／Closure Ledger 读取。
+
+现行 UI 验证由上节的 `TestDataPlan`、`test_data_execution_runs`、逐 Step Evidence 和不可变 `UiVerificationResult` 完成。UI Step 只能引用目标环境显式注入的 `screen_ref/ui_action_ref` Binding；没有 Binding、目标 Origin 或一意 Locator 时 fail closed。通过的 UI Step 必须保存脱敏 Screenshot，Closure 直接从当前 Orchestration 的 Artifact Ledger 读取结果，不复用旧 UI Plan。
 
 浏览器截图和大日志可以进入对象存储，但数据库必须保存不可变 Evidence Ref、Hash、环境和 Deployment Revision。
 
@@ -196,4 +198,4 @@ ui_knowledge_review_events
 - Impact Report、Impact Item、Confirmation 的引用不能跨 Project。
 - 每个 Test Case Proposal 最多生成一个 Revision；被 supersede 的 Orchestration 只能指向同 Project 的新版本，旧执行和 Closure 只允许作为 stale 历史读取。
 - 每个 Test Case 执行授权固定一个 Revision、目标 Orchestration、Grant 和目标范围摘要；`reused` 只允许范围完全不变，`reconfirmed` 只允许范围发生变化。
-- UI Run 的 Deployment Revision 必须与 Edit Result 对应 Build 一致。
+- 历史 UI Run 的 Deployment Revision 必须与 Edit Result 对应 Build 一致；现行 UI 结果直接绑定 committed Edit Result 的 Repository Revision。

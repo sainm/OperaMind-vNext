@@ -4,15 +4,14 @@ annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.14.2
 attrs==26.1.0
-certifi==2026.6.17
 click==8.4.2
 coverage==7.15.1
 et-xmlfile==2.0.0
 fastapi==0.139.2
 greenlet==3.5.3
 h11==0.16.0
-httpcore==1.0.9
-httpx==0.28.1
+httpcore2==2.7.0
+httpx2==2.7.0
 idna==3.18
 iniconfig==2.3.0
 jsonschema==4.26.0
@@ -45,6 +44,7 @@ tree-sitter-javascript==0.25.0
 tree-sitter-kotlin==1.1.0
 tree-sitter-python==0.25.0
 tree-sitter-typescript==0.23.2
+truststore==0.10.4
 types-jsonschema==4.26.0.20260518
 types-openpyxl==3.1.5.20260518
 typing-extensions==4.16.0

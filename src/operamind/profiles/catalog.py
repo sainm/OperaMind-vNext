@@ -22,7 +22,6 @@ EXPECTED_PROFILE_TYPES = frozenset(
         "DocumentConventionProfile",
         "DocumentRelationProfile",
         "EmbeddingProfile",
-        "UiLocatorProfile",
     }
 )
 WHITESPACE = re.compile(r"\s+")
@@ -43,7 +42,6 @@ EXAMPLE_NAMES = {
         "command-execution-profile.example.json",
         "springboot15-thymeleaf-gradle-command-profile.example.json",
     ),
-    "UiLocatorProfile": ("ui-locator-profile.example.json",),
 }
 
 

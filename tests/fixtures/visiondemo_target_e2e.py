@@ -1,137 +1,42 @@
-"""VisionDemo-only cross-screen TestDataPlan fixture for target-adapter tests."""
+"""VisionDemo-only cross-screen TestDataPlan fixture."""
 
 from __future__ import annotations
 
-from pathlib import Path
+import re
 from typing import Any
 
-from operamind.application.business_data_template import (
-    BusinessDataTemplateInstantiator,
-    BusinessDataTemplateRequest,
-)
-from operamind.contracts import ContractCatalog
+_PARAMETER = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def build_visiondemo_cross_screen_plan(*, force_business_failure: bool = False) -> dict[str, Any]:
-    """Instantiate the approved reusable VisionDemo master/detail data template."""
+    """Return one direct TestDataPlan with cross-screen variables and reverse cleanup."""
 
     suffix = "failure" if force_business_failure else "passed"
     expected_employee = "意図的失敗" if force_business_failure else "{{employee_name}}"
-    root = Path(__file__).resolve().parents[2]
-    return BusinessDataTemplateInstantiator(ContractCatalog.load(root / "contracts")).instantiate(
-        template=build_visiondemo_cross_screen_template(),
-        request=BusinessDataTemplateRequest(
-            instance_id="visiondemo-cross-screen-runtime",
-            test_data_plan_id=f"test-data-plan-visiondemo-target-{suffix}",
-            test_plan_id="test-plan-visiondemo-target-e2e",
-            project_id="visiondemo",
-            test_case_refs=("visiondemo-cross-screen-target-e2e",),
-            parameters={
-                "department_id": 7,
-                "business_date": "2026-07-19",
-                "expense_status": "差戻し",
-                "expense_amount": 4321,
-                "expected_employee_name": expected_employee,
-            },
-        ),
+    return _substitute(
+        _cross_screen_plan_source(suffix),
+        {
+            "department_id": 7,
+            "business_date": "2026-07-19",
+            "expense_status": "差戻し",
+            "expense_amount": 4321,
+            "expected_employee_name": expected_employee,
+        },
     )
 
 
-def build_visiondemo_cross_screen_template() -> dict[str, Any]:
-    """Return the approved reusable template without instance parameter values."""
-
+def _cross_screen_plan_source(suffix: str) -> dict[str, Any]:
     return {
-        "artifact_type": "BusinessDataTemplate",
+        "artifact_type": "TestDataPlan",
         "schema_version": "v1",
-        "template_id": "business-data-template-visiondemo-employee-expense-v1",
-        "template_key": "visiondemo.employee-expense-cross-screen",
-        "template_version": "1.0.0",
+        "test_data_plan_id": f"test-data-plan-visiondemo-target-{suffix}",
+        "test_plan_id": "test-plan-visiondemo-target-e2e",
         "project_id": "visiondemo",
-        "name_ja": "社員と経費の画面横断データ",
-        "status": "approved",
-        "parameters": [
-            _parameter("department_id", "社員の所属部門 ID"),
-            _parameter("business_date", "登録する業務日付"),
-            _parameter("expense_status", "登録する経費ステータス"),
-            _parameter("expense_amount", "登録する経費金額"),
-            _parameter("expected_employee_name", "最終確認する社員名"),
-        ],
-        "entities": [
-            {
-                "entity_ref": "employee",
-                "role": "master",
-                "depends_on": [],
-                "producer_step_id": "create-linked-employee",
-                "cleanup_step_id": "delete-linked-employee",
-                "identifier_variables": ["employee_id"],
-            },
-            {
-                "entity_ref": "expense",
-                "role": "detail",
-                "depends_on": ["employee"],
-                "producer_step_id": "create-linked-expense",
-                "cleanup_step_id": "delete-linked-expense",
-                "identifier_variables": ["expense_id"],
-            },
-        ],
-        "preconditions": [
-            _precondition(
-                "department-required", "所属部門 ID が指定されている", "department_id", "exists"
-            ),
-            _precondition(
-                "business-date-required", "業務日付が指定されている", "business_date", "non_blank"
-            ),
-            _precondition(
-                "expense-status-supported",
-                "経費ステータスが対象システムで利用できる",
-                "expense_status",
-                "one_of",
-                ["申請中", "承認済", "差戻し"],
-            ),
-            _precondition(
-                "expense-amount-positive",
-                "経費金額が 0 より大きい",
-                "expense_amount",
-                "greater_than",
-                0,
-            ),
-        ],
-        "shared_variables": [
-            _shared(
-                "employee_no",
-                "allocate-runtime-identities",
-                ["create-linked-employee", "verify-employee-screen"],
-            ),
-            _shared(
-                "employee_name",
-                "allocate-runtime-identities",
-                ["create-linked-employee", "verify-employee-screen", "verify-expense-screen"],
-            ),
-            _shared("employee_email", "allocate-runtime-identities", ["create-linked-employee"]),
-            _shared(
-                "expense_no",
-                "allocate-runtime-identities",
-                ["create-linked-expense", "verify-expense-screen"],
-            ),
-            _shared(
-                "employee_id",
-                "create-linked-employee",
-                [
-                    "create-linked-expense",
-                    "verify-database-link",
-                    "delete-linked-employee",
-                    "verify-cleanup-database",
-                ],
-            ),
-            _shared(
-                "expense_id",
-                "create-linked-expense",
-                ["verify-database-link", "delete-linked-expense", "verify-cleanup-database"],
-            ),
-        ],
+        "status": "ready",
         "data_sets": [
             {
-                "test_data_id": "data",
+                "test_data_id": "visiondemo-cross-screen-data",
+                "test_case_refs": ["visiondemo-cross-screen-target-e2e"],
                 "setup_actions": [
                     {
                         "action_id": "allocate-runtime-identities",
@@ -143,9 +48,11 @@ def build_visiondemo_cross_screen_template() -> dict[str, Any]:
                 "cleanup_policy": "delete_after_run",
             }
         ],
-        "generation_flow": {
-            "flow_id": "flow",
+        "generation_flows": [{
+            "flow_id": "visiondemo-cross-screen-flow",
             "title": "社員画面と経費画面を同一データ系列で検証する",
+            "test_case_refs": ["visiondemo-cross-screen-target-e2e"],
+            "test_data_refs": ["visiondemo-cross-screen-data"],
             "steps": [
                 _step(
                     "allocate-runtime-identities",
@@ -364,7 +271,8 @@ def build_visiondemo_cross_screen_template() -> dict[str, Any]:
                     ],
                 ),
             ],
-        },
+        }],
+        "blocking_reasons": [],
     }
 
 
@@ -404,38 +312,6 @@ def _step(
     return value
 
 
-def _parameter(name: str, description_ja: str) -> dict[str, object]:
-    return {"name": name, "required": True, "description_ja": description_ja}
-
-
-def _precondition(
-    precondition_id: str,
-    description_ja: str,
-    parameter: str,
-    operator: str,
-    expected: object | None = None,
-) -> dict[str, object]:
-    value: dict[str, object] = {
-        "precondition_id": precondition_id,
-        "description_ja": description_ja,
-        "parameter": parameter,
-        "operator": operator,
-    }
-    if expected is not None:
-        value["expected"] = expected
-    return value
-
-
-def _shared(
-    variable: str, producer_step_id: str, consumer_step_ids: list[str]
-) -> dict[str, object]:
-    return {
-        "variable": variable,
-        "producer_step_id": producer_step_id,
-        "consumer_step_ids": consumer_step_ids,
-    }
-
-
 def _output(variable: str, source: str, path: str) -> dict[str, object]:
     return {"variable": variable, "source": source, "path": path, "required": True}
 
@@ -453,3 +329,16 @@ def _assertion(
         "operator": "equals",
         "expected": expected,
     }
+
+
+def _substitute(value: object, parameters: dict[str, object]) -> Any:
+    if isinstance(value, str):
+        exact = _PARAMETER.fullmatch(value)
+        if exact is not None:
+            return parameters[exact.group(1)]
+        return _PARAMETER.sub(lambda match: str(parameters[match.group(1)]), value)
+    if isinstance(value, list):
+        return [_substitute(item, parameters) for item in value]
+    if isinstance(value, dict):
+        return {key: _substitute(item, parameters) for key, item in value.items()}
+    return value

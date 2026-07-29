@@ -1,9 +1,0 @@
-{
-  "observed": {
-    "employee_email": "operamind-5aec06e1@example.invalid",
-    "employee_name": "連携試験 5AEC06E1",
-    "employee_no": "OM-5AEC06E1",
-    "expense_no": "EXP-OM-5AEC06E1"
-  },
-  "target": "visiondemo.runtime-identities"
-}

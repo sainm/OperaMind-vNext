@@ -16,7 +16,7 @@
 - 全部 Change accepted 时 Analysis Case 进入 `ready_for_impact`；仍有待审核时保持 `indexing_rag`；出现 rejected 或在 ready 后证据反转时进入 `reanalysis_required`。原始 Artifact 和旧事件不会被覆盖。
 - 普通 Context Builder 继续使用 `structured-change-query-v1`。Golden 正式评测使用 `golden-cross-document-query-v2`，把已审核 required context 的文档与理由分别加入业务行为、程序契约、API 验收三类 Query；query ID 和文本仍完全确定，不依赖 AI 输出。
 - Context Builder 对三类 Query 分别执行正式 Hybrid Search，trace 保留 Query purpose 和 Slice candidate ID；随后只按 ID 回查 Canonical DB，并把 Slice 证据聚合到父 Section Context Item。
-- Context 与 Code Scope 加载 StructuredChange 时，同时验证不可变 Artifact SHA-256 和规范化 Change/Fact 重建结果；只有 Schema 合法但两份持久化证据不同也必须失败，不能选择任意一份继续。
+- Context 与 Copilot Impact Scope 加载 StructuredChange 时，同时验证不可变 Artifact SHA-256 和规范化 Change/Fact 重建结果；只有 Schema 合法但两份持久化证据不同也必须失败，不能选择任意一份继续。
 - 邻域扩展只包含有界相邻 Slice 和 current/ready Relation Build 中的显式 `document_relations`；跨文档必须有显式 relation，不扫描整个 Snapshot。Context Package 记录 ingestion batch/readiness event、Search Index Build、Relation Build、Profile、Ranking、Query Planner 和完整检索参数，并把 unresolved 数量写入 unknowns。
 - Token 估算包含完整 Artifact；超预算时失败并要求按 Change Group 拆分，不静默截断候选账本。相同 Context Package ID 只有在 Project、Case、Snapshot、ingestion、Change、Embedding Profile 版本/绑定、Token 预算、三类 Top-K 和邻接距离全部相同时才是完全重放；重放直接返回经 SHA-256 和数据库 envelope 复核的持久化 Artifact，不调用 Provider。
 - Golden RAG expectation 有独立 Schema。只有冻结三类 Query 的 required/irrelevant Canonical ID、人工批准和质量阈值后，`require-ready` 才允许通过；silver 的 `to_be_filled` 状态不能产生伪质量结论。
@@ -156,7 +156,7 @@ operamind-recover-index \
 
 真实 PostgreSQL 18 + pgvector 0.8.2 集成测试覆盖：
 
-- `0001-0059` 顺序升级和 checksum。
+- `0001-0060` 顺序升级和 checksum。
 - Search Index Build 的普通读取、向量检索和关键词检索都会重算完整条目账本；条目删除、关键词漂移、向量元数据/内容漂移以及缺失版本摘要均失败关闭。迁移前的 ready/stale Build 不原地补写可信摘要，必须使用新 Build ID 重建。
 - Canonical Node 与 Snapshot Membership 的事务写入/回滚。
 - 二进制版本不同但 Canonical 内容相同的两个 Snapshot 只生成一个向量，第二个 Build 100% 复用。

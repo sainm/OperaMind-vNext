@@ -161,6 +161,36 @@ def test_human_copilot_and_deployment_are_derived_from_canonical_chain() -> None
         assert deployment.review_status == "verified"
         assert deployment.subject["evidence_ids"] == ["ui-evidence-1"]
         with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO artifact_records (
+                    artifact_id, artifact_type, schema_version, project_id,
+                    analysis_case_id, payload, payload_digest
+                ) VALUES (
+                    'test-data-result-2', 'TestDataExecutionResult', 'v1',
+                    'project-1', 'case-1',
+                    '{"artifact_type":"TestDataExecutionResult","schema_version":"v1"}'::jsonb,
+                    %s
+                )
+                """,
+                ("d" * 64,),
+            )
+            cursor.execute(
+                """
+                INSERT INTO test_data_execution_runs (
+                    run_id, execution_result_id, orchestration_id, test_data_plan_id,
+                    approval_grant_id, project_id, analysis_case_id, status,
+                    result_artifact_id, created_by, started_at, completed_at
+                ) VALUES (
+                    'run-2', 'test-data-result-2', 'orchestration-1',
+                    'test-data-plan-1', 'grant-1', 'project-1', 'case-1',
+                    'failed', 'test-data-result-2', 'automation:test',
+                    now() + interval '1 second', now() + interval '2 seconds'
+                )
+                """
+            )
+        assert repository.deployment("project-1", "case-1") is None
+        with connection.cursor() as cursor:
             cursor.execute("SET search_path TO public")
             cursor.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema_name)))
         connection.commit()
@@ -356,73 +386,85 @@ def _seed_completed_change(connection: psycopg.Connection[object]) -> None:
             f"'edit_completed', 'worker:copilot', 'Edit completed', '{digest}')"
         ),
         (
-            "INSERT INTO ui_environments (environment_id, project_id, base_url, status) "
-            "VALUES ('environment-1', 'project-1', 'https://example.invalid', 'active')"
-        ),
-        (
-            "INSERT INTO ui_deployments ("
-            "deployment_revision, environment_id, project_id, repository_revision, status) "
-            f"VALUES ('deployment-1', 'environment-1', 'project-1', '{result_revision}', 'ready')"
-        ),
-        (
-            "INSERT INTO verification_scenarios ("
-            "scenario_version_id, project_id, scenario_id, scenario_version, title, "
-            "preconditions, steps, expected_visible_results, evidence_requirements, "
-            "trigger_path, review_status, is_active) VALUES ("
-            "'scenario-version-1', 'project-1', 'scenario-1', '1.0.0', 'Scenario', "
-            "'[]'::jsonb, '[{\"action\":\"open\"}]'::jsonb, "
-            "'[{\"result\":\"visible\"}]'::jsonb, '[\"screenshot\"]'::jsonb, '/', "
-            "'approved', true)"
-        ),
-        (
-            "INSERT INTO ui_execution_plans ("
-            "ui_execution_plan_id, project_id, analysis_case_id, edit_packet_id, "
-            "edit_result_id, environment_id, deployment_revision, repository_revision, "
-            "status, scenario_refs, blocking_reasons, repository_binding_status) VALUES ("
-            "'plan-1', 'project-1', 'case-1', 'packet-1', 'edit-result-1', 'environment-1', "
-            f"'deployment-1', '{result_revision}', 'completed', "
-            "'[\"scenario-1\"]'::jsonb, '[]'::jsonb, 'verified')"
-        ),
-        (
-            "INSERT INTO ui_execution_plan_scenarios ("
-            "ui_execution_plan_id, project_id, scenario_id, scenario_version_id, "
-            "execution_order) VALUES ("
-            "'plan-1', 'project-1', 'scenario-1', 'scenario-version-1', 1)"
-        ),
-        (
-            "INSERT INTO ui_execution_runs ("
-            "ui_execution_run_id, ui_execution_plan_id, project_id, status, completed_at, "
-            "approval_grant_id) VALUES ("
-            "'run-1', 'plan-1', 'project-1', 'completed', now(), 'grant-1')"
-        ),
-        (
-            "INSERT INTO ui_execution_evidence ("
-            "evidence_id, ui_execution_run_id, project_id, scenario_id, evidence_type, "
-            "evidence_ref, content_digest, sanitized) VALUES ("
-            "'ui-evidence-1', 'run-1', 'project-1', 'scenario-1', 'screenshot', "
-            f"'evidence/screenshot.png', '{digest}', true)"
-        ),
-        (
-            "INSERT INTO ui_scenario_results ("
-            "ui_execution_run_id, project_id, scenario_id, status, impact_item_refs, "
-            "evidence_refs, failure_category, summary) VALUES ("
-            "'run-1', 'project-1', 'scenario-1', 'passed', '[\"impact-1\"]'::jsonb, "
-            "'[\"ui-evidence-1\"]'::jsonb, 'none', 'Passed')"
-        ),
-        (
             "INSERT INTO artifact_records ("
             "artifact_id, artifact_type, schema_version, project_id, analysis_case_id, "
-            "payload, payload_digest) VALUES ("
-            "'verification-1', 'UiVerificationResult', 'v1', 'project-1', 'case-1', "
-            '\'{"artifact_type":"UiVerificationResult","schema_version":"v1"}\'::jsonb, '
+            "payload, payload_digest) VALUES "
+            "('acceptance-1', 'AcceptanceCriteria', 'v1', 'project-1', 'case-1', "
+            '\'{"artifact_type":"AcceptanceCriteria","schema_version":"v1"}\'::jsonb, '
+            f"'{digest}'), "
+            "('test-plan-1', 'TestPlan', 'v1', 'project-1', 'case-1', "
+            '\'{"artifact_type":"TestPlan","schema_version":"v1"}\'::jsonb, '
+            f"'{digest}'), "
+            "('test-data-plan-1', 'TestDataPlan', 'v1', 'project-1', 'case-1', "
+            '\'{"artifact_type":"TestDataPlan","schema_version":"v1"}\'::jsonb, '
+            f"'{digest}'), "
+            "('coverage-1', 'BusinessCoverageReport', 'v1', 'project-1', 'case-1', "
+            '\'{"artifact_type":"BusinessCoverageReport","schema_version":"v1"}\'::jsonb, '
+            f"'{digest}'), "
+            "('orchestration-1', 'ChangeOrchestrationPlan', 'v1', "
+            "'project-1', 'case-1', "
+            '\'{"artifact_type":"ChangeOrchestrationPlan","schema_version":"v1"}\'::jsonb, '
+            f"'{digest}'), "
+            "('test-data-result-1', 'TestDataExecutionResult', 'v1', "
+            "'project-1', 'case-1', "
+            '\'{"artifact_type":"TestDataExecutionResult","schema_version":"v1"}\'::jsonb, '
+            f"'{digest}'), "
+            "('verification-1', 'UiVerificationResult', 'v2', 'project-1', 'case-1', "
+            "jsonb_build_object("
+            "'artifact_type', 'UiVerificationResult', 'schema_version', 'v2', "
+            "'orchestration_id', 'orchestration-1', "
+            "'test_data_execution_result_id', 'test-data-result-1', "
+            "'environment_id', 'environment-1', "
+            f"'deployment_revision', '{result_revision}', "
+            f"'repository_revision', '{result_revision}', "
+            "'status', 'passed', "
+            "'scenario_results', "
+            '\'[{"scenario_id":"ui-case-1","status":"passed"}]\'::jsonb, '
+            "'unresolved_impact_item_ids', '[]'::jsonb, "
+            "'out_of_scope_files', '[]'::jsonb, "
+            "'failure_reasons', '[]'::jsonb), "
             f"'{digest}')"
         ),
         (
-            "INSERT INTO change_validations ("
-            "verification_result_id, project_id, analysis_case_id, ui_execution_plan_id, "
-            "ui_execution_run_id, status, unresolved_impact_item_ids, out_of_scope_files, "
-            "failure_reasons) VALUES ('verification-1', 'project-1', 'case-1', 'plan-1', "
-            "'run-1', 'passed', '[]'::jsonb, '[]'::jsonb, '[]'::jsonb)"
+            "INSERT INTO change_orchestrations ("
+            "orchestration_id, change_request_id, project_id, analysis_case_id, "
+            "impact_report_id, reviewed_case_id, reviewed_case_digest, status, "
+            "acceptance_criteria_id, test_plan_id, test_data_plan_id, "
+            "coverage_report_id, created_by) VALUES ("
+            "'orchestration-1', 'change-request-1', 'project-1', 'case-1', "
+            f"'report-1', 'reviewed-case-1', '{digest}', 'ready', "
+            "'acceptance-1', 'test-plan-1', 'test-data-plan-1', "
+            "'coverage-1', 'automation:test')"
+        ),
+        (
+            "INSERT INTO test_data_execution_runs ("
+            "run_id, execution_result_id, orchestration_id, test_data_plan_id, "
+            "approval_grant_id, project_id, analysis_case_id, status, "
+            "result_artifact_id, created_by, started_at, completed_at) VALUES ("
+            "'run-1', 'test-data-result-1', 'orchestration-1', 'test-data-plan-1', "
+            "'grant-1', 'project-1', 'case-1', 'passed', 'test-data-result-1', "
+            "'automation:test', now(), now())"
+        ),
+        (
+            "INSERT INTO test_data_flow_results ("
+            "run_id, project_id, flow_id, execution_order, status, "
+            "deferred_assertion_ids) VALUES ("
+            "'run-1', 'project-1', 'flow-1', 1, 'passed', '[]'::jsonb)"
+        ),
+        (
+            "INSERT INTO test_data_step_results ("
+            "run_id, project_id, flow_id, phase, step_id, sequence, channel, "
+            "status, output_variables, evidence_refs) VALUES ("
+            "'run-1', 'project-1', 'flow-1', 'setup', 'ui-step-1', 1, 'ui', "
+            "'passed', '[]'::jsonb, '[\"evidence/screenshot.png\"]'::jsonb)"
+        ),
+        (
+            "INSERT INTO test_data_execution_evidence ("
+            "evidence_id, run_id, project_id, flow_id, phase, step_id, "
+            "evidence_type, evidence_ref, content_digest, sanitized) VALUES ("
+            "'ui-evidence-1', 'run-1', 'project-1', 'flow-1', 'setup', "
+            "'ui-step-1', 'screenshot', 'evidence/screenshot.png', "
+            f"'{digest}', true)"
         ),
     )
     with connection.cursor() as cursor:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from operamind.testing import (
+from tests.support.postgres import (
     TemporaryPostgresDatabase,
     TemporaryPostgresDatabaseError,
 )

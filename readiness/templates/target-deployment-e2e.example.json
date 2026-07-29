@@ -10,8 +10,8 @@
   "subject": {
     "project_id": "replace-with-project-id",
     "analysis_case_id": "replace-with-analysis-case-id",
-    "ui_execution_plan_id": "replace-with-ui-execution-plan-id",
-    "ui_execution_run_id": "replace-with-ui-execution-run-id",
+    "orchestration_id": "replace-with-orchestration-id",
+    "test_data_run_id": "replace-with-test-data-run-id",
     "verification_result_id": "replace-with-verification-result-id",
     "environment_id": "replace-with-environment-id",
     "deployment_revision": "replace-with-deployment-revision",

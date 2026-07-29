@@ -1,8 +1,8 @@
 from pathlib import Path
 from typing import Any
 
-from operamind.application import UnresolvedEvidenceReportBuilder
 from operamind.contracts import ContractCatalog
+from operamind.unresolved_evidence import UnresolvedEvidenceReportBuilder
 
 ROOT = Path(__file__).parents[2]
 

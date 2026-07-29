@@ -86,8 +86,8 @@ def _subject(
         "target_deployment_e2e": {
             "project_id": "project-1",
             "analysis_case_id": "case-1",
-            "ui_execution_plan_id": "plan-1",
-            "ui_execution_run_id": "run-1",
+            "orchestration_id": "orchestration-1",
+            "test_data_run_id": "run-1",
             "verification_result_id": "result-1",
             "environment_id": "environment-1",
             "deployment_revision": "deployment-1",
@@ -128,14 +128,35 @@ def _repository_with_current_readiness(tmp_path: Path) -> Path:
     gate = next(
         item for item in manifest["gates"] if item["gate_id"] == "full_local_regression"
     )
-    evidence_ref = gate["evidence_refs"][0]
-    evidence_path = repository / evidence_ref["path"]
-    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    evidence["subject"]["source_tree_sha256"] = MvpReadinessValidator.source_tree_digest(
-        repository
-    )
+    evidence_path = repository / "readiness/evidence/test-current-full-regression.json"
+    evidence = {
+        "evidence_format_version": "v1",
+        "evidence_id": "test-current-full-regression",
+        "gate_id": "full_local_regression",
+        "evidence_type": "test_report",
+        "outcome": "passed",
+        "observed_at": OBSERVED_AT,
+        "review_status": "verified",
+        "reviewed_by": ["automation:test"],
+        "subject": _subject(
+            "full_local_regression",
+            golden_manifest_sha256="0" * 64,
+            source_tree_sha256=MvpReadinessValidator.source_tree_digest(repository),
+        ),
+    }
     evidence_path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
-    evidence_ref["sha256"] = sha256(evidence_path.read_bytes()).hexdigest()
+    gate["status"] = "passed"
+    gate.pop("blocking_reason", None)
+    gate["evidence_refs"] = [
+        {
+            "evidence_id": evidence["evidence_id"],
+            "evidence_type": evidence["evidence_type"],
+            "path": "readiness/evidence/test-current-full-regression.json",
+            "sha256": sha256(evidence_path.read_bytes()).hexdigest(),
+            "observed_at": OBSERVED_AT,
+        }
+    ]
+    gate["reviewers"] = ["automation:test"]
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return repository
 
@@ -174,27 +195,21 @@ def test_repository_manifest_records_finalized_local_gates() -> None:
     )
     summary = validator.summarize(path)
 
-    issue_codes = {issue.code for issue in structural.issues}
-    assert issue_codes <= {"readiness.source_tree_digest_mismatch"}
+    assert structural.is_valid, structural.issues
     assert not ready.is_valid
     assert summary.readiness_stage == "golden_ready_partial"
-    assert summary.passed_gates[:4] == (
+    assert summary.passed_gates == (
         "golden_dataset",
         "embedding_provider_live",
         "human_approval_e2e",
-        "target_deployment_e2e",
     )
-    if structural.is_valid:
-        assert summary.manifest_status == "pending"
-        assert summary.passed_gates[4:] == ("full_local_regression",)
-        assert summary.validation_issues == ()
-    else:
-        assert summary.manifest_status == "stale"
-        assert summary.passed_gates[4:] == ()
-        assert "full_local_regression" in summary.pending_gates
-        assert summary.validation_issues == ("readiness.source_tree_digest_mismatch",)
-    assert "github_copilot_live" in summary.pending_gates
-    assert "target_deployment_e2e" not in summary.pending_gates
+    assert summary.manifest_status == "pending"
+    assert set(summary.pending_gates) == {
+        "github_copilot_live",
+        "target_deployment_e2e",
+        "full_local_regression",
+    }
+    assert summary.validation_issues == ()
     assert "golden_dataset" not in {issue.message.rsplit(": ", 1)[-1] for issue in ready.issues}
 
 
@@ -1082,7 +1097,7 @@ def test_repository_with_reviewed_golden_still_cannot_claim_mvp_ready(
     )
     output = capsys.readouterr().out
     assert "github_copilot_live" in output
-    assert "MVP gate is still pending: target_deployment_e2e" not in output
+    assert "MVP gate is still pending: target_deployment_e2e" in output
     assert "MVP gate is still pending: golden_dataset" not in output
 
 
@@ -1109,7 +1124,7 @@ def test_baseline_prints_readiness_status_for_selected_manifest(
     assert "Readiness stage: golden_ready_partial" in output
     assert (
         "Passed gates: golden_dataset, embedding_provider_live, human_approval_e2e, "
-        "target_deployment_e2e" in output
+        "full_local_regression" in output
     )
     assert "golden_dataset" in output
     assert "embedding_provider_live" in output
@@ -1139,15 +1154,14 @@ def test_baseline_prints_machine_readable_readiness_status(
 
     assert payload["readiness_stage"] == "golden_ready_partial"
     assert payload["manifest_status"] == "pending"
-    assert payload["passed_gates"][:4] == [
+    assert payload["passed_gates"] == [
         "golden_dataset",
         "embedding_provider_live",
         "human_approval_e2e",
-        "target_deployment_e2e",
+        "full_local_regression",
     ]
-    assert set(payload["passed_gates"][4:]) <= {"full_local_regression"}
     assert payload["pending_gates"][0] == "github_copilot_live"
-    assert set(payload["pending_gates"][1:]) <= {"full_local_regression"}
+    assert payload["pending_gates"][1:] == ["target_deployment_e2e"]
     assert payload["gates"][0] == {
         "blocking_reason": None,
         "evidence_template": None,

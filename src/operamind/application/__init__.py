@@ -30,14 +30,6 @@ from operamind.application.code_graph_build import (
     CodeGraphBuildResult,
     CodeGraphBuildService,
 )
-from operamind.application.code_scope import (
-    CodeScopeBlockedError,
-    CodeScopeCandidate,
-    CodeScopeLimits,
-    CodeScopeRequest,
-    CodeScopeResolutionResult,
-    CodeScopeResolverService,
-)
 from operamind.application.command_execution import (
     ApprovedCommandRequest,
     ApprovedCommandResult,
@@ -96,12 +88,6 @@ from operamind.application.hybrid_search import (
     RequirementDocumentDiscoveryResult,
     RequirementDocumentDiscoveryService,
 )
-from operamind.application.impact_report import (
-    ImpactReportRequest,
-    ImpactReportResult,
-    ImpactReportService,
-    UiImpactStatus,
-)
 from operamind.application.persisted_document_diff import (
     PersistedDocumentDiffRequest,
     PersistedDocumentDiffResult,
@@ -138,11 +124,6 @@ from operamind.application.test_data_execution_service import (
     TestDataExecutionServiceRequest,
     TestDataExecutionServiceResult,
 )
-from operamind.application.unresolved_evidence import (
-    UnresolvedEvidenceBuildResult,
-    UnresolvedEvidenceReportBuilder,
-    unresolved_evidence_report_id,
-)
 
 __all__ = [
     "ApprovalGrantRequest",
@@ -166,12 +147,6 @@ __all__ = [
     "CodeGraphBuildRequest",
     "CodeGraphBuildResult",
     "CodeGraphBuildService",
-    "CodeScopeBlockedError",
-    "CodeScopeCandidate",
-    "CodeScopeLimits",
-    "CodeScopeRequest",
-    "CodeScopeResolutionResult",
-    "CodeScopeResolverService",
     "CodingTaskDeliveryProvider",
     "CommandExecutionRecoveryRequest",
     "CommandExecutionRecoveryService",
@@ -207,9 +182,6 @@ __all__ = [
     "HybridSearchRequest",
     "HybridSearchResult",
     "HybridSearchService",
-    "ImpactReportRequest",
-    "ImpactReportResult",
-    "ImpactReportService",
     "LocalBridgeCopilotProvider",
     "PersistedDocumentDiffRequest",
     "PersistedDocumentDiffResult",
@@ -234,8 +206,4 @@ __all__ = [
     "TestDataExecutionService",
     "TestDataExecutionServiceRequest",
     "TestDataExecutionServiceResult",
-    "UiImpactStatus",
-    "UnresolvedEvidenceBuildResult",
-    "UnresolvedEvidenceReportBuilder",
-    "unresolved_evidence_report_id",
 ]

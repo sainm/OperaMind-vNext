@@ -83,8 +83,10 @@ class TestDataUiVerificationService:
         )
         artifact = {
             "artifact_type": "UiVerificationResult",
-            "schema_version": "v1",
+            "schema_version": "v2",
             "verification_result_id": result_id,
+            "orchestration_id": orchestration_id,
+            "test_data_execution_result_id": execution_result["execution_result_id"],
             "analysis_case_id": case_id,
             "edit_packet_id": edit_packet_id,
             "repository_revision": revision,
@@ -150,8 +152,7 @@ def _ui_scenario_evidence(
         matching = [
             flow
             for flow in flow_definitions.values()
-            if case_id
-            in {str(value) for value in cast(list[object], flow["test_case_refs"])}
+            if case_id in {str(value) for value in cast(list[object], flow["test_case_refs"])}
         ]
         refs: set[str] = set()
         for flow in matching:

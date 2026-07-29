@@ -96,11 +96,23 @@ Web API と画面は、次の六つだけを公開する。
 - [x] 主閉ループと接続されていない旧 UiKnowledge／BrowserManifest／UiVerificationPlan 実行管線を削除し、TestDataPlan 起点の限定 UI Evidence 経路へ統一
 - [x] Copilot TestPlan／TestDataPlan を迂回する Frozen Golden Case の runtime fallback と旧 ChangeLoopCase 実行モデルを削除（Golden RAG はオフライン品質基準として維持）
 - [x] 旧 UI Execution Plan 専用の Grant 認可、Web Validation 進捗 Query、二重 Screenshot origin を削除し、TestDataExecutionResult／ChangeClosureResult を唯一の UI 状態源に統一
+- [x] 新規利用できない旧 `UiLocatorProfile` の Catalog／Schema／例と Browser Manifest 例を削除し、既存 DB の移行履歴と監査互換だけを維持
+- [x] `UiVerificationResult v2` を current Orchestration／TestDataExecutionResult に固定し、Closure の UI 外部キーを `artifact_records` に移行
+- [x] Readiness は同一 Orchestration の最新 TestData run のみ受理し、後続失敗・実行中 run がある場合は fail closed
+- [x] `UiVerificationResult v2` に current Orchestration ID を固定し、Closure の旧 `change_validations` fallback を削除して Test Case Revision 間の Evidence 混入を fail closed に防止
+- [x] Readiness、Profile Drift／Rebuild、Test Case Revision を current TestData／UI v2 Artifact に統一し、production source の旧 UI table query を全廃
 - [x] 現行 TestData 実行から旧 UI Environment／Deployment／Plan Query を除去し、資格情報なしの `OPERAMIND_TEST_TARGET_BASE_URL` 一つへ target Origin 設定を統一
-- [x] VisionDemo 固有の画面／API／業務日付を持つ E2E Plan Builder を production package から test fixture へ移し、production には汎用 BusinessDataTemplate と bounded executor だけを維持
+- [x] VisionDemo 固有の画面／API／業務日付／H2 Binding を持つ target adapter を削除し、跨画面 TestDataPlan だけを契約 fixture として維持。production は Copilot が直接生成した TestDataPlan、注入可能な `TestDataExecutorFactory`、fail-closed bounded executor に限定
+- [x] VisionDemo 固有の Code／Relation／Command Profile を test fixture へ移し、production Profile は汎用 Schema と再利用可能な技術 Stack 例だけに限定
 - [x] 旧 `CopilotHandoff` 内部名を `CopilotTaskContext` に統一し、MCP Server の公開説明から file handoff 表現を削除
 - [x] 文書差分／Impact の未確認状態を完了表示せず、working `in_scope` と committed 成功を区別する六工程状態門禁
 - [x] TestPlan 記録後も `compile_test` を維持し、Grant に含まれる必須 Command Ref がすべて成功した場合だけ committed EditResult を完了扱いにする
+- [x] Copilot Impact と並存していた旧 deterministic Impact Report／Code Scope／Code Graph Query 管線を削除し、現行 Orchestration の Impact と graph artifact に統一
+- [x] 内部 XLSX Proposal Writer／Workspace Editor を削除し、文書・コード変更は VS Code GitHub Copilot の限定 Change Task と受領差分だけに統一
+- [x] production package 内の PostgreSQL テスト helper を `tests/support` へ移し、`BusinessDataTemplate` を廃止して跨画面データを直接 TestDataPlan へ統合
+- [x] 過去 source tree に結び付いた自動生成 UI／TestData／full-regression Evidence を削除し、再採取が必要な Readiness gate を pending へ戻す
+- [x] 未登録だった `CopilotImpactContext` を Core Contract に追加し、Task Scheduler の旧 `UiExecutionPlan`／誤った `ChangeOrchestration` 出力型を現行五 Artifact に修正
+- [x] テストだけが利用していた Application の Unresolved Evidence 再 export wrapper を削除し、実装と Repository の直接依存へ統一
 - [ ] 対象 Spring Boot 工程の Repository パスを Project に登録し、Gradle Wrapper による実ビルド Evidence を採取
 - [ ] Microsoft Edge / Playwright live E2E Evidence（検証端末に Edge が未導入）
 - [ ] VS Code GitHub Copilot による一件の実変更閉ループを完走し、六工程と最終レポートを確認

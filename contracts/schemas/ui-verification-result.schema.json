@@ -20,8 +20,10 @@
   ],
   "properties": {
     "artifact_type": {"const": "UiVerificationResult"},
-    "schema_version": {"const": "v1"},
+    "schema_version": {"enum": ["v1", "v2"]},
     "verification_result_id": {"type": "string", "minLength": 1},
+    "orchestration_id": {"type": "string", "minLength": 1},
+    "test_data_execution_result_id": {"type": "string", "minLength": 1},
     "analysis_case_id": {"type": "string", "minLength": 1},
     "edit_packet_id": {"type": "string", "minLength": 1},
     "repository_revision": {"type": "string", "minLength": 1},
@@ -61,6 +63,21 @@
     }
   },
   "allOf": [
+    {
+      "if": {"properties": {"schema_version": {"const": "v1"}}},
+      "then": {
+        "not": {
+          "anyOf": [
+            {"required": ["orchestration_id"]},
+            {"required": ["test_data_execution_result_id"]}
+          ]
+        }
+      }
+    },
+    {
+      "if": {"properties": {"schema_version": {"const": "v2"}}},
+      "then": {"required": ["orchestration_id", "test_data_execution_result_id"]}
+    },
     {
       "if": {"required": ["recovery"]},
       "then": {

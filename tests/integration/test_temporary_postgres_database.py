@@ -6,7 +6,7 @@ import psycopg
 import pytest
 
 from operamind.infrastructure.postgres import MigrationCatalog
-from operamind.testing.postgres import (
+from tests.support.postgres import (
     TemporaryPostgresDatabase,
     TemporaryPostgresDatabaseError,
 )

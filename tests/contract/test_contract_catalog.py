@@ -142,6 +142,34 @@ def test_ui_recovery_artifact_must_be_a_blocked_evidence_free_closure() -> None:
         catalog.validate_artifact(artifact)
 
 
+def test_ui_verification_v2_requires_orchestration_identity_and_keeps_v1_immutable() -> None:
+    catalog = ContractCatalog.load(ROOT / "contracts")
+    legacy = json.loads(
+        (ROOT / "contracts/examples/ui-verification-result.v1.example.json").read_text()
+    )
+    current = json.loads(
+        (ROOT / "contracts/examples/ui-verification-result.v2.example.json").read_text()
+    )
+
+    catalog.validate_artifact(legacy)
+    catalog.validate_artifact(current)
+
+    legacy["orchestration_id"] = "orchestration-legacy"
+    with pytest.raises(ArtifactValidationError):
+        catalog.validate_artifact(legacy)
+
+    current.pop("orchestration_id")
+    with pytest.raises(ArtifactValidationError):
+        catalog.validate_artifact(current)
+
+    current = json.loads(
+        (ROOT / "contracts/examples/ui-verification-result.v2.example.json").read_text()
+    )
+    current.pop("test_data_execution_result_id")
+    with pytest.raises(ArtifactValidationError):
+        catalog.validate_artifact(current)
+
+
 def test_copilot_coding_task_contract_reserves_future_api_provider_route() -> None:
     catalog = ContractCatalog.load(ROOT / "contracts")
     artifact = json.loads(

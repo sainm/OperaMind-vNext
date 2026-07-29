@@ -70,8 +70,20 @@ def test_repository_migrations_are_sequential_and_transaction_free() -> None:
         "0057",
         "0058",
         "0059",
+        "0060",
     ]
     assert all(len(migration.checksum) == 64 for migration in catalog.migrations)
+
+
+def test_ui_verification_closure_binding_uses_current_artifact_store() -> None:
+    migration = (ROOT / "migrations/0060_ui_verification_artifact_binding.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "DROP CONSTRAINT change_closure_results_ui_fk" in migration
+    assert "FOREIGN KEY (\n        project_id, ui_verification_result_id\n    )" in migration
+    assert "REFERENCES artifact_records(project_id, artifact_id)" in migration
+    assert "change_validations" not in migration
 
 
 def test_migration_cannot_control_its_own_transaction(tmp_path: Path) -> None:

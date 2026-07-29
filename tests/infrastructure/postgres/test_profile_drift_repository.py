@@ -28,12 +28,10 @@ class DependencyCursor:
             return [("edit-result-1", "impact-1", None)]
         if "FROM test_data_execution_runs" in self.query:
             return [("test-data-result-1", "orchestration-1", "grant-other", "run-1")]
-        if "FROM change_validations AS validation" in self.query:
-            return [("ui-result-1", "ui-plan-other", "edit-result-1", None)]
+        if "artifact_type = 'UiVerificationResult'" in self.query:
+            return [("ui-result-1", "orchestration-1", "test-data-result-1")]
         if "FROM test_data_execution_evidence" in self.query:
             return [("evidence-test-1", "run-1")]
-        if "FROM ui_execution_evidence AS evidence" in self.query:
-            return [("evidence-ui-1", "ui-result-1")]
         if "FROM change_closure_results" in self.query:
             return [
                 (
@@ -55,7 +53,6 @@ def test_document_profile_drift_propagates_through_every_artifact_layer() -> Non
         project_id="project-1",
         profile_type="DocumentConventionProfile",
         profile_version_id="document-profile-v1",
-        previous_payload={},
     )
 
     assert {
@@ -69,6 +66,5 @@ def test_document_profile_drift_propagates_through_every_artifact_layer() -> Non
         ("evidence", "TestDataExecutionResult", "test-data-result-1", "stale"),
         ("evidence", "UiVerificationResult", "ui-result-1", "stale"),
         ("evidence", "Evidence", "evidence-test-1", "stale"),
-        ("evidence", "Evidence", "evidence-ui-1", "stale"),
         ("closure", "ChangeClosureResult", "closure-1", "blocked"),
     }

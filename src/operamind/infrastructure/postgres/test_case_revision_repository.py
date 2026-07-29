@@ -172,36 +172,25 @@ class TestCaseRevisionRepository:
             orchestration = cast(dict[str, Any], source_bundle["orchestration"])
             cursor.execute(
                 """
-                SELECT verification_result_id
-                FROM change_validations
-                WHERE project_id = %s AND analysis_case_id = %s
-                ORDER BY created_at, verification_result_id
+                SELECT artifact_id
+                FROM artifact_records
+                WHERE project_id = %s
+                  AND analysis_case_id = %s
+                  AND artifact_type = 'UiVerificationResult'
+                  AND schema_version = 'v2'
+                  AND payload ->> 'orchestration_id' = %s
+                ORDER BY created_at, artifact_id
                 """,
                 (
                     orchestration["project_id"],
                     orchestration["analysis_case_id"],
+                    source_orchestration_id,
                 ),
             )
             ui_result_ids = sorted(
                 {str(row[1]) for row in closure_rows if row[1] is not None}
                 | {str(row[0]) for row in cursor.fetchall()}
             )
-            if ui_result_ids:
-                cursor.execute(
-                    """
-                    SELECT evidence.evidence_ref
-                    FROM change_validations AS validation
-                    JOIN ui_execution_evidence AS evidence
-                      ON evidence.ui_execution_run_id = validation.ui_execution_run_id
-                     AND evidence.project_id = validation.project_id
-                    WHERE validation.verification_result_id = ANY(%s)
-                    ORDER BY evidence.evidence_ref
-                    """,
-                    (ui_result_ids,),
-                )
-                ui_evidence = [str(row[0]) for row in cursor.fetchall()]
-            else:
-                ui_evidence = []
         refs = cast(dict[str, str], orchestration["artifact_refs"])
         artifact_refs = {
             source_orchestration_id,
@@ -213,7 +202,7 @@ class TestCaseRevisionRepository:
         return TestCaseStaleScope(
             run_ids=tuple(sorted(set(run_ids))),
             artifact_refs=tuple(sorted(artifact_refs)),
-            evidence_refs=tuple(sorted(set(test_data_evidence + ui_evidence))),
+            evidence_refs=tuple(sorted(set(test_data_evidence))),
             closure_result_ids=tuple(sorted(set(closure_ids))),
         )
 

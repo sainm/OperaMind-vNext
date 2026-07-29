@@ -19,10 +19,6 @@ _CANONICAL_CHECKS: dict[str, str] = {
         SELECT status = 'complete' AND is_current FROM code_graph_snapshots
         WHERE code_graph_snapshot_id = %s AND project_id = %s
     """,
-    "UiKnowledgeSnapshot": """
-        SELECT review_status = 'approved' AND is_active FROM ui_knowledge_snapshots
-        WHERE ui_knowledge_snapshot_id = %s AND project_id = %s
-    """,
     "ImpactReport": """
         SELECT status = 'confirmed' FROM impact_reports
         WHERE impact_report_id = %s AND project_id = %s
@@ -35,10 +31,6 @@ _CANONICAL_CHECKS: dict[str, str] = {
          AND orchestration.project_id = record.project_id
         WHERE record.artifact_id = %s AND record.project_id = %s
     """,
-    "UiExecutionPlan": """
-        SELECT status IN ('ready', 'completed') FROM ui_execution_plans
-        WHERE ui_execution_plan_id = %s AND project_id = %s
-    """,
     "EditResult": """
         SELECT validation_mode = 'committed' AND status = 'in_scope' AND tests_passed
         FROM edit_results WHERE edit_result_id = %s AND project_id = %s
@@ -48,12 +40,14 @@ _CANONICAL_CHECKS: dict[str, str] = {
         WHERE execution_result_id = %s AND project_id = %s
     """,
     "UiVerificationResult": """
-        SELECT status = 'passed'
-           AND jsonb_array_length(unresolved_impact_item_ids) = 0
-           AND jsonb_array_length(out_of_scope_files) = 0
-           AND jsonb_array_length(failure_reasons) = 0
-        FROM change_validations
-        WHERE verification_result_id = %s AND project_id = %s
+        SELECT artifact_type = 'UiVerificationResult'
+           AND schema_version = 'v2'
+           AND payload ->> 'status' = 'passed'
+           AND jsonb_array_length(payload -> 'unresolved_impact_item_ids') = 0
+           AND jsonb_array_length(payload -> 'out_of_scope_files') = 0
+           AND jsonb_array_length(payload -> 'failure_reasons') = 0
+        FROM artifact_records
+        WHERE artifact_id = %s AND project_id = %s
     """,
     "CommandExecutionResult": """
         SELECT status = 'passed' FROM command_execution_results
@@ -83,7 +77,7 @@ class ProfileReplacementValidator:
             """
             SELECT request.artifact_type, request.artifact_id,
                    request.profile_drift_event_id, version.profile_type,
-                   event.activated_profile_version_id, version.payload
+                   event.activated_profile_version_id
             FROM profile_rebuild_requests AS request
             JOIN profile_drift_events AS event
               ON event.profile_drift_event_id = request.profile_drift_event_id
@@ -101,7 +95,6 @@ class ProfileReplacementValidator:
             raise ValueError("Profile Rebuild Request does not exist")
         artifact_type, artifact_id, drift_event_id = map(str, request[:3])
         profile_type, profile_version_id = str(request[3]), str(request[4])
-        profile_payload = request[5]
         if replacement_type != artifact_type:
             raise ValueError("replacement Artifact type must match the stale Artifact type")
         if replacement_id == artifact_id:
@@ -136,7 +129,6 @@ class ProfileReplacementValidator:
             artifact_id=replacement_id,
             profile_type=profile_type,
             profile_version_id=profile_version_id,
-            profile_payload=profile_payload if isinstance(profile_payload, dict) else {},
         )
         cursor.execute(
             """
@@ -221,20 +213,6 @@ class ProfileReplacementValidator:
                 dependencies.get("ImpactReport"),
             )
             return
-        if artifact_type == "UiExecutionPlan":
-            cursor.execute(
-                """
-                SELECT ui_knowledge_snapshot_id FROM ui_browser_manifests
-                WHERE ui_execution_plan_id = %s AND project_id = %s
-                """,
-                (artifact_id, project_id),
-            )
-            _require_any_reference(
-                "UI Execution Plan Knowledge Snapshot",
-                {str(row[0]) for row in cursor.fetchall()},
-                dependencies.get("UiKnowledgeSnapshot"),
-            )
-            return
         if artifact_type == "EditResult":
             cursor.execute(
                 """
@@ -274,15 +252,18 @@ class ProfileReplacementValidator:
         if artifact_type == "UiVerificationResult":
             cursor.execute(
                 """
-                SELECT ui_execution_plan_id FROM change_validations
-                WHERE verification_result_id = %s AND project_id = %s
+                SELECT payload ->> 'test_data_execution_result_id'
+                FROM artifact_records
+                WHERE artifact_id = %s AND project_id = %s
+                  AND artifact_type = 'UiVerificationResult'
+                  AND schema_version = 'v2'
                 """,
                 (artifact_id, project_id),
             )
             _require_any_reference(
-                "UI Verification Execution Plan",
+                "UI Verification Test Data Result",
                 {str(row[0]) for row in cursor.fetchall()},
-                dependencies.get("UiExecutionPlan"),
+                dependencies.get("TestDataExecutionResult"),
             )
             return
         if artifact_type == "ChangeClosureResult":
@@ -325,17 +306,9 @@ class ProfileReplacementValidator:
                   ON run.run_id = evidence.run_id AND run.project_id = evidence.project_id
                 WHERE evidence.evidence_id = %s AND evidence.project_id = %s
                   AND run.status = 'passed'
-                UNION ALL
-                SELECT true
-                FROM ui_execution_evidence AS evidence
-                JOIN change_validations AS validation
-                  ON validation.ui_execution_run_id = evidence.ui_execution_run_id
-                 AND validation.project_id = evidence.project_id
-                WHERE evidence.evidence_id = %s AND evidence.project_id = %s
-                  AND validation.status = 'passed'
                 LIMIT 1
                 """,
-                (artifact_id, project_id, artifact_id, project_id),
+                (artifact_id, project_id),
             )
         else:
             query = _CANONICAL_CHECKS.get(artifact_type)
@@ -357,7 +330,6 @@ class ProfileReplacementValidator:
         artifact_id: str,
         profile_type: str,
         profile_version_id: str,
-        profile_payload: dict[str, object],
     ) -> None:
         query: str | None = None
         values: tuple[object, ...] = ()
@@ -388,12 +360,6 @@ class ProfileReplacementValidator:
                   AND code_graph_snapshot_id = %s AND project_id = %s
             """
             values = (profile_version_id, artifact_id, project_id)
-        elif artifact_type == "UiKnowledgeSnapshot" and profile_type == "UiLocatorProfile":
-            if profile_payload.get("ui_knowledge_snapshot_id") != artifact_id:
-                raise ValueError(
-                    "replacement UI Knowledge Snapshot is not bound by the active Profile"
-                )
-            return
         elif (
             artifact_type == "CommandExecutionResult" and profile_type == "CommandExecutionProfile"
         ):

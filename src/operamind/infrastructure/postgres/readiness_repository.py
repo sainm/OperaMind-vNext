@@ -326,72 +326,86 @@ class ReadinessEvidenceRepository:
         )
 
     def deployment(self, project_id: str, analysis_case_id: str) -> ReadinessEvidenceInput | None:
-        """Derive a completed revision-bound UI result from Canonical tables."""
+        """Derive a current revision-bound UI result from TestDataPlan execution."""
 
         with self._connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
-                SELECT validation.verification_result_id, validation.created_at,
-                       plan.ui_execution_plan_id, plan.environment_id,
-                       plan.deployment_revision, plan.repository_revision,
-                       run.ui_execution_run_id,
+                SELECT validation.artifact_id AS verification_result_id,
+                       validation.created_at,
+                       orchestration.orchestration_id,
+                       run.run_id AS test_data_run_id,
+                       validation.payload ->> 'environment_id' AS environment_id,
+                       validation.payload ->> 'deployment_revision' AS deployment_revision,
+                       validation.payload ->> 'repository_revision' AS repository_revision,
                        array_agg(evidence.evidence_id ORDER BY evidence.evidence_id) AS evidence_ids
-                FROM change_validations AS validation
-                JOIN ui_execution_plans AS plan
-                  ON plan.ui_execution_plan_id = validation.ui_execution_plan_id
-                 AND plan.project_id = validation.project_id
-                JOIN ui_execution_runs AS run
-                  ON run.ui_execution_run_id = validation.ui_execution_run_id
+                FROM artifact_records AS validation
+                JOIN change_orchestrations AS orchestration
+                  ON orchestration.orchestration_id =
+                     validation.payload ->> 'orchestration_id'
+                 AND orchestration.project_id = validation.project_id
+                 AND orchestration.analysis_case_id = validation.analysis_case_id
+                JOIN test_data_execution_runs AS run
+                  ON run.execution_result_id =
+                     validation.payload ->> 'test_data_execution_result_id'
+                 AND run.orchestration_id = orchestration.orchestration_id
                  AND run.project_id = validation.project_id
-                JOIN ui_deployments AS deployment
-                  ON deployment.environment_id = plan.environment_id
-                 AND deployment.deployment_revision = plan.deployment_revision
-                 AND deployment.project_id = plan.project_id
-                JOIN edit_results AS result
-                  ON result.edit_result_id = plan.edit_result_id
-                 AND result.project_id = plan.project_id
-                 AND result.result_repository_revision = plan.repository_revision
-                JOIN ui_execution_evidence AS evidence
-                  ON evidence.ui_execution_run_id = run.ui_execution_run_id
+                JOIN test_data_execution_evidence AS evidence
+                  ON evidence.run_id = run.run_id
                  AND evidence.project_id = run.project_id
                  AND evidence.sanitized
-                WHERE validation.project_id = %s
+                 AND evidence.evidence_type = 'screenshot'
+                WHERE validation.artifact_type = 'UiVerificationResult'
+                  AND validation.schema_version = 'v2'
+                  AND validation.project_id = %s
                   AND validation.analysis_case_id = %s
-                  AND validation.status = 'passed'
-                  AND plan.status = 'completed'
-                  AND plan.repository_binding_status = 'verified'
-                  AND run.status = 'completed'
-                  AND deployment.status = 'ready'
-                  AND deployment.repository_revision = plan.repository_revision
-                  AND run.approval_grant_id = result.approval_grant_id
-                  AND result.validation_mode = 'committed'
-                  AND result.status = 'in_scope'
-                  AND result.tests_passed
-                  AND result.command_evidence_status = 'verified'
+                  AND validation.payload ->> 'status' = 'passed'
+                  AND validation.payload ->> 'deployment_revision' =
+                      validation.payload ->> 'repository_revision'
+                  AND jsonb_array_length(validation.payload -> 'scenario_results') > 0
                   AND NOT EXISTS (
-                      SELECT 1 FROM ui_scenario_results AS scenario
-                      WHERE scenario.ui_execution_run_id = run.ui_execution_run_id
-                        AND scenario.project_id = run.project_id
-                        AND scenario.status <> 'passed'
+                      SELECT 1
+                      FROM jsonb_array_elements(
+                          validation.payload -> 'scenario_results'
+                      ) AS scenario
+                      WHERE scenario ->> 'status' <> 'passed'
                   )
-                  AND (
-                      SELECT count(*) FROM ui_scenario_results AS scenario
-                      WHERE scenario.ui_execution_run_id = run.ui_execution_run_id
-                        AND scenario.project_id = run.project_id
-                  ) = (
-                      SELECT count(*) FROM ui_execution_plan_scenarios AS planned
-                      WHERE planned.ui_execution_plan_id = plan.ui_execution_plan_id
-                        AND planned.project_id = plan.project_id
+                  AND jsonb_array_length(
+                      validation.payload -> 'unresolved_impact_item_ids'
+                  ) = 0
+                  AND jsonb_array_length(validation.payload -> 'out_of_scope_files') = 0
+                  AND jsonb_array_length(validation.payload -> 'failure_reasons') = 0
+                  AND run.status = 'passed'
+                  AND run.result_artifact_id = run.execution_result_id
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM test_data_execution_runs AS newer_run
+                      WHERE newer_run.project_id = run.project_id
+                        AND newer_run.orchestration_id = run.orchestration_id
+                        AND (newer_run.started_at, newer_run.run_id) >
+                            (run.started_at, run.run_id)
                   )
-                  AND (
-                      SELECT count(*) FROM ui_execution_plan_scenarios AS planned
-                      WHERE planned.ui_execution_plan_id = plan.ui_execution_plan_id
-                        AND planned.project_id = plan.project_id
-                  ) > 0
-                GROUP BY validation.verification_result_id, validation.created_at,
-                         plan.ui_execution_plan_id, plan.environment_id,
-                         plan.deployment_revision, plan.repository_revision,
-                         run.ui_execution_run_id
+                  AND EXISTS (
+                      SELECT 1
+                      FROM edit_results AS result
+                      JOIN edit_packets AS packet
+                        ON packet.edit_packet_id = result.edit_packet_id
+                       AND packet.project_id = result.project_id
+                      WHERE packet.impact_report_id = orchestration.impact_report_id
+                        AND packet.project_id = orchestration.project_id
+                        AND packet.analysis_case_id = orchestration.analysis_case_id
+                        AND result.project_id = orchestration.project_id
+                        AND result.analysis_case_id = orchestration.analysis_case_id
+                        AND result.validation_mode = 'committed'
+                        AND result.status = 'in_scope'
+                        AND result.tests_passed
+                        AND result.command_evidence_status = 'verified'
+                        AND result.result_repository_revision =
+                            validation.payload ->> 'repository_revision'
+                  )
+                GROUP BY validation.artifact_id, validation.created_at,
+                         orchestration.orchestration_id, run.run_id,
+                         validation.payload
                 ORDER BY validation.created_at DESC
                 LIMIT 1
                 """,
@@ -410,8 +424,8 @@ class ReadinessEvidenceRepository:
             subject={
                 "project_id": project_id,
                 "analysis_case_id": analysis_case_id,
-                "ui_execution_plan_id": str(row["ui_execution_plan_id"]),
-                "ui_execution_run_id": str(row["ui_execution_run_id"]),
+                "orchestration_id": str(row["orchestration_id"]),
+                "test_data_run_id": str(row["test_data_run_id"]),
                 "verification_result_id": str(row["verification_result_id"]),
                 "environment_id": str(row["environment_id"]),
                 "deployment_revision": str(row["deployment_revision"]),

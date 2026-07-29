@@ -42,7 +42,6 @@ _PROFILE_LABELS = {
     "EmbeddingProfile": "Embedding",
     "CodeFrameworkProfile": "コードフレームワーク",
     "CommandExecutionProfile": "コマンド",
-    "UiLocatorProfile": "UI Locator",
 }
 
 
@@ -73,7 +72,7 @@ class ProfileDriftRepository:
             SELECT event.project_id, event.binding_key,
                    event.previous_profile_version_id,
                    event.activated_profile_version_id,
-                   previous.profile_type, previous.payload
+                   previous.profile_type
             FROM profile_activation_events AS event
             LEFT JOIN profile_versions AS previous
               ON previous.profile_version_id = event.previous_profile_version_id
@@ -91,7 +90,6 @@ class ProfileDriftRepository:
         if previous_version_id is None or previous_version_id == activated_version_id:
             return ProfileDriftDetectionResult(None, False, 0)
         profile_type = str(row[4])
-        previous_payload = cast(dict[str, Any], row[5])
         drift_event_id = _stable_id("profile-drift", activation_event_id)
         expected = (
             activation_event_id,
@@ -132,7 +130,6 @@ class ProfileDriftRepository:
             project_id=project_id,
             profile_type=profile_type,
             profile_version_id=previous_version_id,
-            previous_payload=previous_payload,
         )
         cursor.execute(
             """
@@ -184,14 +181,12 @@ class ProfileDriftRepository:
         project_id: str,
         profile_type: str,
         profile_version_id: str,
-        previous_payload: dict[str, Any],
     ) -> dict[tuple[str, str], _Impact]:
         impacts: dict[tuple[str, str], _Impact] = {}
         document_snapshot_ids: set[str] = set()
         graph_ids: set[str] = set()
         impact_ids: set[str] = set()
         orchestration_ids: set[str] = set()
-        ui_plan_ids: set[str] = set()
         grant_ids: set[str] = set()
         edit_result_ids: set[str] = set()
         test_data_result_ids: set[str] = set()
@@ -255,28 +250,6 @@ class ProfileDriftRepository:
                 (project_id, profile_version_id),
             )
             grant_ids.update(str(row[0]) for row in cursor.fetchall())
-        elif profile_type == "UiLocatorProfile":
-            snapshot_id = previous_payload.get("ui_knowledge_snapshot_id")
-            if isinstance(snapshot_id, str) and snapshot_id:
-                _put(
-                    impacts,
-                    _Impact(
-                        "snapshot",
-                        "UiKnowledgeSnapshot",
-                        snapshot_id,
-                        "stale",
-                        "review_ui_locator_profile",
-                    ),
-                )
-                cursor.execute(
-                    """
-                    SELECT ui_execution_plan_id FROM ui_browser_manifests
-                    WHERE project_id = %s AND ui_knowledge_snapshot_id = %s
-                    """,
-                    (project_id, snapshot_id),
-                )
-                ui_plan_ids.update(str(row[0]) for row in cursor.fetchall())
-
         for snapshot_id in document_snapshot_ids:
             _put(
                 impacts,
@@ -330,14 +303,6 @@ class ProfileDriftRepository:
                         "regenerate_test_plan",
                     ),
                 )
-        for plan_id in ui_plan_ids:
-            _put(
-                impacts,
-                _Impact(
-                    "test_plan", "UiExecutionPlan", plan_id, "blocked", "regenerate_ui_test_plan"
-                ),
-            )
-
         cursor.execute(
             """
             SELECT result.edit_result_id, packet.impact_report_id,
@@ -387,24 +352,20 @@ class ProfileDriftRepository:
 
         cursor.execute(
             """
-            SELECT validation.verification_result_id, plan.ui_execution_plan_id,
-                   plan.edit_result_id, run.approval_grant_id
-            FROM change_validations AS validation
-            JOIN ui_execution_plans AS plan
-              ON plan.ui_execution_plan_id = validation.ui_execution_plan_id
-             AND plan.project_id = validation.project_id
-            LEFT JOIN ui_execution_runs AS run
-              ON run.ui_execution_run_id = validation.ui_execution_run_id
-             AND run.project_id = validation.project_id
-            WHERE validation.project_id = %s
+            SELECT artifact_id,
+                   payload ->> 'orchestration_id',
+                   payload ->> 'test_data_execution_result_id'
+            FROM artifact_records
+            WHERE project_id = %s
+              AND artifact_type = 'UiVerificationResult'
+              AND schema_version = 'v2'
             """,
             (project_id,),
         )
-        for result_id, plan_id, edit_result_id, grant_id in cursor.fetchall():
+        for result_id, orchestration_id, data_result_id in cursor.fetchall():
             if (
-                str(plan_id) in ui_plan_ids
-                or str(edit_result_id) in edit_result_ids
-                or (grant_id is not None and str(grant_id) in grant_ids)
+                str(orchestration_id) in orchestration_ids
+                or str(data_result_id) in test_data_result_ids
             ):
                 ui_result_ids.add(str(result_id))
                 _put(
@@ -418,7 +379,7 @@ class ProfileDriftRepository:
                     ),
                 )
 
-        self._add_evidence_rows(cursor, project_id, test_run_ids, ui_result_ids, impacts)
+        self._add_evidence_rows(cursor, project_id, test_run_ids, impacts)
         self._add_command_evidence(cursor, project_id, grant_ids, impacts)
 
         cursor.execute(
@@ -453,7 +414,6 @@ class ProfileDriftRepository:
         cursor: Cursor[Any],
         project_id: str,
         test_run_ids: set[str],
-        ui_result_ids: set[str],
         impacts: dict[tuple[str, str], _Impact],
     ) -> None:
         if test_run_ids:
@@ -471,30 +431,6 @@ class ProfileDriftRepository:
                         impacts,
                         _Impact(
                             "evidence", "Evidence", str(evidence_id), "stale", "rerun_test_data"
-                        ),
-                    )
-        if ui_result_ids:
-            cursor.execute(
-                """
-                SELECT evidence.evidence_id, validation.verification_result_id
-                FROM ui_execution_evidence AS evidence
-                JOIN change_validations AS validation
-                  ON validation.ui_execution_run_id = evidence.ui_execution_run_id
-                 AND validation.project_id = evidence.project_id
-                WHERE evidence.project_id = %s
-                """,
-                (project_id,),
-            )
-            for evidence_id, result_id in cursor.fetchall():
-                if str(result_id) in ui_result_ids:
-                    _put(
-                        impacts,
-                        _Impact(
-                            "evidence",
-                            "Evidence",
-                            str(evidence_id),
-                            "stale",
-                            "rerun_ui_verification",
                         ),
                     )
 

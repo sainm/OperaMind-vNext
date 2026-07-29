@@ -20,6 +20,14 @@ def load_example(name: str) -> dict[str, Any]:
     return raw
 
 
+def load_fixture(name: str) -> dict[str, Any]:
+    raw: object = json.loads(
+        (ROOT / "tests" / "fixtures" / "profiles" / name).read_text(encoding="utf-8")
+    )
+    assert isinstance(raw, dict)
+    return raw
+
+
 def test_profile_catalog_and_examples_are_valid() -> None:
     catalog = ProfileCatalog.load(ROOT / "profiles")
 
@@ -31,28 +39,28 @@ def test_profile_catalog_and_examples_are_valid() -> None:
     assert frozenset(catalog.schema_paths) == EXPECTED_PROFILE_TYPES
 
 
-def test_visiondemo_command_profile_is_valid() -> None:
+def test_visiondemo_target_profile_fixtures_are_valid() -> None:
     catalog = ProfileCatalog.load(ROOT / "profiles")
 
-    catalog.validate_profile(load_example("visiondemo-command-profile.json"))
+    for name in (
+        "visiondemo-code-framework-profile.json",
+        "visiondemo-command-profile.json",
+        "visiondemo-document-relation-profile.json",
+    ):
+        catalog.validate_profile(load_fixture(name))
 
 
 def test_springboot15_thymeleaf_gradle_profiles_are_valid_and_use_wrapper() -> None:
     catalog = ProfileCatalog.load(ROOT / "profiles")
-    code_profile = load_example(
-        "springboot15-thymeleaf-gradle-code-framework-profile.example.json"
-    )
-    command_profile = load_example(
-        "springboot15-thymeleaf-gradle-command-profile.example.json"
-    )
+    code_profile = load_example("springboot15-thymeleaf-gradle-code-framework-profile.example.json")
+    command_profile = load_example("springboot15-thymeleaf-gradle-command-profile.example.json")
 
     catalog.validate_profile(code_profile)
     catalog.validate_profile(command_profile)
     assert code_profile["profile_id"] == "springboot15-thymeleaf-gradle"
     assert "web_ui_route" in code_profile["anchor_extractors"]
     assert {
-        template["command_ref"]: template["argv"]
-        for template in command_profile["templates"]
+        template["command_ref"]: template["argv"] for template in command_profile["templates"]
     } == {
         "springboot15-compile": ["./gradlew", "classes", "testClasses", "--no-daemon"],
         "springboot15-test": ["./gradlew", "test", "--no-daemon"],
@@ -282,17 +290,6 @@ def test_command_refs_must_be_unique() -> None:
     assert {issue.code for issue in captured.value.report.issues} == {
         "profile.duplicate_command_ref"
     }
-
-
-def test_ui_locator_target_refs_must_be_unique() -> None:
-    catalog = ProfileCatalog.load(ROOT / "profiles")
-    profile = copy.deepcopy(load_example("ui-locator-profile.example.json"))
-    profile["target_refs"].append(profile["target_refs"][0])
-
-    with pytest.raises(ProfileValidationError) as captured:
-        catalog.validate_profile(profile)
-
-    assert captured.value.report.issues[0].location == "target_refs"
 
 
 @pytest.mark.parametrize(

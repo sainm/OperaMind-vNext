@@ -11,7 +11,6 @@ import pytest
 from operamind.application import RuntimeRouteReconciler, RuntimeRouteReconcileRequest
 from operamind.contracts import ContractCatalog
 from operamind.infrastructure.postgres import (
-    CodeGraphQueryRepository,
     CodeGraphSnapshotRepository,
     MigrationCatalog,
     MigrationRunner,
@@ -148,19 +147,15 @@ def test_runtime_route_evidence_and_enriched_graph_round_trip() -> None:
         assert management["current_report_count"] == 1
         assert management["history_count"] == 2
         assert management["open_count"] == 0
-        queries = CodeGraphQueryRepository(connection, contracts)
-        scope = queries.get_scope(
-            project_id=project_id,
-            code_graph_snapshot_id=graph.code_graph_snapshot_id,
-        )
-        assert scope is not None
-        runtime_edges = queries.load_resolved_edges(
-            scope=scope,
-            edge_types=("calls",),
-            max_edges=10,
-        ).edges
-        assert runtime_edges[0].provenance == "static_runtime"
-        assert runtime_edges[0].evidence_refs == (f"evidence://{project_id}/browser-run/network",)
+        runtime_edges = [
+            edge
+            for edge in result.graph_artifact["edges"]
+            if edge["edge_type"] == "calls"
+        ]
+        assert runtime_edges[0]["provenance"] == "static_runtime"
+        assert runtime_edges[0]["evidence_refs"] == [
+            f"evidence://{project_id}/browser-run/network"
+        ]
         with connection.cursor() as cursor:
             cursor.execute("SAVEPOINT unresolved_integrity_test")
             cursor.execute(

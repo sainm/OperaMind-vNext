@@ -214,12 +214,12 @@
     "deployment_subject": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["project_id", "analysis_case_id", "ui_execution_plan_id", "ui_execution_run_id", "verification_result_id", "environment_id", "deployment_revision", "repository_revision", "status", "evidence_ids"],
+      "required": ["project_id", "analysis_case_id", "orchestration_id", "test_data_run_id", "verification_result_id", "environment_id", "deployment_revision", "repository_revision", "status", "evidence_ids"],
       "properties": {
         "project_id": {"$ref": "#/$defs/id"},
         "analysis_case_id": {"$ref": "#/$defs/id"},
-        "ui_execution_plan_id": {"$ref": "#/$defs/id"},
-        "ui_execution_run_id": {"$ref": "#/$defs/id"},
+        "orchestration_id": {"$ref": "#/$defs/id"},
+        "test_data_run_id": {"$ref": "#/$defs/id"},
         "verification_result_id": {"$ref": "#/$defs/id"},
         "environment_id": {"$ref": "#/$defs/id"},
         "deployment_revision": {"$ref": "#/$defs/id"},

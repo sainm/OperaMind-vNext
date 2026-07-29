@@ -13,9 +13,6 @@ from operamind.infrastructure.postgres import (
     MigrationRunner,
     PersistenceConflictError,
 )
-from tests.fixtures.visiondemo_target_e2e import (
-    build_visiondemo_cross_screen_template,
-)
 
 ROOT = Path(__file__).parents[2]
 DATABASE_URL = os.getenv("OPERAMIND_TEST_DATABASE_URL")
@@ -131,47 +128,6 @@ def test_validated_artifact_round_trip() -> None:
                 artifact_id=artifact_id,
                 project_id=project_id,
                 analysis_case_id=case_id,
-                artifact=conflicting,
-            )
-        connection.rollback()
-
-
-@pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
-def test_business_data_template_is_immutable_and_reusable_from_postgres() -> None:
-    suffix = uuid4().hex
-    project_id = f"template-project-{suffix}"
-    artifact = copy.deepcopy(build_visiondemo_cross_screen_template())
-    artifact["template_id"] = f"business-data-template-{suffix}"
-    artifact["project_id"] = project_id
-
-    assert DATABASE_URL is not None
-    with psycopg.connect(DATABASE_URL) as connection:
-        MigrationRunner(connection, MigrationCatalog.load(ROOT / "migrations")).apply()
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "INSERT INTO projects (project_id, name) VALUES (%s, %s)",
-                (project_id, "Business data template test"),
-            )
-        repository = ArtifactRepository(
-            connection,
-            ContractCatalog.load(ROOT / "contracts"),
-        )
-
-        repository.store(
-            artifact_id=str(artifact["template_id"]),
-            project_id=project_id,
-            analysis_case_id=None,
-            artifact=artifact,
-        )
-
-        assert repository.get(str(artifact["template_id"])) == artifact
-        conflicting = copy.deepcopy(artifact)
-        conflicting["template_version"] = "2.0.0"
-        with pytest.raises(PersistenceConflictError):
-            repository.store(
-                artifact_id=str(artifact["template_id"]),
-                project_id=project_id,
-                analysis_case_id=None,
                 artifact=conflicting,
             )
         connection.rollback()

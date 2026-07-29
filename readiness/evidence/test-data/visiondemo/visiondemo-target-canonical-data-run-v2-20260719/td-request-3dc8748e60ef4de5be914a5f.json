@@ -1,9 +1,0 @@
-{
-  "json": {
-    "expenseNo": "EXP-OM-RETURNED",
-    "status": "差戻し"
-  },
-  "method": "POST",
-  "path": "/expense/api/save",
-  "query": {}
-}

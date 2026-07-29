@@ -4,7 +4,7 @@
 
 - Python 3.12 项目和严格 Ruff/Mypy/Pytest 配置。
 - 26 個のコア Artifact のバージョン化 catalog と Draft 2020-12 Schema 検証。
-- 26 個のコア Artifact の v1 実行可能 Example と format 検証。
+- 26 個のコア Artifact の実行可能 Example と format 検証。
 - Golden Dataset manifest、引用文件、案例身份和 MVP readiness 校验。
 - Golden RAG expectation Schema、三类 Query 冻结 ID/阈值 readiness 校验，以及离线 Recall@5/10、MRR、无关率和跨项目泄漏 evaluator。
 - Golden UI expectation Schema、Project/Case 绑定、Scenario ID/基线结果完整性和业务/QA 批准 readiness 门禁。
@@ -74,5 +74,5 @@ OPERAMIND_TEST_DATABASE_URL="$OPERAMIND_TEST_DATABASE_URL" \
 
 - 当前已冻结一个由 VisionDemo Silver 检查依据支撑的 Golden 案例，并记录对话审核身份，因此可以宣称 Golden ready。业务负责人／开发／QA 的分角色审核仍可作为治理增强；MVP ready 只因 `github_copilot_live` 外部 gate 尚未通过而不能宣称。
 - Repository-wide MVP readiness manifest 对缺失或漂移证据保持 pending；`operamind-readiness` 从 Canonical PostgreSQL 和真实测试 observation 幂等生成证据、摘要并原子更新 manifest，只有所有真实/本地证据均存在、digest 匹配并经审核后，`--require-mvp-ready` 才可能通过。
-- `0001` 建立 P0 身份、Revision、Analysis Case 和 Artifact exchange 基线；`0002-0004` 增加 P1 Canonical Document/Profile/Change/Review；`0005-0007` 增加 P2 Canonical Node、pgvector Search Index、RAG 状态事件和 Relation Build；`0008-0011` 增加 P3/P4 Code Graph、Impact、Edit Packet 和 Edit Result；`0012-0028` 固定 UI 验证、Browser Manifest、UI Knowledge、Approval Grant、安全命令、Evidence 完整性、历史隔离、Repository Binding 与恢复摘要；`0029-0041` 增加 Readiness、日文 Web、Change Orchestration、Test Data／Closure 与历史修订能力；`0042-0054` 增加增量 Graph、Bridge 恢复、内部 Task／Worker 与 Profile drift 台账；`0055` 增加 Golden RAG 离线质量报告；`0056` 增加多 Sheet Snapshot 与逐 Fact Variant Provenance；`0057-0059` 增加统一 Copilot Change Task、阶段输出和同一 Task 的执行范围绑定生命周期。所有 Artifact 复用 P0 不可变 Artifact 存储。
+- `0001` 建立 P0 身份、Revision、Analysis Case 和 Artifact exchange 基线；`0002-0004` 增加 P1 Canonical Document/Profile/Change/Review；`0005-0007` 增加 P2 Canonical Node、pgvector Search Index、RAG 状态事件和 Relation Build；`0008-0011` 增加 P3/P4 Code Graph、Impact、Edit Packet 和 Edit Result；`0012-0028` 固定 UI 验证、Browser Manifest、UI Knowledge、Approval Grant、安全命令、Evidence 完整性、历史隔离、Repository Binding 与恢复摘要；`0029-0041` 增加 Readiness、日文 Web、Change Orchestration、Test Data／Closure 与历史修订能力；`0042-0054` 增加增量 Graph、Bridge 恢复、内部 Task／Worker 与 Profile drift 台账；`0055` 增加 Golden RAG 离线质量报告；`0056` 增加多 Sheet Snapshot 与逐 Fact Variant Provenance；`0057-0059` 增加统一 Copilot Change Task、阶段输出和同一 Task 的执行范围绑定生命周期；`0060` 将 Closure 的 UI 验证外键切换到当前不可变 Artifact 存储。所有 Artifact 复用 P0 不可变 Artifact 存储。
 - 已提供 Embedding Adapter、pgvector Build、requirement/hybrid retrieval、Context Package、内部 Approval Grant、无 shell 安全命令执行器、统一 Change Task 的五个主 MCP Tool、loopback local Bridge、可安装 VSIX、TestData/UI Runner、Readiness Evidence 同步器和六工程日文 Web。真实本地 Nomic Provider 与既存 target deployment E2E 有历史证据；重构后的完整 GitHub Copilot 会话和最终 source tree E2E 仍需重新生成。

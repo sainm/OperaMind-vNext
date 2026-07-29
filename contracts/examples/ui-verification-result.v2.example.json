@@ -1,0 +1,26 @@
+{
+  "artifact_type": "UiVerificationResult",
+  "schema_version": "v2",
+  "verification_result_id": "test-data-ui-verification-001",
+  "orchestration_id": "orchestration-001",
+  "test_data_execution_result_id": "test-data-execution-result-001",
+  "analysis_case_id": "analysis-case-001",
+  "edit_packet_id": "edit-packet-001",
+  "repository_revision": "commit-after-edit-001",
+  "deployment_revision": "commit-after-edit-001",
+  "environment_id": "operamind-test-data-ui",
+  "status": "passed",
+  "scenario_results": [
+    {
+      "scenario_id": "ui-case-001",
+      "status": "passed",
+      "impact_item_refs": ["impact-item-001"],
+      "evidence_refs": ["evidence://project/run/flow/ui-step/screenshot"],
+      "failure_category": "none",
+      "summary": "TestDataPlan の UI 操作、断言、スクリーンショット保存が完了しました。"
+    }
+  ],
+  "unresolved_impact_item_ids": [],
+  "out_of_scope_files": [],
+  "failure_reasons": []
+}

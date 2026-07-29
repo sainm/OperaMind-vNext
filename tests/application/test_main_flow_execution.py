@@ -124,9 +124,7 @@ def test_reserved_run_publishes_progress_ui_and_closure(
 
         def close(self, **values: object) -> object:
             closure_calls.append(values)
-            return SimpleNamespace(
-                record=SimpleNamespace(closure_result_id="closure-1")
-            )
+            return SimpleNamespace(record=SimpleNamespace(closure_result_id="closure-1"))
 
     monkeypatch.setattr(execution_module, "TestDataExecutionService", ExecutionService)
     monkeypatch.setattr(execution_module, "TestDataUiVerificationService", UiService)
@@ -205,9 +203,7 @@ def test_failure_publisher_marks_running_reservation_and_generates_closure(
             pass
 
         def close(self, **_values: object) -> object:
-            return SimpleNamespace(
-                record=SimpleNamespace(closure_result_id="closure-failed")
-            )
+            return SimpleNamespace(record=SimpleNamespace(closure_result_id="closure-failed"))
 
     monkeypatch.setattr(execution_module, "TestDataExecutionService", ExecutionService)
     monkeypatch.setattr(execution_module, "ChangeClosureService", ClosureService)
@@ -229,12 +225,7 @@ def test_failure_publisher_marks_running_reservation_and_generates_closure(
     ]
 
 
-def test_default_factory_uses_only_restricted_unbound_adapters(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.delenv("OPERAMIND_TEST_DATA_BINDING_PROFILE", raising=False)
-
+def test_default_factory_uses_only_restricted_unbound_adapters(tmp_path: Path) -> None:
     executors = default_test_data_executor_factory(tmp_path)
 
     assert set(executors) == {"http", "fixture", "sql", "ui"}

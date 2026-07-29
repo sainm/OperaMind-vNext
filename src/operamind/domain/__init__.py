@@ -10,17 +10,6 @@ from operamind.domain.canonical_facts import (
     ObservedField,
     ObservedRecord,
 )
-from operamind.domain.code_scope import (
-    CodeAnchor,
-    CodeAnchorKind,
-    CodeAnchorMatch,
-    CodeGraphPath,
-    CodeGraphTraversalPlanner,
-    CodeRelationPolicy,
-    CodeScopeEdge,
-    CodeTraversalResult,
-    relation_policy_for_domain,
-)
 from operamind.domain.command_execution import SafeCommandTemplate
 from operamind.domain.document_nodes import (
     CanonicalDocumentNodeBuilder,
@@ -72,14 +61,6 @@ __all__ = [
     "ChangeConfidence",
     "ChangeReviewStatus",
     "ChangeType",
-    "CodeAnchor",
-    "CodeAnchorKind",
-    "CodeAnchorMatch",
-    "CodeGraphPath",
-    "CodeGraphTraversalPlanner",
-    "CodeRelationPolicy",
-    "CodeScopeEdge",
-    "CodeTraversalResult",
     "DocumentEmbeddingInput",
     "DocumentEmbeddingInputBuilder",
     "DocumentNode",
@@ -105,5 +86,4 @@ __all__ = [
     "StructuredChangeBuilder",
     "StructuredChangeQueryPlanner",
     "UnresolvedDocumentRelation",
-    "relation_policy_for_domain",
 ]

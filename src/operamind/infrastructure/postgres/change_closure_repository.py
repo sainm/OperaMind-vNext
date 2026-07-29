@@ -84,8 +84,7 @@ class ChangeClosureRepository:
             cursor.execute(
                 """
                 SELECT change_request_id, project_id, analysis_case_id,
-                       test_plan_id, test_data_plan_id, coverage_report_id,
-                       created_at
+                       test_plan_id, test_data_plan_id, coverage_report_id
                 FROM change_orchestrations
                 WHERE orchestration_id = %s
                 """,
@@ -97,7 +96,6 @@ class ChangeClosureRepository:
             request_id, project_id, case_id, test_plan_id, data_plan_id, coverage_id = (
                 str(value) for value in row[:6]
             )
-            orchestration_created_at = cast(datetime, row[6])
             cursor.execute(
                 """
                 SELECT result.edit_result_id, result.project_id,
@@ -135,43 +133,12 @@ class ChangeClosureRepository:
                 (orchestration_id, project_id),
             )
             data_row = cursor.fetchone()
-            cursor.execute(
-                """
-                SELECT verification_result_id, ui_execution_plan_id
-                FROM change_validations
-                WHERE project_id = %s AND analysis_case_id = %s
-                  AND created_at >= %s
-                ORDER BY created_at DESC, verification_result_id DESC
-                LIMIT 1
-                """,
-                (project_id, case_id, orchestration_created_at),
+            data_artifact_id = (
+                str(data_row[0]) if data_row is not None and data_row[0] is not None else None
             )
-            ui_row = cursor.fetchone()
             ui_artifact_id: str | None = None
             ui_test_case_refs: tuple[tuple[str, tuple[str, ...]], ...] = ()
-            if ui_row is not None:
-                cursor.execute(
-                    """
-                    SELECT planned.scenario_id, scenario.test_case_refs
-                    FROM ui_execution_plan_scenarios AS planned
-                    JOIN verification_scenarios AS scenario
-                      ON scenario.scenario_version_id = planned.scenario_version_id
-                     AND scenario.project_id = planned.project_id
-                    WHERE planned.ui_execution_plan_id = %s
-                      AND planned.project_id = %s
-                    ORDER BY planned.execution_order
-                    """,
-                    (str(ui_row[1]), project_id),
-                )
-                ui_test_case_refs = tuple(
-                    (
-                        str(mapping[0]),
-                        tuple(str(value) for value in cast(list[object], mapping[1])),
-                    )
-                    for mapping in cursor.fetchall()
-                )
-                ui_artifact_id = str(ui_row[0])
-            else:
+            if data_artifact_id is not None:
                 cursor.execute(
                     """
                     SELECT artifact_id
@@ -179,11 +146,13 @@ class ChangeClosureRepository:
                     WHERE project_id = %s
                       AND analysis_case_id = %s
                       AND artifact_type = 'UiVerificationResult'
-                      AND created_at >= %s
+                      AND schema_version = 'v2'
+                      AND payload ->> 'orchestration_id' = %s
+                      AND payload ->> 'test_data_execution_result_id' = %s
                     ORDER BY created_at DESC, artifact_id DESC
                     LIMIT 1
                     """,
-                    (project_id, case_id, orchestration_created_at),
+                    (project_id, case_id, orchestration_id, data_artifact_id),
                 )
                 direct_ui_row = cursor.fetchone()
                 if direct_ui_row is not None:
@@ -211,21 +180,18 @@ class ChangeClosureRepository:
         else:
             changed_line_coverage = None
         data_result = None
-        if data_row is not None and data_row[0] is not None:
-            data_result = self._required_artifact(str(data_row[0]), "TestDataExecutionResult")
+        if data_artifact_id is not None:
+            data_result = self._required_artifact(data_artifact_id, "TestDataExecutionResult")
         ui_result = None
         if ui_artifact_id is not None:
             ui_result = self._required_artifact(ui_artifact_id, "UiVerificationResult")
-            if ui_row is None:
-                ui_test_case_refs = tuple(
-                    (
-                        str(result["scenario_id"]),
-                        (str(result["scenario_id"]),),
-                    )
-                    for result in cast(
-                        list[dict[str, Any]], ui_result["scenario_results"]
-                    )
+            ui_test_case_refs = tuple(
+                (
+                    str(result["scenario_id"]),
+                    (str(result["scenario_id"]),),
                 )
+                for result in cast(list[dict[str, Any]], ui_result["scenario_results"])
+            )
         return ChangeClosureEvidence(
             change_request=self._required_artifact(request_id, "ChangeRequest"),
             orchestration=self._required_artifact(orchestration_id, "ChangeOrchestrationPlan"),

@@ -44,15 +44,6 @@ def default_test_data_executor_factory(
     repository_root: Path,
 ) -> Mapping[str, TestDataChannelExecutor]:
     """Expose only restricted adapters; deployment-specific bindings start empty."""
-    profile = os.getenv("OPERAMIND_TEST_DATA_BINDING_PROFILE")
-    if profile:
-        from operamind.infrastructure.test_data.visiondemo import (
-            configured_visiondemo_profile,
-            visiondemo_test_data_executor_factory,
-        )
-
-        configured_visiondemo_profile()
-        return visiondemo_test_data_executor_factory(repository_root)
     store = LocalEvidenceStore(repository_root / "readiness" / "evidence" / "test-data")
     return {
         "http": SafeHttpTestDataExecutor(evidence_store=store),

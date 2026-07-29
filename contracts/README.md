@@ -5,17 +5,17 @@
 1. `DocumentIngestionResult`
 2. `StructuredChange`
 3. `ContextPackage`
-4. `CodeGraphSnapshot`
-5. `ImpactReport`
-6. `ImpactConfirmation`
-7. `CopilotEditPacket`
-8. `ApprovalGrant`
-9. `UiVerificationResult`
-10. `ChangeRequest`
-11. `DocumentChangeProposal`
-12. `TestPlan`
-13. `TestDataPlan`
-14. `BusinessDataTemplate`
+4. `CopilotImpactContext`
+5. `CodeGraphSnapshot`
+6. `ImpactReport`
+7. `ImpactConfirmation`
+8. `CopilotEditPacket`
+9. `ApprovalGrant`
+10. `UiVerificationResult`
+11. `ChangeRequest`
+12. `DocumentChangeProposal`
+13. `TestPlan`
+14. `TestDataPlan`
 15. `AcceptanceCriteria`
 16. `BusinessCoverageReport`
 17. `ChangeClosureResult`
@@ -46,13 +46,11 @@ ApprovalGrant v1 从 active Edit Packet 派生精确文件、Revision、测试�
 
 CopilotCodingTask v2 是 Web、本地 Bridge、VS Code 扩展、MCP 与未来 API Provider 共用的统一变更任务契约。新任务使用 `copilot_change_task`，携带需求上下文、固定六阶段顺序以及设计差异、代码差异、TestPlan、TestDataPlan 四项必需产物；v1 `copilot_coding_plan` 仅用于读取既有历史。POC 使用 `local_bridge` 与 `vscode_github_copilot`，契约仍预留 `api_provider` route。
 
-UiVerificationResult v1 在 P5 由规范化 Plan/Run/Scenario Result/Evidence 生成。Artifact 保存最终状态和 Evidence ID，不内嵌截图或日志；Deployment Revision 必须绑定 committed Edit Result 的 Repository Revision。
+UiVerificationResult v2 在 P5 由当前 Orchestration 的 TestDataPlan／ExecutionResult／UI Step Evidence 生成，并强制保存 `orchestration_id` 与 `test_data_execution_result_id`，避免自然语言修订后的不同 Test Case Version 或不同数据 Run 复用 UI Evidence；升级前的 v1 Artifact 仍可读取。Artifact 保存最终状态和 Evidence ID，不内嵌截图或日志；Deployment Revision 必须绑定 committed Edit Result 的 Repository Revision。
 
 主变更闭环只从 Web 的自然语言 `ChangeRequest` 开始。VS Code GitHub Copilot 在同一个 `CopilotCodingTask` 中提交设计书差分、代码范围、TestPlan 和 TestDataPlan；`DocumentChangeProposal` 仅作为内部设计书变更 Artifact，不再构成第二个产品入口。确定性检查自动执行；业务歧义或越界修改进入人工确认。
 
 ChangeOrchestrationPlan 将已确认的文档差异、Impact Report、审核済み Golden Case、验收标准、测试计划、跨画面测试数据流、业务覆盖率和 UI Scenario 绑定为同一次可追溯编排。TestDataPlan 的 generation_flows 按顺序传递输出变量，并要求每一步的后置条件和最终业务断言；无法解析的画面、动作、变量或清理步骤必须阻断执行。
-
-BusinessDataTemplate 是可复用、版本化的跨画面业务数据定义。模板明确主从实体依赖、非敏感参数、实例化前置条件、共享变量生产者／消费者、生成步骤和逆序清理步骤；只有 `approved` 模板可实例化。TestDataPlan 只保存模板身份、参数名、前置条件结果和实体顺序，不保存参数值。
 
 TestDataExecutionResult 记录各 flow 的 fixture、HTTP、SQL、UI 步骤、输出变量、断言、清理和脱敏 Evidence；失败后停止后续 setup，但不能跳过已进入流程的 cleanup。ChangeClosureResult 对 Edit Result、确定性测试、Test Data、业务覆盖率和 UI 结果做最终 fail-closed 汇总：证据不足为 `blocked`，范围越界为 `reanalysis_required`，只有全部适用条件通过才为 `passed`。
 

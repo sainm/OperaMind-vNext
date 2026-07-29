@@ -22,11 +22,6 @@
     "test_plan_id": {"type": "string", "minLength": 1},
     "project_id": {"type": "string", "minLength": 1},
     "status": {"enum": ["ready", "blocked"]},
-    "template_instances": {
-      "type": "array",
-      "uniqueItems": true,
-      "items": {"$ref": "#/$defs/templateInstance"}
-    },
     "data_sets": {
       "type": "array",
       "minItems": 1,
@@ -99,56 +94,6 @@
         "source": {"enum": ["response", "database", "ui", "fixture"]},
         "path": {"$ref": "#/$defs/nonBlank"},
         "required": {"type": "boolean"}
-      }
-    },
-    "templateInstance": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "instance_id",
-        "template_id",
-        "template_key",
-        "template_version",
-        "parameter_names",
-        "precondition_results",
-        "entity_order",
-        "cleanup_entity_order"
-      ],
-      "properties": {
-        "instance_id": {"$ref": "#/$defs/nonBlank"},
-        "template_id": {"$ref": "#/$defs/nonBlank"},
-        "template_key": {"$ref": "#/$defs/nonBlank"},
-        "template_version": {"$ref": "#/$defs/nonBlank"},
-        "parameter_names": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
-        },
-        "precondition_results": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["precondition_id", "description_ja", "status"],
-            "properties": {
-              "precondition_id": {"$ref": "#/$defs/nonBlank"},
-              "description_ja": {"$ref": "#/$defs/nonBlank"},
-              "status": {"enum": ["passed", "blocked"]}
-            }
-          }
-        },
-        "entity_order": {
-          "type": "array",
-          "minItems": 2,
-          "uniqueItems": true,
-          "items": {"$ref": "#/$defs/nonBlank"}
-        },
-        "cleanup_entity_order": {
-          "type": "array",
-          "minItems": 2,
-          "uniqueItems": true,
-          "items": {"$ref": "#/$defs/nonBlank"}
-        }
       }
     },
     "generationStep": {
