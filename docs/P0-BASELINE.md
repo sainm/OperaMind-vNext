@@ -42,7 +42,7 @@ python3.12 -m venv .venv
   --require-mvp-ready
 ```
 
-`--require-ready` 只检查冻结 Golden Dataset 的离线回归质量，不是个别 Change Request 的运行时 Impact 门禁。`--require-mvp-ready` 还要求 `readiness/mvp-readiness.json` 中真实 Provider、范围授权、GitHub Copilot、绑定 target Deployment E2E 和完整 PostgreSQL/Edge 回归全部具有经审核、SHA-256 固定且符合 `readiness/mvp-evidence.schema.json` 的类型化证据。Golden 证据必须与本次命令选择并校验的 manifest 完全一致；完整回归证据的 `operamind-source-tree-v1` 摘要会由校验器重新计算。当前 source tree 必须在 WSL + Podman + Edge 中重建全回归 Evidence，且 `github_copilot_live` 仍为 pending，因此第二个命令按预期失败；不能用代码存在、空证据摘要或 Fake 测试替代真实证据。
+`--require-ready` 只检查冻结 Golden Dataset 的离线回归质量，不是个别 Change Request 的运行时 Impact 门禁。`--require-mvp-ready` 还要求 `readiness/mvp-readiness.json` 中真实 Provider、范围授权、GitHub Copilot、绑定 target Deployment E2E 和完整 PostgreSQL/Edge 回归全部具有经审核、SHA-256 固定且符合 `readiness/mvp-evidence.schema.json` 的类型化证据。Golden 证据必须与本次命令选择并校验的 manifest 完全一致；完整回归证据的 `operamind-source-tree-v1` 摘要会由校验器重新计算。当前 source tree 必须在具备 PostgreSQL 和 Edge 的验证环境中重建全回归 Evidence，且 `github_copilot_live` 仍为 pending，因此第二个命令按预期失败；不能用代码存在、空证据摘要或 Fake 测试替代真实证据。
 
 ## PostgreSQL migration
 

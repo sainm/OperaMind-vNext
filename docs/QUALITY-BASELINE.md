@@ -38,7 +38,7 @@ export OPERAMIND_TEST_DATABASE_URL='postgresql://.../operamind_test'
 
 同日の第二次精簡では、Copilot Impact と並存していた旧 deterministic Impact Report／Code Scope 管線、内部で直接ファイルを書き換える XLSX Proposal／Workspace Editor、production package 内のテスト DB helper、および TestDataPlan の前段にあった `BusinessDataTemplate` を削除しました。跨画面データは Copilot が生成する一つの TestDataPlan に変数、setup、assertion、逆順 cleanup として直接記録します。過去 source tree に結び付いた自動生成 readiness Evidence は削除し、`target_deployment_e2e` と `full_local_regression` を再採取まで明示的に pending としました。
 
-現在の Mypy strict は 156 source files、VS Code Extension は 8 tests、Golden Dataset の構造検証は合格しています。PostgreSQL が停止している現端末で実行可能な回帰は 539 passed、54 skipped で、skip は PostgreSQL 依存 50 件、local-only Golden source 2 件、live Embedding 1 件、live Browser 1 件です。PostgreSQL を含む coverage gate はこの状態では再判定せず、上記 83.59% の記録を新しい source tree の Evidence として再利用しません。
+現在の Mypy strict は 156 source files、VS Code Extension は 8 tests、Golden Dataset の構造検証は合格しています。PostgreSQL が停止している現端末で実行可能な回帰は 534 passed、54 skipped で、skip は PostgreSQL 依存 50 件、local-only Golden source 2 件、live Embedding 1 件、live Browser 1 件です。PostgreSQL を含む coverage gate はこの状態では再判定せず、上記 83.59% の記録を新しい source tree の Evidence として再利用しません。
 
 ## readiness と Golden RAG
 
@@ -54,9 +54,10 @@ export OPERAMIND_TEST_DATABASE_URL='postgresql://.../operamind_test'
 GitHub Actions の Coverage 実行は日常的な品質ゲートです。一方、`full_local_regression` は PostgreSQL と実 Microsoft Edge を含み、ゼロ failure／ゼロ skip を要求するリリース Evidence です。
 
 ```bash
-bash scripts/regenerate-readiness-wsl.sh \
-  visiondemo \
-  visiondemo-expense-status-filter-p6
+.venv/bin/operamind-readiness --root . \
+  run-full-regression \
+  --project-id visiondemo \
+  --analysis-case-id visiondemo-expense-status-filter-p6
 ```
 
-このコマンドは最終 source tree の digest を記録します。Evidence 生成後に source、テスト、migration、Contract／Profile、依存ロック、品質ポリシー、品質 Workflow または検証スクリプトを変更すると、その Evidence は無効になります。したがって、最終コミットを確定してから WSL + Podman + Microsoft Edge で再生成します。
+このコマンドは最終 source tree の digest を記録します。Evidence 生成後に source、テスト、migration、Contract／Profile、依存ロック、品質ポリシー、品質 Workflow または検証スクリプトを変更すると、その Evidence は無効になります。したがって、最終コミットを確定し、必要な PostgreSQL と Microsoft Edge を利用できる検証環境で再生成します。
