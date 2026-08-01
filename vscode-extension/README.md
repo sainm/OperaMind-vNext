@@ -15,9 +15,18 @@ npm run package:vsix
 `dist/operamind-copilot-bridge.vsix` を VS Code の `Extensions: Install from VSIX...` でインストールします。
 
 1. 対象 linked worktree を VS Code で開く。
-2. `OperaMind: Bridge Token を安全に登録` を実行する。
-3. `OperaMind: 変更タスクを確認` を実行する。
-4. 通知から GitHub Copilot Chat を開く。
+2. Activity Bar の OperaMind アイコンから「コントロール」を開く。
+3. OperaMind Launcher を起動する。Extension が MCP と Bridge Token を自動検出する。
+4. 「確認して Copilot を開く」から変更タスクを確認する。
+5. 確認 Dialog から GitHub Copilot Chat を開く。
+
+Extension は Workspace 内の `.vscode/mcp.json` や Python を参照しません。OperaMind Launcher がユーザー領域へ保存した `runtime.json` を読み、同じ配布版を MCP stdio Server として起動します。Bridge Token もユーザー領域の専用 File から SecretStorage へ自動同期します。「Bridge Token を設定」は復旧用としてだけ残します。
+
+## Activity Bar コントロール
+
+日文コントロール画面は、Bridge 接続状態、現在の Workspace、Coding Task ID、実行状態を自動更新します。「確認して Copilot を開く」「現在のタスクを再開」「現在のタスクを取消」「最新状態に更新」「ローカル環境を診断」「OperaMind Web を開く」を画面から実行できます。Token の手動設定は自動同期に失敗した場合の復旧用です。
+
+画面上部の更新 Icon でも最新状態を取得でき、Web Icon は設定済みの loopback OperaMind Web を既定 Browser で開きます。従来の Command Palette 入口も互換のため残します。専用 Shortcut は不要です。
 
 拡張は Task ID を Workspace State に保持します。VS Code 再起動後も `OperaMind: 現在のタスクを再開` から同じ変更へ戻れます。取消は理由付きで記録し、再試行は新しい Task ID を使用します。
 

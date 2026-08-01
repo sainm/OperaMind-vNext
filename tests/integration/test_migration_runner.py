@@ -103,6 +103,7 @@ def test_migrations_apply_once_and_record_checksum() -> None:
         "0058",
         "0059",
         "0060",
+        "0061",
     )
     assert second == ()
     assert rows == [
@@ -394,6 +395,11 @@ def test_migrations_apply_once_and_record_checksum() -> None:
             "ui_verification_artifact_binding",
             catalog.migrations[59].checksum,
         ),
+        (
+            "0061",
+            "project_local_sources",
+            catalog.migrations[60].checksum,
+        ),
     ]
 
 
@@ -612,6 +618,7 @@ def test_applied_migration_checksum_mismatch_is_rejected(tmp_path: Path) -> None
             "0058_copilot_change_outputs.sql",
             "0059_copilot_change_task_lifecycle.sql",
             "0060_ui_verification_artifact_binding.sql",
+            "0061_project_local_sources.sql",
         ):
         (tmp_path / version).write_text(
             (ROOT / "migrations" / version).read_text(encoding="utf-8"),
@@ -1015,6 +1022,7 @@ def test_locator_observation_migration_upgrades_candidate_identity_with_existing
         "0058",
         "0059",
         "0060",
+        "0061",
     )
     assert candidates == [
         ("knowledge-v1", "shared-status-label"),
@@ -1115,6 +1123,7 @@ def test_profile_rebuild_lifecycle_migrates_legacy_requests_fail_closed() -> Non
             "0058",
             "0059",
             "0060",
+            "0061",
         )
         with connection.cursor() as cursor:
             cursor.execute(
@@ -1240,6 +1249,7 @@ def test_snapshot_variant_provenance_migration_backfills_legacy_facts() -> None:
             "0058",
             "0059",
             "0060",
+            "0061",
         )
         with connection.cursor() as cursor:
             cursor.execute(

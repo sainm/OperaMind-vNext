@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass
+from nturl2path import url2pathname as windows_url2pathname
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -272,10 +274,23 @@ def _trusted_file_path(source_ref: str) -> Path:
     parsed = urlsplit(source_ref)
     if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
         raise ValueError("Canonical design document source must be a local file URI")
-    path = Path(unquote(parsed.path)).resolve(strict=True)
+    path = _file_uri_path(source_ref).resolve(strict=True)
     if not path.is_file():
         raise ValueError("Canonical design document source is not a regular file")
     return path
+
+
+def _file_uri_path(source_ref: str, *, platform_name: str | None = None) -> Path:
+    """Convert a local file URI without losing a Windows drive letter."""
+
+    parsed = urlsplit(source_ref)
+    if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
+        raise ValueError("Canonical design document source must be a local file URI")
+    path = unquote(parsed.path)
+    platform = os.name if platform_name is None else platform_name
+    if platform == "nt":
+        path = windows_url2pathname(path)
+    return Path(path)
 
 
 def _file_digest(path: Path) -> str:

@@ -1,0 +1,124 @@
+name: Package desktop
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  extension:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: vscode-extension/package-lock.json
+      - run: npm ci
+        working-directory: vscode-extension
+      - run: npm run package:vsix
+        working-directory: vscode-extension
+      - uses: actions/upload-artifact@v4
+        with:
+          name: operamind-vscode-extension
+          path: vscode-extension/dist/*.vsix
+          if-no-files-found: error
+
+  desktop:
+    needs: extension
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            artifact: operamind-macos-arm64
+            path: dist/operamind-macos-arm64.zip
+          - os: windows-2022
+            artifact: operamind-windows-x64
+            path: dist/operamind-windows-x64.zip
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        if: runner.os == 'Windows'
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: vscode-extension/package-lock.json
+      - name: Install package builder
+        run: python -m pip install ".[dev,packaging]"
+      - name: Verify Windows runtime behavior
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m ruff check .
+          python -m mypy
+          python -m pytest -q `
+            tests/application/test_environment_file.py `
+            tests/application/test_launcher.py `
+            tests/application/test_local_installation.py `
+            tests/application/test_platform_runtime.py `
+            tests/application/test_copilot_document_uri.py `
+            tests/application/test_project_stack.py `
+            tests/application/test_command_execution_runner.py `
+            tests/infrastructure/test_orchestration_worker.py
+          npm ci --prefix vscode-extension
+          npm test --prefix vscode-extension
+      - name: Build desktop application
+        run: pyinstaller --noconfirm --clean packaging/operamind.spec
+      - name: Smoke-test Windows packaged executables
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $desktop = Start-Process `
+            -FilePath "$PWD\dist\OperaMind.exe" `
+            -ArgumentList @("--package-smoke-test", "--data-directory", "$env:RUNNER_TEMP\operamind-desktop-smoke") `
+            -Wait -PassThru
+          if ($desktop.ExitCode -ne 0) {
+            throw "OperaMind.exe package smoke test failed: $($desktop.ExitCode)"
+          }
+          $mcp = Start-Process `
+            -FilePath "$PWD\dist\OperaMindMcp.exe" `
+            -ArgumentList @("--package-smoke-test", "--data-directory", "$env:RUNNER_TEMP\operamind-mcp-smoke") `
+            -Wait -PassThru
+          if ($mcp.ExitCode -ne 0) {
+            throw "OperaMindMcp.exe package smoke test failed: $($mcp.ExitCode)"
+          }
+      - uses: actions/download-artifact@v4
+        with:
+          name: operamind-vscode-extension
+          path: dist/vscode-extension
+      - name: Archive macOS application and VS Code extension
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist/package
+          cp -R dist/OperaMind.app dist/package/
+          cp dist/vscode-extension/*.vsix dist/package/
+          ditto -c -k --sequesterRsrc --keepParent dist/package dist/operamind-macos-arm64.zip
+      - name: Archive Windows application and VS Code extension
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/package
+          Copy-Item dist/OperaMind.exe dist/package/
+          Copy-Item dist/OperaMindMcp.exe dist/package/
+          Copy-Item dist/vscode-extension/*.vsix dist/package/
+          Compress-Archive -Path dist/package/* -DestinationPath dist/operamind-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.path }}
+          if-no-files-found: error

@@ -66,3 +66,40 @@ jobs:
           name: coverage-json
           path: coverage.json
           if-no-files-found: error
+
+  windows-compatibility:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: vscode-extension/package-lock.json
+      - name: Install locked dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.lock
+          python -m pip install --no-deps -e .
+      - name: Windows runtime regression
+        shell: pwsh
+        run: |
+          python -m pytest -q `
+            tests/application/test_environment_file.py `
+            tests/application/test_launcher.py `
+            tests/application/test_local_installation.py `
+            tests/application/test_platform_runtime.py `
+            tests/application/test_copilot_document_uri.py `
+            tests/application/test_project_stack.py `
+            tests/application/test_command_execution_runner.py `
+            tests/infrastructure/test_orchestration_worker.py
+          npm ci --prefix vscode-extension
+          npm test --prefix vscode-extension

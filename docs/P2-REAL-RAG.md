@@ -156,7 +156,7 @@ operamind-recover-index \
 
 真实 PostgreSQL 18 + pgvector 0.8.2 集成测试覆盖：
 
-- `0001-0060` 顺序升级和 checksum。
+- `0001-0061` 顺序升级和 checksum。
 - Search Index Build 的普通读取、向量检索和关键词检索都会重算完整条目账本；条目删除、关键词漂移、向量元数据/内容漂移以及缺失版本摘要均失败关闭。迁移前的 ready/stale Build 不原地补写可信摘要，必须使用新 Build ID 重建。
 - Canonical Node 与 Snapshot Membership 的事务写入/回滚。
 - 二进制版本不同但 Canonical 内容相同的两个 Snapshot 只生成一个向量，第二个 Build 100% 复用。

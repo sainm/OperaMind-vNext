@@ -31,20 +31,42 @@ Web が表示するのはこの六工程だけです。内部の承認記録、�
 
 Copilot に公開する MCP は、Change Task の取得、成果物記録、コマンド実行、差分検証、最終結果記録の五つだけです。Impact、Approval、実行キューなどの内部機構を個別 Tool として公開しません。
 
-## ローカル起動
+## 起動
+
+配布版では、macOS の `OperaMind.app` または Windows の `OperaMind.exe` を起動するだけです。Launcher が設定読込、Bridge Token 生成、DB migration、Web 起動、ブラウザー表示を一度に行います。MCP は VS Code Extension がユーザー領域の実行情報から自動登録するため、利用者が `migrate`、`web`、`mcp` を個別に実行する必要はありません。
+
+以下は配布物を作る開発者だけが使用するソース起動手順です。
 
 Python 3.12 と PostgreSQL 18 + pgvector を使用します。
+
+macOS／Linux:
 
 ```bash
 python3.12 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 
-export OPERAMIND_DATABASE_URL='postgresql:///operamind?host=/private/tmp&port=5432'
-.venv/bin/operamind-migrate
-.venv/bin/operamind-web --root . --host 127.0.0.1 --port 8765
+cp .env.example .env
+.venv/bin/operamind-launcher --root .
 ```
 
-Web は単機利用を前提とし、`127.0.0.1` のみで公開します。ユーザー認証はありません。VS Code Local Bridge を有効にする場合だけ、別途 `OPERAMIND_BRIDGE_TOKEN` を設定します。
+Windows PowerShell:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+
+Copy-Item .env.example .env
+# .env の OPERAMIND_DATABASE_URL を Windows PostgreSQL の URL に変更する
+.\.venv\Scripts\operamind-launcher.exe --root .
+```
+
+本機の固定開発 DB 名は `operamind_vnext` です。ソース実行では接続先、Embedding、UI Test の設定をリポジトリ Root の `.env` に置き、実値は Git に追加しません。配布版はユーザー領域の `config.env` を読み込みます。OS の既存環境変数、ユーザー設定、ソース `.env` の順で優先されます。VS Code MCP は Launcher と同じ実行環境を使用するため、Database URL の入力 Dialog は表示されません。
+
+Windows 配布版の設定は `%LOCALAPPDATA%\OperaMind\config.env`、実行情報は `%LOCALAPPDATA%\OperaMind\runtime.json` に固定します。`config.env` は UTF-8、UTF-8 BOM、CRLF のいずれも受け付けます。Windows の PostgreSQL は Unix socket 形式ではなく、`postgresql://operamind:<PASSWORD>@127.0.0.1:5432/operamind_vnext` のような TCP URL を使用します。Token と runtime 情報は Launcher が生成するため、利用者が編集しません。
+
+Web は単機利用を前提とし、`127.0.0.1` のみで公開します。ユーザー認証はありません。Bridge Token は Launcher がユーザー領域へ生成し、VS Code Extension が SecretStorage へ同期します。
+
+初回は Web の「新しいプロジェクト」から、コード Workspace と一つ以上の設計書 Folder を登録します。どちらも Git 管理外のローカルファイルとして登録でき、コンテナを必須としません。Windows では Windows の絶対 Path、macOS／Linux では各 OS の絶対 Path を入力します。
 
 TestDataPlan で対象システムの HTTP／UI Step を実行する場合は、資格情報を含まない Origin を明示します。未設定の場合、外部 HTTP／UI 実行は fail closed になります。
 
@@ -60,7 +82,9 @@ npm ci
 npm run package:vsix
 ```
 
-生成した `dist/operamind-copilot-bridge.vsix` を VS Code にインストールし、対象の隔離 worktree で Bridge Token を SecretStorage に登録します。詳細は [VS Code GitHub Copilot ワークフロー](docs/VSCODE-COPILOT-WORKFLOW.md) を参照してください。
+生成した `dist/operamind-copilot-bridge.vsix` を VS Code にインストールします。以後は対象 Workspace を開くだけで、Extension が OperaMind MCP と Bridge Token を自動検出します。詳細は [VS Code GitHub Copilot ワークフロー](docs/VSCODE-COPILOT-WORKFLOW.md) を参照してください。
+
+macOS／Windows の配布物は GitHub Actions の `Package desktop` から作成します。各 ZIP には OperaMind Desktop と同じ Version の VSIX が入り、Desktop は Python を内包します。Windows ZIP の `OperaMindMcp.exe` は VS Code が標準入出力用に自動起動する内部 Companion であり、利用者が直接実行するものではありません。`OperaMind.exe` と同じ Folder から移動・削除しないでください。PyInstaller は OS 間の cross-build を行わないため、macOS App と Windows exe は各 OS の Runner で個別に検証します。
 
 ## 品質確認
 
@@ -68,6 +92,14 @@ npm run package:vsix
 .venv/bin/python -m ruff check .
 .venv/bin/python -m mypy
 .venv/bin/python -m pytest -q
+```
+
+Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m mypy
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
 PostgreSQL 統合テストでは、管理用接続だけを `OPERAMIND_TEST_DATABASE_URL` に設定します。pytest がランダム名の一時 DB を作成・migration・削除し、通常の開発 DB を再利用しません。

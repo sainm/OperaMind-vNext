@@ -36,6 +36,16 @@ class DocumentReviewRecord:
     created: bool
 
 
+@dataclass(frozen=True, slots=True)
+class ProjectInitializationRecord:
+    project_id: str
+    name: str
+    workspace_root: str
+    document_roots: tuple[str, ...]
+    source_control_kind: str
+    created: bool
+
+
 class WebControlPlaneRepository:
     """Keep Web writes canonical and Web reads explicitly bounded."""
 
@@ -105,6 +115,118 @@ class WebControlPlaneRepository:
             created=created,
         )
 
+    def initialize_project(
+        self,
+        *,
+        project_id: str,
+        name: str,
+        workspace_root: str,
+        source_control_kind: str,
+        document_roots: tuple[str, ...],
+        configured_by: str,
+    ) -> ProjectInitializationRecord:
+        if not all(
+            value.strip()
+            for value in (project_id, name, workspace_root, source_control_kind, configured_by)
+        ):
+            raise ValueError("プロジェクト初期化の入力値を空にできません")
+        if source_control_kind not in {"git", "local_files"}:
+            raise ValueError("サポートされていないソース管理種別です")
+        if not document_roots or any(not root.strip() for root in document_roots):
+            raise ValueError("設計書の場所を一つ以上入力してください")
+        if len(document_roots) != len(set(document_roots)):
+            raise ValueError("設計書の場所を重複して登録できません")
+
+        with self._connection.transaction(), self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO projects (project_id, name)
+                VALUES (%s, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (project_id, name),
+            )
+            created = cursor.rowcount == 1
+            cursor.execute(
+                "SELECT name FROM projects WHERE project_id = %s FOR UPDATE",
+                (project_id,),
+            )
+            project_row = cursor.fetchone()
+            if project_row is None:
+                raise RuntimeError("Project disappeared during initialization")
+            if str(project_row[0]) != name:
+                raise PersistenceConflictError(
+                    "同じプロジェクト ID が別のプロジェクト名で登録されています"
+                )
+
+            cursor.execute(
+                """
+                SELECT project.name, workspace.workspace_root, workspace.source_control_kind
+                FROM project_workspaces AS workspace
+                JOIN projects AS project ON project.project_id = workspace.project_id
+                WHERE workspace.project_id = %s
+                """,
+                (project_id,),
+            )
+            workspace_row = cursor.fetchone()
+            if workspace_row is not None and (
+                str(workspace_row[1]), str(workspace_row[2])
+            ) != (workspace_root, source_control_kind):
+                raise PersistenceConflictError(
+                    "同じプロジェクト ID が別の Workspace 設定で登録されています"
+                )
+
+            cursor.execute(
+                """
+                SELECT root_path
+                FROM project_document_roots
+                WHERE project_id = %s
+                ORDER BY position
+                """,
+                (project_id,),
+            )
+            stored_roots = tuple(str(row[0]) for row in cursor.fetchall())
+            if stored_roots and stored_roots != document_roots:
+                raise PersistenceConflictError(
+                    "同じプロジェクト ID が別の設計書の場所で登録されています"
+                )
+
+            if workspace_row is None:
+                cursor.execute(
+                    """
+                    INSERT INTO project_workspaces (
+                        project_id, workspace_root, source_control_kind, configured_by
+                    ) VALUES (%s, %s, %s, %s)
+                    """,
+                    (project_id, workspace_root, source_control_kind, configured_by),
+                )
+            if not stored_roots:
+                cursor.executemany(
+                    """
+                    INSERT INTO project_document_roots (
+                        document_root_id, project_id, root_path, position
+                    ) VALUES (%s, %s, %s, %s)
+                    """,
+                    [
+                        (
+                            _project_document_root_id(project_id, root),
+                            project_id,
+                            root,
+                            position,
+                        )
+                        for position, root in enumerate(document_roots)
+                    ],
+                )
+
+        return ProjectInitializationRecord(
+            project_id=project_id,
+            name=name,
+            workspace_root=workspace_root,
+            document_roots=document_roots,
+            source_control_kind=source_control_kind,
+            created=created,
+        )
+
     def get_change_request(self, request_id: str) -> dict[str, object]:
         with self._connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
@@ -170,13 +292,25 @@ class WebControlPlaneRepository:
                 """
                 SELECT project.project_id, project.name,
                        count(DISTINCT analysis_case.analysis_case_id) AS case_count,
-                       count(DISTINCT request.change_request_id) AS request_count
+                       count(DISTINCT request.change_request_id) AS request_count,
+                       workspace.workspace_root, workspace.source_control_kind,
+                       COALESCE(
+                           (
+                               SELECT jsonb_agg(root.root_path ORDER BY root.position)
+                               FROM project_document_roots AS root
+                               WHERE root.project_id = project.project_id
+                           ),
+                           '[]'::jsonb
+                       ) AS document_roots
                 FROM projects AS project
+                LEFT JOIN project_workspaces AS workspace
+                  ON workspace.project_id = project.project_id
                 LEFT JOIN analysis_cases AS analysis_case
                   ON analysis_case.project_id = project.project_id
                 LEFT JOIN change_requests AS request
                   ON request.project_id = project.project_id
-                GROUP BY project.project_id, project.name
+                GROUP BY project.project_id, project.name,
+                         workspace.workspace_root, workspace.source_control_kind
                 ORDER BY project.name, project.project_id
                 LIMIT %s
                 """,
@@ -189,6 +323,9 @@ class WebControlPlaneRepository:
                 "name": str(row[1]),
                 "case_count": int(row[2]),
                 "change_request_count": int(row[3]),
+                "workspace_root": str(row[4]) if row[4] is not None else None,
+                "source_control_kind": str(row[5]) if row[5] is not None else None,
+                "document_roots": [str(value) for value in row[6]],
             }
             for row in rows
         )
@@ -215,6 +352,69 @@ class WebControlPlaneRepository:
                 "Project must have exactly one registered Workspace for automatic Change Tasks"
             )
         return unique[0]
+
+    def project_workspace_registration(self, project_id: str) -> dict[str, str] | None:
+        """Return the initialized Workspace and its source-control mode."""
+
+        if not project_id.strip():
+            raise ValueError("Project ID must not be blank")
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT project.name, workspace.workspace_root, workspace.source_control_kind
+                FROM project_workspaces AS workspace
+                JOIN projects AS project ON project.project_id = workspace.project_id
+                WHERE workspace.project_id = %s
+                """,
+                (project_id,),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        return {
+            "project_name": str(row[0]),
+            "workspace_root": str(row[1]),
+            "source_control_kind": str(row[2]),
+        }
+
+    def register_repository(
+        self,
+        *,
+        repository_id: str,
+        project_id: str,
+        remote_url: str,
+        workspace_root: str,
+    ) -> None:
+        """Register the Git identity discovered for a Web-initialized project."""
+
+        if not all(
+            value.strip() for value in (repository_id, project_id, remote_url, workspace_root)
+        ):
+            raise ValueError("Repository registration fields must not be blank")
+        with self._connection.transaction(), self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO repositories (repository_id, project_id, remote_url, workspace_root)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (repository_id, project_id, remote_url, workspace_root),
+            )
+            cursor.execute(
+                """
+                SELECT project_id, remote_url, workspace_root
+                FROM repositories
+                WHERE repository_id = %s
+                """,
+                (repository_id,),
+            )
+            row = cursor.fetchone()
+        if row is None or tuple(str(value) for value in row) != (
+            project_id,
+            remote_url,
+            workspace_root,
+        ):
+            raise PersistenceConflictError("Repository identity differs from initialized Workspace")
 
     def project_repository_registration(self, project_id: str) -> dict[str, str] | None:
         """Return one unambiguous Repository registration for automatic Case creation."""
@@ -523,6 +723,11 @@ class WebControlPlaneRepository:
 
 def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _project_document_root_id(project_id: str, root_path: str) -> str:
+    digest = hashlib.sha256(f"{project_id}\0{root_path}".encode()).hexdigest()[:24]
+    return f"project-document-root-{digest}"
 
 
 def _optional(value: object) -> str | None:

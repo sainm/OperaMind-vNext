@@ -208,7 +208,7 @@ class LocalEnvironmentDiagnosticsService:
                     "Migration",
                     "blocked",
                     "PostgreSQL 接続がないため Migration を確認できません。",
-                    "接続を復旧した後、.venv/bin/operamind-migrate を実行してください。",
+                    "接続を復旧した後、仮想環境の operamind-migrate を実行してください。",
                     code="database_unavailable",
                 ),
             )
@@ -227,7 +227,7 @@ class LocalEnvironmentDiagnosticsService:
                 "Migration",
                 "blocked",
                 "schema_migrations が存在しません。",
-                ".venv/bin/operamind-migrate を一度実行してください。",
+                "仮想環境の operamind-migrate を一度実行してください。",
                 code="migration_table_missing",
             )
             return postgres, migration
@@ -261,7 +261,7 @@ class LocalEnvironmentDiagnosticsService:
                 "Migration",
                 "blocked",
                 f"最新適用は {latest}、未適用 Migration は {len(pending)} 件です。",
-                ".venv/bin/operamind-migrate を実行し、再診断してください。",
+                "仮想環境の operamind-migrate を実行し、再診断してください。",
                 code="migration_pending",
                 details={"pending": pending},
             )

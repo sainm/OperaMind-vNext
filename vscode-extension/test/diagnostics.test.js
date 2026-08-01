@@ -88,8 +88,7 @@ test("local formatter marks Copilot quota unknown and gives bounded repair steps
   );
 
   assert.match(rendered, /Credit\/Quota 未検証/);
-  assert.match(rendered, /Bridge Token を安全に登録/);
+  assert.match(rendered, /Launcher を起動/);
   assert.match(rendered, /git worktree add/);
-  assert.match(rendered, /Migration/);
   assert.match(rendered, /自動変更しません/);
 });

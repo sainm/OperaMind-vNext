@@ -71,6 +71,7 @@ def test_repository_migrations_are_sequential_and_transaction_free() -> None:
         "0058",
         "0059",
         "0060",
+        "0061",
     ]
     assert all(len(migration.checksum) == 64 for migration in catalog.migrations)
 
@@ -84,6 +85,18 @@ def test_ui_verification_closure_binding_uses_current_artifact_store() -> None:
     assert "FOREIGN KEY (\n        project_id, ui_verification_result_id\n    )" in migration
     assert "REFERENCES artifact_records(project_id, artifact_id)" in migration
     assert "change_validations" not in migration
+
+
+def test_project_local_sources_allow_version_control_optional_paths() -> None:
+    migration = (ROOT / "migrations/0061_project_local_sources.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "CREATE TABLE project_workspaces" in migration
+    assert "'git', 'local_files'" in migration
+    assert "CREATE TABLE project_document_roots" in migration
+    assert "UNIQUE (project_id, root_path)" in migration
+    assert "migration:0061" in migration
 
 
 def test_migration_cannot_control_its_own_transaction(tmp_path: Path) -> None:

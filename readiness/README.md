@@ -4,6 +4,10 @@
 
 ## Automated evidence synchronization
 
+The examples below use POSIX virtualenv paths. On Windows PowerShell, use
+`\.venv\Scripts\operamind-readiness.exe` in their place; the generated Evidence
+records the platform-specific fixed command automatically.
+
 `operamind-readiness` derives gate state from Canonical PostgreSQL and immutable real-test observations. It never edits the customer target repository. Missing or inconsistent input produces a `pending` gate with no evidence or reviewers. A successful sync writes deterministic `readiness/evidence/auto-*.json` files first, validates their schemas and digests, validates a temporary manifest, and atomically publishes the manifest last. Replaying unchanged inputs does not rewrite files or increment `manifest_version`.
 
 Apply migrations and synchronize one bounded case:

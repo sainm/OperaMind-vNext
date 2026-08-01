@@ -27,6 +27,11 @@ from operamind.infrastructure.postgres import (
     CommandExecutionScope,
     ProfileRepository,
 )
+from operamind.platform_runtime import (
+    approved_process_environment,
+    subprocess_creation_flags,
+    terminate_windows_process_tree,
+)
 from operamind.profiles import ProfileCatalog
 
 
@@ -233,17 +238,15 @@ def _execute(*, template: SafeCommandTemplate, workspace_root: Path) -> CommandE
         if not cwd.is_dir():
             raise OSError(f"Command working directory is not a directory: {cwd}")
         working_directory = str(cwd)
-        environment = {
-            key: os.environ[key] for key in template.environment_keys if key in os.environ
-        }
-        executable = _resolve_executable(
+        environment = approved_process_environment(template.environment_keys)
+        invocation, executable = _command_invocation(
             workspace_root=workspace_root,
-            executable=template.argv[0],
+            argv=template.argv,
             environment=environment,
         )
         executable_path = str(executable)
         process = subprocess.Popen(
-            (executable_path, *template.argv[1:]),
+            invocation,
             cwd=cwd,
             env=environment,
             shell=False,
@@ -251,6 +254,7 @@ def _execute(*, template: SafeCommandTemplate, workspace_root: Path) -> CommandE
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             start_new_session=os.name == "posix",
+            creationflags=subprocess_creation_flags(),
         )
         if process.stdout is None or process.stderr is None:
             raise RuntimeError("Approved command pipes were not created")
@@ -315,6 +319,46 @@ def _resolve_executable(
     return Path(resolved).resolve(strict=True)
 
 
+def _command_invocation(
+    *, workspace_root: Path, argv: tuple[str, ...], environment: dict[str, str]
+) -> tuple[tuple[str, ...], Path]:
+    """Resolve an approved argv, including Windows' non-executable .bat wrapper."""
+
+    batch = _windows_gradle_batch(workspace_root, argv[0])
+    if batch is not None:
+        comspec = environment.get("COMSPEC") or shutil.which(
+            "cmd.exe", path=environment.get("PATH", "")
+        )
+        if comspec is None:
+            raise OSError("Windows command interpreter is not available")
+        command_line = subprocess.list2cmdline((str(batch), *argv[1:]))
+        # CALL is required for cmd.exe to return the batch file's exit code.
+        return (comspec, "/d", "/s", "/c", f"call {command_line}"), batch
+    executable = _resolve_executable(
+        workspace_root=workspace_root,
+        executable=argv[0],
+        environment=environment,
+    )
+    return (str(executable), *argv[1:]), executable
+
+
+def _windows_gradle_batch(
+    workspace_root: Path, executable: str, *, platform_name: str | None = None
+) -> Path | None:
+    """Map the profile's POSIX Gradle wrapper token to gradlew.bat on Windows."""
+
+    platform = os.name if platform_name is None else platform_name
+    if platform != "nt":
+        return None
+    normalized = executable.replace("\\", "/")
+    if normalized not in {"./gradlew", "gradlew", "./gradlew.bat", "gradlew.bat"}:
+        return None
+    candidate = (workspace_root / "gradlew.bat").resolve(strict=True)
+    if not candidate.is_file():
+        raise OSError(f"Command executable is not a file: {candidate}")
+    return candidate
+
+
 def _digest_stream(stream: IO[bytes]) -> tuple[str, int]:
     digest = hashlib.sha256()
     byte_count = 0
@@ -331,10 +375,7 @@ def _terminate_process_tree(process: subprocess.Popen[bytes]) -> bool:
     """Terminate descendants in the command's isolated process group, if any remain."""
 
     if os.name != "posix":
-        if process.poll() is None:
-            process.kill()
-            return True
-        return False
+        return terminate_windows_process_tree(process)
     try:
         os.killpg(process.pid, 0)
     except ProcessLookupError:

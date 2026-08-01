@@ -17,7 +17,7 @@ Profile drift 的有序恢复使用维护专用的 `operamind-profile-rebuild-wo
 - `springboot15-thymeleaf-gradle-command-profile.example.json`：通过项目 Gradle Wrapper 固定执行 compile、test 和 build；`JAVA_HOME` 必须指向该旧工程兼容的 JDK。
 设计书、代码与测试计划由同一个 VS Code GitHub Copilot Change Task 处理。Copilot 通过 OperaMind MCP 读取 Canonical RAG 候选与限定范围，并直接登记设计差分、TestPlan、TestDataPlan、命令结果和代码差分；不再生成或搬运 `ai-response.json`。Embedding 仍独立使用本地 LM Studio 的 Nomic 模型。
 
-注册项目开始变更时，OperaMind 会检查 `gradlew`、Wrapper 配置、`build.gradle` 中的 Spring Boot 1.5 与 Thymeleaf 依赖，以及 `src/main/resources/templates/**/*.html`。证据完整且对应 Binding 尚未设置时，系统自动登记并激活上述两个 Profile；已有项目 Profile 不会被覆盖。相同技术栈信息和固定 Gradle 命令会写入内部 Copilot Change Task，但不会作为额外步骤显示在 Web。
+注册项目开始变更时，OperaMind 会检查 `gradlew` 或 Windows 的 `gradlew.bat`、Wrapper 配置、`build.gradle` 中的 Spring Boot 1.5 与 Thymeleaf 依赖，以及 `src/main/resources/templates/**/*.html`。证据完整且对应 Binding 尚未设置时，系统自动登记并激活上述两个 Profile；已有项目 Profile 不会被覆盖。相同技术栈信息和固定 Gradle 命令会写入内部 Copilot Change Task，但不会作为额外步骤显示在 Web。
 
 项目可以组合多个 Document Convention 和 Code Framework Profile。项目领域名称不能写入通用引擎。
 

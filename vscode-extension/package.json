@@ -2,12 +2,16 @@
   "name": "operamind-copilot-bridge",
   "displayName": "OperaMind Copilot Bridge",
   "description": "Deliver bounded OperaMind change tasks to VS Code GitHub Copilot.",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "publisher": "operamind-local",
   "private": true,
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sainm/OperaMind-vNext.git"
+  },
   "engines": {
-    "vscode": "^1.96.0"
+    "vscode": "^1.105.0"
   },
   "categories": ["Other"],
   "extensionKind": ["ui"],
@@ -21,12 +25,18 @@
   "main": "./extension.js",
   "scripts": {
     "test": "node --test test/*.test.js",
-    "package:vsix": "npm test && node --check extension.js && node --check bridgeClient.js && node --check diagnostics.js && node -e \"require('node:fs').mkdirSync('dist',{recursive:true})\" && vsce package --allow-missing-repository --out dist/operamind-copilot-bridge.vsix"
+    "package:vsix": "npm test && node --check extension.js && node --check bridgeClient.js && node --check dashboardModel.js && node --check diagnostics.js && node --check runtimeManifest.js && node -e \"require('node:fs').mkdirSync('dist',{recursive:true})\" && vsce package --allow-missing-repository --out dist/operamind-copilot-bridge.vsix"
   },
   "devDependencies": {
     "@vscode/vsce": "3.9.2"
   },
   "contributes": {
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "operamind.local",
+        "label": "OperaMind Local"
+      }
+    ],
     "commands": [
       {
         "command": "operamind.checkForTasks",
@@ -34,7 +44,7 @@
       },
       {
         "command": "operamind.configureBridgeToken",
-        "title": "OperaMind: Bridge Token を安全に登録"
+        "title": "OperaMind: Bridge Token を復旧設定"
       },
       {
         "command": "operamind.resumeCurrentTask",
@@ -47,8 +57,54 @@
       {
         "command": "operamind.diagnoseLocalEnvironment",
         "title": "OperaMind: ローカル環境を診断"
+      },
+      {
+        "command": "operamind.openCurrentTask",
+        "title": "OperaMind: 確認して Copilot を開く",
+        "icon": "$(play)"
+      },
+      {
+        "command": "operamind.refreshDashboard",
+        "title": "OperaMind: 最新状態に更新",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "operamind.openWeb",
+        "title": "OperaMind: Web を開く",
+        "icon": "$(globe)"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "operamind",
+          "title": "OperaMind",
+          "icon": "media/operamind.svg"
+        }
+      ]
+    },
+    "views": {
+      "operamind": [
+        {
+          "id": "operamind.controlPanel",
+          "name": "コントロール"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "operamind.refreshDashboard",
+          "when": "view == operamind.controlPanel",
+          "group": "navigation"
+        },
+        {
+          "command": "operamind.openWeb",
+          "when": "view == operamind.controlPanel",
+          "group": "navigation@2"
+        }
+      ]
+    },
     "configuration": {
       "title": "OperaMind Copilot Bridge",
       "properties": {

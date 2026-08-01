@@ -334,12 +334,13 @@ def test_mcp_cli_requires_database_url(
     assert captured.err == "error: OPERAMIND_DATABASE_URL is required\n"
 
 
-def test_vscode_mcp_configuration_prompts_for_database_url() -> None:
-    config: object = json.loads((ROOT / ".vscode/mcp.json").read_text(encoding="utf-8"))
+def test_vscode_extension_provides_mcp_without_workspace_configuration() -> None:
+    manifest: object = json.loads(
+        (ROOT / "vscode-extension/package.json").read_text(encoding="utf-8")
+    )
 
-    assert isinstance(config, dict)
-    server = config["servers"]["operaMind"]
-    assert server["type"] == "stdio"
-    assert server["command"] == "${workspaceFolder}/.venv/bin/operamind-mcp"
-    assert server["env"]["OPERAMIND_DATABASE_URL"] == "${input:operamind-database-url}"
-    assert config["inputs"][0]["password"] is True
+    assert not (ROOT / ".vscode/mcp.json").exists()
+    assert isinstance(manifest, dict)
+    assert manifest["contributes"]["mcpServerDefinitionProviders"] == [
+        {"id": "operamind.local", "label": "OperaMind Local"}
+    ]

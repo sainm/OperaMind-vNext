@@ -117,5 +117,7 @@ Web API と画面は、次の六つだけを公開する。
 - [ ] Microsoft Edge / Playwright live E2E Evidence（検証端末に Edge が未導入）
 - [ ] VS Code GitHub Copilot による一件の実変更閉ループを完走し、六工程と最終レポートを確認
 - [ ] 最終ソース Commit と対象 Deployment に結び付いた zero-failure／zero-skip の `full_local_regression` Evidence を再生成
+- [ ] `local_files` Workspace のファイル Digest 基線、前後 Snapshot Diff、Code Scope と結果 Revision を実装し、下流工程の Git 必須条件を除去
+- [ ] Windows native で Web、MCP、Command 実行、Process tree 停止を統合確認し、POSIX 固有の実行 Path と Signal 前提を解消
 
 未完了項目が残る間、この文書を「再構成完了」の証拠として扱わない。

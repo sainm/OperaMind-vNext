@@ -27,6 +27,7 @@ from operamind.application.main_flow_execution import (
 )
 from operamind.application.orchestration_task import OrchestrationSchedulingPolicy
 from operamind.infrastructure.postgres.errors import PersistenceConflictError
+from operamind.local_installation import PRODUCT_ID, application_version
 from operamind.web.routers import (
     bridge,
     change_requests,
@@ -143,7 +144,11 @@ def create_app(
 
     @app.get("/health", include_in_schema=False)
     def health() -> dict[str, str]:
-        return {"status": "ok"}
+        return {
+            "status": "ok",
+            "product": PRODUCT_ID,
+            "version": application_version(),
+        }
 
     app.include_router(projects.router)
     app.include_router(change_requests.router)

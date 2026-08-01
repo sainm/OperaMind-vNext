@@ -7,6 +7,7 @@ from typing import Any
 from operamind.application.project_stack import (
     SPRINGBOOT15_THYMELEAF_GRADLE,
     ProjectProfileBootstrapper,
+    _gradle_wrapper,
     detect_project_stack,
 )
 from operamind.infrastructure.postgres import ActiveProfileBinding
@@ -153,6 +154,13 @@ def test_bootstrap_leaves_unrecognized_project_unchanged(tmp_path: Path) -> None
     assert result.active_bindings == ()
     assert repository.versions == {}
     assert repository.activation_calls == []
+
+
+def test_gradle_wrapper_detection_accepts_windows_batch_wrapper(tmp_path: Path) -> None:
+    batch = tmp_path / "gradlew.bat"
+    batch.write_text("@echo off\r\n", encoding="utf-8")
+
+    assert _gradle_wrapper(tmp_path, platform_name="nt") == batch
 
 
 def _write_supported_project(root: Path) -> None:

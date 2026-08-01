@@ -16,7 +16,7 @@ dependencies = [
   "playwright==1.61.0",
   "psycopg[binary]>=3.2,<4",
   "python-docx>=1.1,<2",
-  "tree-sitter>=0.25,<0.27",
+  "tree-sitter>=0.25,<0.26",
   "tree-sitter-java>=0.23.5,<0.24",
   "tree-sitter-javascript>=0.25,<0.26",
   "tree-sitter-kotlin>=1.1,<2",
@@ -35,6 +35,9 @@ dev = [
   "types-jsonschema>=4.23,<5",
   "types-openpyxl>=3.1,<4",
 ]
+packaging = [
+  "pyinstaller==6.21.0",
+]
 
 [project.scripts]
 operamind-baseline = "operamind.commands.baseline:main"
@@ -51,6 +54,8 @@ operamind-evaluate-rag = "operamind.commands.evaluate_rag:main"
 operamind-run-golden-rag = "operamind.commands.run_golden_rag:main"
 operamind-finalize-rag = "operamind.commands.finalize_rag:main"
 operamind-ingest = "operamind.commands.ingest:main"
+operamind-local = "operamind.commands.local:main"
+operamind-launcher = "operamind.commands.launcher:main"
 operamind-migrate = "operamind.commands.migrate:main"
 operamind-mcp = "operamind.commands.mcp_server:main"
 operamind-profile = "operamind.commands.profile:main"

@@ -8,8 +8,9 @@
 
 ```text
 コードと設計書を受領
-→ 原本と Git 基線を固定
-→ Project／Repository／Profile を登録
+→ Web で Project、コード Workspace、設計書 Root を初期化
+→ 原本のローカル基線を固定（Git は任意）
+→ Profile を登録
 → 設計書を Canonical 化して RAG Index を構築
 → 対象工程の起動・テスト方法を固定
 → Web で変更要件を登録
@@ -42,7 +43,7 @@
 - 単画面または複数画面にまたがる業務データと UI テスト
 - 任意の対応ブラウザーおよび対象 Deployment
 
-工程固有の違いは、Project、Repository、DocumentConventionProfile、CodeFrameworkProfile、CommandExecutionProfile、TestData/UI Binding によって注入する。共通手順の中に特定工程のパス、コマンド、Locator、認証情報を固定しない。
+工程固有の違いは、Project Workspace、Document Root、DocumentConventionProfile、CodeFrameworkProfile、CommandExecutionProfile、TestData/UI Binding によって注入する。共通手順の中に特定工程のパス、コマンド、Locator、認証情報を固定しない。
 
 ## 3. 使用する置換値
 
@@ -51,9 +52,9 @@
 | 置換値 | 内容 |
 |---|---|
 | `<OPERAMIND_ROOT>` | OperaMind vNext のルート |
-| `<SOURCE_REPOSITORY_URL>` | 新しく受領したコードの Git Repository |
-| `<TARGET_WORKSPACE>` | 対象コードの隔離 linked worktree |
-| `<DESIGN_ROOTS>` | 新しく受領した原本設計書の設定可能な Root 群 |
+| `<OPERAMIND_PACKAGE>` | 配布版を展開またはインストールした Directory |
+| `<CODE_WORKSPACE>` | 対象コードを保存した設定可能なローカル Directory |
+| `<DOCUMENT_ROOTS>` | 原本設計書を保存した一つ以上のローカル Directory |
 | `<PROJECT_ID>` | OperaMind に登録済みの対象 Project |
 | `<DATABASE_URL>` | OperaMind 用 PostgreSQL 接続 URL |
 | `<TARGET_BASE_URL>` | 資格情報を含まない対象システム Origin |
@@ -65,13 +66,16 @@
 ## 4. 手動テストの原則
 
 - Web、VS Code GitHub Copilot、対象システムの三つを利用者向け入口とする。
+- 配布版では OperaMind Desktop だけを起動し、`migrate`、`web`、`mcp` を個別に実行しない。
 - 設計書、Diff、Scope、TestPlan、TestDataPlan を手動で別ファイルへ移動しない。
 - Copilot は OperaMind MCP が返した現在 Stage と Scope だけを扱う。
 - `code_scope` が受理される前に Copilot はコードを変更しない。
 - 決定的で Scope 内の遷移は OperaMind が自動承認する。
 - 利用者確認は、Change Task の受領、意味判断を伴う変更、Scope 拡大、自然言語テストケース修正の最終適用に限定する。
 - 受領したコードと設計書は、導入基線が完成するまで変更しない。
-- 設計書はコード Repository 内に固定せず、Project ごとに設定した `<DESIGN_ROOTS>` から取り込めるものとする。
+- コードと設計書はローカルファイルだけでもよく、Git Repository を必須にしない。
+- 設計書はコード Workspace 内に固定せず、Project ごとに設定した `<DOCUMENT_ROOTS>` から取り込めるものとする。
+- Git が存在する場合は補助的な Revision 情報として利用し、存在しない場合はファイル Digest によるローカル Snapshot を基線とする。
 - Web の表示や更新操作をバックエンド処理の継続条件にしない。
 - 失敗時に DB 更新、手動 commit、内部 Artifact 編集で先へ進めない。Web の停止理由と実際の Evidence を記録する。
 
@@ -79,79 +83,51 @@
 
 この工程は、新しい対象 Project を初めて OperaMind に登録するときに実施する。既に導入基線が確定している Project の通常変更では、登録済み基線の確認だけを行う。
 
-### 5.1 受領物を分離して保存する
+### 5.1 コードと設計書をローカルに配置する
 
-コードは `<SOURCE_REPOSITORY_URL>` から clone し、受領時点の Revision を変更せずに保存する。
+コードを `<CODE_WORKSPACE>`、設計書を一つ以上の `<DOCUMENT_ROOTS>` に保存する。両者は Git 管理外の通常 Folder でよく、同じ Directory 配下に置く必要もない。OperaMind は原本を別の場所へ移動しない。
 
-```bash
-git clone <SOURCE_REPOSITORY_URL> <TARGET_WORKSPACE>
-cd <TARGET_WORKSPACE>
-git status --short
-git branch --show-current
-git rev-parse HEAD
-git remote get-url origin
-```
-
-設計書は設定可能な `<DESIGN_ROOTS>` に保存する。コード Repository と同じ Directory である必要はない。
-
-例:
+Windows 例:
 
 ```text
-<TARGET_WORKSPACE>      # コードの Git worktree
-<DESIGN_ROOTS>/screen  # 画面設計書
-<DESIGN_ROOTS>/program # プログラム設計書
-<DESIGN_ROOTS>/api     # API 設計書
-<DESIGN_ROOTS>/db      # DB 設計書
+C:\work\expense-system       # コード Workspace
+C:\design\expense-system     # 画面・プログラム設計書
+D:\shared\expense-api        # 共有 API 設計書
 ```
 
-受領時点では次を禁止する。
+macOS／Linux 例:
 
-- Copilot による変更
-- ファイル名の一括変更
-- Excel／Word の保存し直し
-- 文字コードや改行の自動変換
-- 生成物の削除を含む自動整形
-
-初期配置は導入のための一回限りの取込であり、Change Task の工程間ファイル handoff ではない。
-
-### 5.2 受領物の Inventory を記録する
-
-最低限、次を記録する。
-
-- Repository URL
-- Branch
-- commit SHA
-- code root
-- design root
-- 設計書の論理名、種類、相対 Path
-- 各原本の SHA-256
-- 受領日時と受領元
-
-Git 管理下のコードについて確認する。
-
-```bash
-git status --short
-git ls-files
-git rev-parse HEAD
+```text
+/Users/me/work/expense-system
+/Users/me/design/expense-system
+/Volumes/shared/expense-api
 ```
 
-設計書については、対象 OS で利用できる SHA-256 Tool を使い、原本の Digest を記録する。秘密情報、DB Password、API Key、Bridge Token は Inventory に含めない。
+受領時点では Copilot による変更、ファイル名の一括変更、Office 文書の保存し直し、文字コード変換、自動整形を行わない。
 
-### 5.3 Project と Repository を登録する
+### 5.2 Web 画面から新しい Project を初期化する
 
-OperaMind に新しい `<PROJECT_ID>` を作成し、次を一意に登録する。
+1. OperaMind Web を開く。
+2. ヘッダーの「新しいプロジェクト」を押す。
+3. Project ID と Project 名を入力する。
+4. 「コード Workspace」に `<CODE_WORKSPACE>` の絶対 Path を入力する。
+5. 「設計書の場所」に `<DOCUMENT_ROOTS>` を一行につき一つ入力する。
+6. 「初期化」を押す。
 
-- Project 名
-- Repository ID
-- Repository remote
-- `<TARGET_WORKSPACE>` の絶対 Path
-- 受領時点の commit SHA
-- Repository Revision
-- 新しい Analysis Case を作成するための Project 関係
+この操作では Shell Script や SQL Import を実行しない。入力した Directory は、OperaMind を実行している OS から読み取れる実在 Directory でなければならない。Windows では Windows Path、macOS／Linux では各 OS の絶対 Path を使用する。
 
-同じ Project に複数の曖昧な Workspace または Repository 登録を残さない。
+### 5.3 初期化結果を画面で確認する
 
-登録後に、OperaMind の Repository 情報と実際の Git 情報が一致することを再確認する。
+次をすべて画面から確認する。
+
+- Project 選択欄に作成した Project が表示され、選択済みである。
+- 左側の Project Source に `<CODE_WORKSPACE>` が表示される。
+- 入力したすべての `<DOCUMENT_ROOTS>` が入力順に表示される。
+- `.git` が Workspace 直下にあれば「Git」、なければ「ローカルファイル」と表示される。
+- Git がなくても初期化が成功する。
+- 存在しない Path、File Path、重複する Document Root は拒否される。
+
+この時点では RAG 取込、コード解析、変更要件の実行を開始しない。まず Project の資料位置だけを確定し、その後の基線作成を別工程として確認する。
 
 ### 5.4 工程と文書の Profile を決める
 
@@ -169,7 +145,7 @@ CodeFrameworkProfile では、対象工程の production、test、UI、設定、
 
 ### 5.5 設計書を Canonical 化する
 
-`<DESIGN_ROOTS>` の各原本について次を実施する。
+`<DOCUMENT_ROOTS>` の各原本について次を実施する。
 
 1. 論理 Document ID を割り当てる。
 2. DocumentConventionProfile を適用する。
@@ -223,9 +199,9 @@ Index 未準備、Embedding 失敗、Project 越境、原本参照欠落があ�
 次をすべて満たした場合だけ、Web から最初の変更要件を登録する。
 
 - 受領コードの Revision が固定済み
-- worktree が clean
+- コード Workspace の初期 Snapshot が固定済み
 - 設計書原本と Digest が固定済み
-- Project／Repository／Revision が一意
+- Project／Workspace／基線 Revision が一意
 - Canonical Snapshot が committed
 - RAG Index が ready
 - Section から完全な原本へ復元可能
@@ -241,8 +217,8 @@ Index 未準備、Embedding 失敗、Project 越境、原本参照欠落があ�
 OperaMind に次の設定が一意に存在することを確認する。
 
 - Project
-- Repository と対象 Workspace
-- 対象 Git Revision
+- 対象コード Workspace
+- 対象基線 Revision（Git commit またはローカル Snapshot）
 - 設計文書 Root と Canonical Snapshot
 - RAG Search Index と Embedding
 - CodeFrameworkProfile
@@ -254,36 +230,47 @@ CodeFrameworkProfile の scan root には、今回変更または参照する可
 
 ### 6.2 VS Code Bridge の準備
 
-`<OPERAMIND_ROOT>` で VSIX を作成する。
-
-```bash
-cd <OPERAMIND_ROOT>/vscode-extension
-npm ci
-npm run package:vsix
-```
-
-VS Code の `Extensions: Install from VSIX...` から、次をインストールする。
+リリースの配布 ZIP を取得し、OS に応じて展開する。
 
 ```text
-<OPERAMIND_ROOT>/vscode-extension/dist/operamind-copilot-bridge.vsix
+macOS:
+<OPERAMIND_PACKAGE>/OperaMind.app
+<OPERAMIND_PACKAGE>/operamind-copilot-bridge.vsix
+
+Windows:
+<OPERAMIND_PACKAGE>\OperaMind.exe
+<OPERAMIND_PACKAGE>\OperaMindMcp.exe
+<OPERAMIND_PACKAGE>\operamind-copilot-bridge.vsix
 ```
 
-Bridge Token を新規生成する。
+Windows では `OperaMind.exe` と `OperaMindMcp.exe` を同じ Folder に保持する。`OperaMindMcp.exe` は VS Code が内部で使用する Companion であり、利用者は起動しない。
 
-```bash
-python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+VS Code の Extensions 画面から `Extensions: Install from VSIX...` を選び、配布 ZIP 内の `operamind-copilot-bridge.vsix` を一度だけインストールする。ソースから VSIX を作る操作は配布版の手動受入テストに含めない。
+
+OperaMind Launcher を一度起動する。Launcher が Bridge Token と `runtime.json` をユーザー領域へ生成し、VS Code Extension が Token を SecretStorage へ同期する。Token を手作業で移動せず、Git、DB、テスト記録、チャット本文へ保存しない。
+
+Windows のユーザー領域は次である。
+
+```text
+%LOCALAPPDATA%\OperaMind\config.env
+%LOCALAPPDATA%\OperaMind\runtime.json
+%LOCALAPPDATA%\OperaMind\bridge-token
 ```
 
-同じ Token を次の二箇所だけに設定する。
+`config.env` には Windows PostgreSQL の TCP URL を設定する。Unix socket 形式は使用しない。
 
-1. OperaMind Web の `OPERAMIND_BRIDGE_TOKEN`
-2. VS Code の `OperaMind: Bridge Token を安全に登録`
+```dotenv
+OPERAMIND_DATABASE_URL=postgresql://operamind:<PASSWORD>@127.0.0.1:5432/operamind_vnext
+OPERAMIND_TEST_TARGET_BASE_URL=<TARGET_BASE_URL>
+```
 
-Token を Git、DB、テスト記録、チャット本文へ保存しない。
+UTF-8、UTF-8 BOM、CRLF のいずれでも読み込めることを確認する。実際の Password と Token はテスト記録へ転記しない。
 
 ### 6.3 MCP の準備
 
-対象 Workspace から OperaMind MCP を stdio 起動できるようにする。MCP Server は `<OPERAMIND_ROOT>` の Contract と `<DATABASE_URL>` を使用する。
+VS Code Extension がユーザー領域の `runtime.json` から OperaMind MCP を stdio 登録することを確認する。対象 Workspace に `.vscode/mcp.json` は不要である。
+
+利用者は MCP 起動コマンドを実行しない。VS Code で MCP Server 一覧を開き、OperaMind が必要時に `Running` となることを確認する。Windows では `runtime.json` の MCP command が同じ配布 Folder の `OperaMindMcp.exe` を指し、`OperaMind.exe` を指していないことを確認する。Path と Version は記録してよいが、Bridge Token の内容は開かない。
 
 Copilot から見える Tool が次の五つだけであることを確認する。
 
@@ -309,7 +296,7 @@ OperaMind: ローカル環境を診断
 - Loopback Bridge
 - Bridge Token
 - Workspace Trust
-- linked worktree
+- 登録済み Workspace
 - MCP Tool
 - GitHub Copilot Chat
 
@@ -317,7 +304,7 @@ OperaMind: ローカル環境を診断
 
 ### 7.1 対象 Workspace
 
-`<TARGET_WORKSPACE>` で実行する。
+`<CODE_WORKSPACE>` を VS Code で開く。Git 管理されている場合だけ、次も確認する。
 
 ```bash
 git status --short
@@ -328,10 +315,9 @@ git remote get-url origin
 
 開始条件は次のとおり。
 
-- worktree が clean
-- 現在 Branch が今回の隔離 Branch
-- HEAD と Repository Revision が一致
-- remote と Repository 登録が一致
+- Git 管理の場合は worktree が clean で、HEAD が登録済み基線と一致する
+- Git 管理外の場合は現在のファイル Digest が登録済みローカル Snapshot と一致する
+- Workspace Path が Project 設定と一致する
 - 前回の Change Task が active ではない
 
 ### 7.2 対象システム
@@ -342,17 +328,53 @@ git remote get-url origin
 
 ### 7.3 OperaMind Web
 
-```bash
-cd <OPERAMIND_ROOT>
-export OPERAMIND_DATABASE_URL='<DATABASE_URL>'
-export OPERAMIND_BRIDGE_TOKEN='<Bridge Token>'
-export OPERAMIND_TEST_TARGET_BASE_URL='<TARGET_BASE_URL>'
+配布版の主手順は次のとおり。
 
-.venv/bin/operamind-migrate
-.venv/bin/operamind-web --root <OPERAMIND_ROOT> --host 127.0.0.1 --port 8765
+macOS:
+
+1. Finder から `OperaMind.app` を起動する。
+2. 既定 Browser に `http://127.0.0.1:8765/` が表示されるまで待つ。
+
+Windows:
+
+1. Explorer から `<OPERAMIND_PACKAGE>\OperaMind.exe` をダブルクリックする。
+2. PowerShell、Command Prompt、`migrate`、`web`、`mcp` を起動しない。
+3. 既定 Browser に `http://127.0.0.1:8765/` が表示されるまで待つ。
+4. 起動中に不要な Console Window が残らないことを確認する。
+
+共通の期待結果:
+
+- Launcher が設定読込、Bridge Token 準備、DB Migration、Web 起動、Browser 表示を一回の操作で完了する。
+- 単機利用の Web はユーザー名とパスワードを要求しない。
+- 再度 Desktop を起動した場合は、既存の OperaMind Web を検出して Browser だけを開き、二重起動しない。
+- `http://127.0.0.1:8765/health` が OperaMind の Product 情報を返す。
+
+ソースコードから起動する開発者確認だけは、次を使用してよい。この操作を配布版の合格証跡として代用しない。
+
+macOS／Linux:
+
+```bash
+.venv/bin/operamind-launcher --root <OPERAMIND_ROOT>
 ```
 
-ブラウザーで `http://127.0.0.1:8765/` を開く。単機利用の Web にはユーザー名とパスワードを要求しない。
+Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\operamind-launcher.exe --root <OPERAMIND_ROOT>
+```
+
+### 7.4 Windows 固有の事前確認
+
+Windows 配布版では次を追加確認する。
+
+- OS が 64 bit Windows である。
+- `OperaMind.exe` と `OperaMindMcp.exe` が同じ Folder にある。
+- `%LOCALAPPDATA%\OperaMind\config.env` の PostgreSQL URL が TCP 接続形式である。
+- `%LOCALAPPDATA%\OperaMind\runtime.json` が Desktop 起動後に生成される。
+- VS Code Extension が Windows の絶対 Path を保持したまま MCP を起動できる。
+- 対象 Workspace と設計書 Root に空白、日本語、Drive Letter を含む場合でも初期化できる。
+- 対象工程が UI Test を必要とする場合、Microsoft Edge がインストール済みである。
+- Gradle 工程では `gradlew.bat` が選択され、POSIX shell を要求しない。
 
 ## 8. 正常系の具体的操作
 
@@ -430,13 +452,13 @@ Web の `コード影響範囲` で次を確認する。
 - 影響解析状態
 - Scope 外候補がないこと
 
-この時点でもう一度 `git status --short` を実行する。設計書以外のコード変更があれば、Copilot が Stage を飛ばしたため失敗とする。
+この時点でもう一度 Workspace 差分を画面で確認する。Git 管理の場合は `git status --short` も使用できる。設計書以外のコード変更があれば、Copilot が Stage を飛ばしたため失敗とする。
 
 ### Step 5: コードとテストの変更を確認する
 
 Scope が受理された後、Copilot が現在 Task を再取得し、許可された production files と test files だけを変更することを確認する。
 
-変更後に次を実行する。
+変更後に OperaMind の基線差分を確認する。Git 管理の場合は次のコマンドも使用できる。
 
 ```bash
 git status --short
@@ -507,17 +529,17 @@ Copilot が `copilot_run_task_command` で CommandExecutionProfile に登録さ�
 - すべての終了状態が成功
 - working diff が Scope 内
 - TestPlan と TestDataPlan が記録済み
-- Copilot が結果を commit
+- Copilot が結果を確定（Git commit またはローカル結果 Snapshot）
 - `copilot_record_task_result` が成功
 
-実行後に確認する。
+実行後、Git 管理の場合は次を確認する。
 
 ```bash
 git log -1 --oneline
 git status --short
 ```
 
-最新 commit が今回の結果で、worktree が clean であることを確認する。
+Git 管理の場合は最新 commit が今回の結果で worktree が clean であることを確認する。Git 管理外の場合は今回の結果 Snapshot が固定され、変更後 Digest と一致することを確認する。
 
 ### Step 9: TestData と UI 自動実行を確認する
 
@@ -542,6 +564,8 @@ UI Impact がある場合の合格条件:
 - サニタイズ済み Screenshot が一件以上
 - Cleanup が成功
 
+Windows では、UI 実行時に Microsoft Edge が自動で使用され、利用者が Browser Driver や WSL を手動起動しないことも確認する。Edge が存在しない、対象 Origin に接続できない、または UI Binding がない場合は、代替 Browser へ黙って切り替えず blocked にする。
+
 UI Impact がない場合は `not_impacted` または `not_required` として閉じる。
 
 ### Step 10: 最終レポートを確認する
@@ -562,7 +586,7 @@ Web の `最終レポート` で次を確認する。
 
 ## 9. 再開操作
 
-VS Code または Copilot Chat を閉じた場合は、同じ `<TARGET_WORKSPACE>` を再度開き、次を実行する。
+VS Code または Copilot Chat を閉じた場合は、同じ `<CODE_WORKSPACE>` を再度開き、次を実行する。
 
 ```text
 OperaMind: 現在のタスクを再開
@@ -579,20 +603,25 @@ OperaMind: 現在のタスクを再開
 | 早期コード変更 | `code_scope` 受理前にコードを変更 | Scope 工程を合格にしない |
 | Code Scope 越境 | 許可されていない Path／Symbol／Test を提示 | Graph 検証で停止 |
 | Diff 越境 | Scope 外ファイルを変更 | `reanalysis_required` |
-| Revision drift | 実行中に HEAD を変更 | 現在 Grant を再利用せず停止 |
+| Revision drift | 実行中に Git HEAD またはローカル基線対象ファイルを変更 | 現在 Grant を再利用せず停止 |
 | Command 失敗 | 必須 compile／test command を失敗させる | committed Result と Closure を合格にしない |
 | Target URL 未設定 | `OPERAMIND_TEST_TARGET_BASE_URL` を設定しない | 外部 HTTP／UI を fail closed |
 | UI Assertion 失敗 | 期待値を意図的に不一致にする | UI／Closure が失敗し、Cleanup は実行 |
 | Cleanup 失敗 | Cleanup Binding を失敗させる | Closure を合格にしない |
 | Test Case 修正の曖昧性 | 対象 Case を特定できない指示を入力 | 選択肢を表示するか全体を blocked にし、部分適用しない |
 | 過去 Case 再利用 | 同じ ID と古い Impact/Evidence を再利用 | 新しい結果へ流用せず拒否 |
+| Windows 設定なし | `%LOCALAPPDATA%\OperaMind\config.env` を退避して `OperaMind.exe` を起動 | 設定 Path を示して停止し、空 DB や推測 URL で起動しない |
+| Windows MCP Companion 欠落 | `OperaMindMcp.exe` を配布 Folder から退避して Desktop を起動 | MCP runtime の生成または診断で明示的に失敗し、`OperaMind.exe` を stdio Server として代用しない |
+| Windows DB 接続失敗 | PostgreSQL を停止して `OperaMind.exe` を起動 | 日本語の起動エラーを表示し、Web を半端な状態で公開しない |
+| Windows 二重起動 | Web 起動中に `OperaMind.exe` をもう一度起動 | 同じ Web を再利用し、別 Process が Port を奪わない |
+| Edge 不在 | UI Impact のある Case を Edge 未導入環境で実行 | UI 検証を blocked にし、Screenshot や Closure を成功扱いにしない |
 
 ## 11. 現在重点的に確認する停止条件
 
-次の状態が発生した場合、手動 workaround で先へ進めず、再現条件、Web 停止理由、Git 状態を記録する。
+次の状態が発生した場合、手動 workaround で先へ進めず、再現条件、Web 停止理由、Workspace 基線状態を記録する。
 
 - Canonical 文書が Hash URN のみで、実ファイル参照へ復元できない
-- 設計書変更後の dirty 状態と、Code Graph の clean Revision 要求が衝突する
+- 設計書変更後の差分状態と、Code Graph の固定基線要求が衝突する
 - 新しい Change Task が過去 Analysis Case／ImpactReport と衝突する
 - Copilot が `code_scope` 受理前に production code を変更する
 - TestDataPlan の UI Step に Binding、Origin、唯一 Locator がない
@@ -603,11 +632,15 @@ OperaMind: 現在のタスクを再開
 |---|---|
 | 実行日時 | |
 | 実行者 | |
+| OS／Architecture | Windows x64 / macOS arm64 / その他 |
+| OperaMind 配布 Version | |
+| VSIX Version | |
+| 起動入口 | Desktop / source developer mode |
 | Project ID | |
 | Change ID | |
 | 受領元／受領日時 | |
 | Design Root／原本 Digest | |
-| 対象 Repository／Branch | |
+| 対象 Workspace／基線 Revision | |
 | 開始 Revision | |
 | 結果 Revision | |
 | 対象 Deployment | |
@@ -645,5 +678,7 @@ OperaMind: 現在のタスクを再開
 - Changed-line coverage が最低基準以上
 - 同一 Project／Case／Revision に Evidence が結合
 - ChangeClosureResult が `passed`
+- 配布版では利用者が `migrate`、`web`、`mcp` を個別起動していない
+- Windows では Desktop、MCP Companion、VSIX が同一リリースで、Windows Runner の package smoke test が成功している
 
 一つでも欠落する場合は合格にしない。

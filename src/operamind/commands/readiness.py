@@ -21,6 +21,7 @@ from operamind.infrastructure.postgres import (
     MigrationRunner,
     ReadinessEvidenceRepository,
 )
+from operamind.platform_runtime import venv_command
 from operamind.readiness import (
     FULL_LOCAL_REGRESSION_COMMAND,
     FULL_LOCAL_REGRESSION_EXCLUDED_TESTS,
@@ -30,7 +31,7 @@ from operamind.readiness import (
 from operamind.readiness_copilot import inspect_vscode_copilot_session
 
 PROVIDER_LIVE_TEST_COMMAND = (
-    ".venv/bin/python",
+    venv_command("python"),
     "-m",
     "pytest",
     "-q",

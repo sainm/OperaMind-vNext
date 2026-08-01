@@ -65,7 +65,7 @@ function formatDiagnosticReport(result) {
   lines.push(
     "",
     "安全方針: Token、DB URL、Workspace path、ソースコードは収集・表示しません。",
-    "Workspace Trust、認証情報、Migration は自動変更しません。",
+    "Workspace Trust と対象システムの認証情報は自動変更しません。",
   );
   return lines.join("\n");
 }
@@ -97,7 +97,7 @@ function formatLocalDiagnostic(report, errorMessage) {
   }
   if (!report.bridge_token_configured) {
     repair.push(
-      "「OperaMind: Bridge Token を安全に登録」で Web と同じ Token を SecretStorage に登録してください。",
+      "OperaMind Launcher を起動し、Bridge Token の自動同期を再確認してください。",
     );
   }
   if (!report.workspace_trusted) {
@@ -107,7 +107,7 @@ function formatLocalDiagnostic(report, errorMessage) {
     repair.push("git worktree add で隔離 Workspace を作成し、そのフォルダーを開いてください。");
   }
   if (missing.length) {
-    repair.push("operaMind MCP の PostgreSQL 入力、起動ログ、Migration を確認してください。");
+    repair.push("OperaMind Launcher と MCP の起動ログを確認してください。");
   }
   if (!copilotReady) {
     repair.push("Copilot Chat のインストール、サインイン、組織 Policy を確認してください。");

@@ -20,6 +20,11 @@ from operamind.application.orchestration_worker import (
     OrchestrationTaskExecutionError,
     OrchestrationTaskExecutionResult,
 )
+from operamind.platform_runtime import (
+    approved_process_environment,
+    subprocess_creation_flags,
+    terminate_windows_process_tree,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,17 +69,8 @@ class FixedCommandOrchestrationTaskHandler:
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        environment = {
-            key: environment_value
-            for key in ("HOME", "LANG", "LC_ALL", "PATH", "TMPDIR")
-            if (environment_value := os.environ.get(key)) is not None
-        }
-        environment.update(
-            {
-                key: os.environ[key]
-                for key in self._configuration.environment_keys
-                if key in os.environ
-            }
+        environment = approved_process_environment(
+            ("HOME", "LANG", "LC_ALL", "PATH", "TMPDIR", *self._configuration.environment_keys)
         )
         try:
             process = subprocess.Popen(
@@ -84,7 +80,8 @@ class FixedCommandOrchestrationTaskHandler:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                start_new_session=True,
+                start_new_session=os.name == "posix",
+                creationflags=subprocess_creation_flags(),
             )
         except OSError as error:
             raise OrchestrationTaskExecutionError(
@@ -317,6 +314,10 @@ def _collect_output(
 def _terminate(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
+    if os.name != "posix":
+        terminate_windows_process_tree(process)
+        process.wait()
+        return
     _signal_process(process, signal.SIGTERM)
     try:
         process.wait(timeout=2)
@@ -327,12 +328,7 @@ def _terminate(process: subprocess.Popen[bytes]) -> None:
 
 def _signal_process(process: subprocess.Popen[Any], signal_number: int) -> None:
     try:
-        if os.name == "posix":
-            os.killpg(process.pid, signal_number)
-        elif signal_number == signal.SIGTERM:
-            process.terminate()
-        else:
-            process.kill()
+        os.killpg(process.pid, signal_number)
     except ProcessLookupError:
         return
 

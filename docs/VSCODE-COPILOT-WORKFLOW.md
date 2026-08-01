@@ -19,7 +19,8 @@ VS Code 上の GitHub Copilot を、設計書変更、コード変更、TestPlan
 ## VS Code 側
 
 - コード用 linked worktree と設定済み設計書 Root を同じ VS Code Workspace で開く。
-- Bridge Token は SecretStorage に保存する。
+- Launcher が生成した Bridge Token を拡張が SecretStorage に自動同期する。
+- MCP は拡張の Server Definition Provider から登録し、対象 Workspace に `.vscode/mcp.json` を作らない。
 - 拡張は Project、Workspace、Git common-dir を確認してから Change Task を受け取る。
 - Copilot は MCP から受け取った対象範囲だけを読み書きする。
 - 範囲外ファイル、新しい破壊的コマンド、異なる Revision が必要になった場合は停止理由を返す。

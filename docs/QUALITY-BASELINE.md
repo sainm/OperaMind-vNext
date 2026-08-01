@@ -28,6 +28,19 @@ export OPERAMIND_TEST_DATABASE_URL='postgresql://.../operamind_test'
 .venv/bin/python scripts/check_critical_coverage.py
 ```
 
+Windows PowerShell:
+
+```powershell
+$env:OPERAMIND_TEST_DATABASE_URL = "postgresql://.../operamind_test"
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m mypy
+.\.venv\Scripts\python.exe -m pytest -q `
+  --ignore=tests/integration/test_live_embedding_provider.py `
+  --ignore=tests/integration/test_golden_screen_change.py `
+  --cov=operamind --cov-report=term-missing --cov-fail-under=80
+.\.venv\Scripts\python.exe scripts\check_critical_coverage.py
+```
+
 `tests/conftest.py` がセッション DB の lifecycle を所有し、テスト専用の `tests/support/postgres.py` が安全な DB 名、`template0`、migration、`DROP DATABASE ... WITH (FORCE)` を実装します。既存 DB を直接テスト対象として再利用するモードはありません。
 
 `scripts/check_critical_coverage.py` は平均値だけを見ません。ポリシーに列挙された各ファイルを個別に検査し、レポートからファイルが消えた場合も失敗します。閾値や対象ファイルを変更すると source-tree digest も変わるため、古い full-regression Evidence は自動的に stale になります。
@@ -38,7 +51,7 @@ export OPERAMIND_TEST_DATABASE_URL='postgresql://.../operamind_test'
 
 同日の第二次精簡では、Copilot Impact と並存していた旧 deterministic Impact Report／Code Scope 管線、内部で直接ファイルを書き換える XLSX Proposal／Workspace Editor、production package 内のテスト DB helper、および TestDataPlan の前段にあった `BusinessDataTemplate` を削除しました。跨画面データは Copilot が生成する一つの TestDataPlan に変数、setup、assertion、逆順 cleanup として直接記録します。過去 source tree に結び付いた自動生成 readiness Evidence は削除し、`target_deployment_e2e` と `full_local_regression` を再採取まで明示的に pending としました。
 
-現在の Mypy strict は 156 source files、VS Code Extension は 8 tests、Golden Dataset の構造検証は合格しています。PostgreSQL が停止している現端末で実行可能な回帰は 534 passed、54 skipped で、skip は PostgreSQL 依存 50 件、local-only Golden source 2 件、live Embedding 1 件、live Browser 1 件です。PostgreSQL を含む coverage gate はこの状態では再判定せず、上記 83.59% の記録を新しい source tree の Evidence として再利用しません。
+現在の Mypy strict は 156 source files、VS Code Extension は 8 tests、Golden Dataset の構造検証は合格しています。PostgreSQL のテスト URL を設定しない回帰は 536 passed、55 skipped で、skip は PostgreSQL 依存 51 件、local-only Golden source 2 件、live Embedding 1 件、live Browser 1 件です。追加した Project 初期化と migration の PostgreSQL 統合テストは別途 2 passed を確認しました。PostgreSQL を含む coverage gate はこの状態では再判定せず、上記 83.59% の記録を新しい source tree の Evidence として再利用しません。
 
 ## readiness と Golden RAG
 

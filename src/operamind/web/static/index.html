@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>OperaMind 変更フロー</title>
-  <link rel="stylesheet" href="/app.css?v=20260728-reconstruct2">
+  <link rel="stylesheet" href="/app.css?v=20260731-change-request">
 </head>
 <body>
   <a class="skip-link" href="#main">メインコンテンツへ移動</a>
@@ -18,6 +18,7 @@
         <span>プロジェクト</span>
         <select id="projectSelect" aria-label="プロジェクト"></select>
       </label>
+      <button id="newProjectButton" class="secondary" type="button">新しいプロジェクト</button>
       <button id="newRequestButton" class="primary" type="button">新しい変更要件</button>
     </div>
   </header>
@@ -28,6 +29,14 @@
         <div><span class="eyebrow">CHANGE REQUESTS</span><h2>変更要件</h2></div>
         <button id="refreshButton" class="icon-button" type="button" aria-label="一覧を更新">↻</button>
       </div>
+      <section id="projectSummary" class="project-summary hidden" aria-label="プロジェクト設定">
+        <div class="project-summary-heading">
+          <span class="eyebrow">PROJECT SOURCE</span>
+          <span id="projectSourceKind" class="source-kind"></span>
+        </div>
+        <strong id="projectWorkspaceSummary"></strong>
+        <ul id="projectDocumentRootSummary"></ul>
+      </section>
       <div id="requestList" class="request-list" aria-live="polite">
         <p class="empty">プロジェクトを読み込んでいます。</p>
       </div>
@@ -49,8 +58,9 @@
 
       <section id="emptyState" class="empty-state">
         <div class="empty-illustration" aria-hidden="true">→</div>
-        <h2>変更要件から始めます</h2>
-        <p>要件を登録すると、RAG による設計書特定から最終レポートまで自動で進行します。</p>
+        <h2 id="emptyStateTitle">変更要件から始めます</h2>
+        <p id="emptyStateDescription">要件を登録すると、RAG による設計書特定から最終レポートまで自動で進行します。</p>
+        <button id="emptyNewProjectButton" class="primary hidden" type="button">プロジェクトを初期化</button>
         <button id="emptyNewRequestButton" class="primary" type="button">変更要件を登録</button>
       </section>
 
@@ -84,28 +94,105 @@
     </main>
   </div>
 
-  <dialog id="requestDialog" class="request-dialog" aria-labelledby="requestDialogTitle">
-    <form id="requestForm" method="dialog">
+  <dialog id="projectDialog" class="request-dialog" aria-labelledby="projectDialogTitle">
+    <form id="projectForm" method="dialog">
       <div class="dialog-heading">
-        <div><span class="eyebrow">NEW CHANGE</span><h2 id="requestDialogTitle">新しい変更要件</h2></div>
-        <button id="closeDialogButton" class="icon-button" type="button" aria-label="閉じる">×</button>
+        <div><span class="eyebrow">NEW PROJECT</span><h2 id="projectDialogTitle">新しいプロジェクト</h2></div>
+        <button id="closeProjectDialogButton" class="icon-button" type="button" aria-label="閉じる">×</button>
       </div>
-      <p>変更したい業務動作と期待結果を自然な言葉で入力してください。</p>
+      <p>コードと設計書のローカル保存場所を登録します。Git やコンテナは必要ありません。</p>
+      <div class="form-grid">
+        <label>
+          <span>プロジェクト ID</span>
+          <input id="projectId" maxlength="160" required autocomplete="off"
+            placeholder="例：expense-system">
+        </label>
+        <label>
+          <span>プロジェクト名</span>
+          <input id="projectName" maxlength="300" required autocomplete="off"
+            placeholder="例：経費精算システム">
+        </label>
+      </div>
       <label>
-        <span>変更番号</span>
-        <input id="requestId" maxlength="160" required autocomplete="off">
+        <span>コード Workspace</span>
+        <input id="projectWorkspaceRoot" maxlength="4000" required autocomplete="off"
+          placeholder="例：C:\work\expense-system または /Users/me/work/expense-system">
       </label>
       <label>
-        <span>変更要件</span>
-        <textarea id="requirementText" rows="7" maxlength="50000" required
-          placeholder="例：経費申請一覧の初期状態を「すべて」に変更し、差戻し状態でも検索できるようにする。"></textarea>
+        <span>設計書の場所</span>
+        <textarea id="projectDocumentRoots" rows="5" maxlength="20000" required
+          placeholder="一行に一つのフォルダーを入力&#10;C:\design\expense-system&#10;D:\shared\api-specs"></textarea>
       </label>
       <div class="dialog-note">
-        VS Code 上の GitHub Copilot が対象設計書の修正、コード変更、テスト計画の生成を担当します。
+        Workspace と設計書は Git 管理外の通常フォルダーでも登録できます。OperaMind は原本を移動せず、入力した場所をプロジェクト設定として保存します。
       </div>
       <div class="dialog-actions">
+        <button id="cancelProjectDialogButton" class="secondary" type="button">キャンセル</button>
+        <button class="primary" type="submit">初期化</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="requestDialog" class="request-dialog change-request-dialog"
+    aria-labelledby="requestDialogTitle" aria-describedby="requestDialogDescription">
+    <form id="requestForm" method="dialog">
+      <div class="dialog-heading request-dialog-heading">
+        <div>
+          <span class="eyebrow">START A CHANGE</span>
+          <h2 id="requestDialogTitle">変更要求を送信</h2>
+          <p id="requestDialogDescription">実現したい業務動作と期待する結果を、そのまま文章で入力してください。</p>
+        </div>
+        <button id="closeDialogButton" class="icon-button" type="button" aria-label="閉じる">×</button>
+      </div>
+
+      <section class="request-context" aria-label="送信先プロジェクト">
+        <div class="request-context-heading">
+          <span>送信先</span>
+          <strong id="requestProjectName">プロジェクトを確認しています</strong>
+        </div>
+        <div class="request-context-grid">
+          <div><span>コード Workspace</span><strong id="requestWorkspaceSummary">—</strong></div>
+          <div><span>設計書</span><strong id="requestDocumentSummary">—</strong></div>
+        </div>
+      </section>
+
+      <label class="request-id-field">
+        <span class="field-heading"><span>変更番号</span><small>自動生成・必要な場合のみ変更</small></span>
+        <input id="requestId" maxlength="160" required autocomplete="off">
+      </label>
+
+      <label class="requirement-field">
+        <span class="field-heading"><span>変更内容 <b class="required-mark">必須</b></span></span>
+        <textarea id="requirementText" rows="7" maxlength="50000" required
+          aria-describedby="requirementGuide requirementCount"
+          placeholder="例：経費申請一覧の初期状態を「すべて」に変更し、差戻し状態でも検索できるようにする。検索後は対象件数と選択した状態が確認できること。"></textarea>
+        <span class="requirement-meta">
+          <small id="requirementGuide">対象、変更したい動作、期待結果を含めると分析が正確になります。</small>
+          <output id="requirementCount" for="requirementText">0 / 50,000</output>
+        </span>
+      </label>
+
+      <div class="request-writing-guide" aria-label="記入のポイント">
+        <div><span>1</span><strong>対象</strong><small>どの画面・機能か</small></div>
+        <div><span>2</span><strong>変更</strong><small>何をどう変えるか</small></div>
+        <div><span>3</span><strong>期待結果</strong><small>何を確認できるか</small></div>
+      </div>
+
+      <div class="request-flow-preview" aria-label="送信後の流れ">
+        <strong>送信後は OperaMind が続けます</strong>
+        <ol>
+          <li><span>RAG</span>関連する設計書を特定</li>
+          <li><span>Copilot</span>設計書とコードを変更</li>
+          <li><span>Test</span>データ生成、UI 検証、レポート</li>
+        </ol>
+      </div>
+
+      <p id="requestFormStatus" class="request-form-status hidden" role="status" aria-live="polite"></p>
+      <div class="dialog-actions">
         <button id="cancelDialogButton" class="secondary" type="button">キャンセル</button>
-        <button class="primary" type="submit">登録して開始</button>
+        <button id="submitRequestButton" class="primary request-submit" type="submit">
+          <span>変更要求を送信</span><span aria-hidden="true">→</span>
+        </button>
       </div>
     </form>
   </dialog>
@@ -137,6 +224,6 @@
   </dialog>
 
   <script src="/change-flow-view.js?v=20260728-reconstruct3"></script>
-  <script src="/app.js?v=20260729-test-case-revision"></script>
+  <script src="/app.js?v=20260731-change-request"></script>
 </body>
 </html>

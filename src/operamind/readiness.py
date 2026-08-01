@@ -11,6 +11,7 @@ from typing import Any
 from jsonschema import Draft202012Validator, FormatChecker
 
 from operamind.golden import GOLDEN_DATASET_DIGEST_ALGORITHM, GoldenDatasetValidator
+from operamind.platform_runtime import venv_command
 from operamind.validation import ValidationIssue, ValidationReport
 
 REQUIRED_MVP_GATE_IDS = frozenset(
@@ -45,7 +46,7 @@ FULL_LOCAL_REGRESSION_EXCLUDED_TESTS = (
     "tests/integration/test_golden_screen_change.py",
 )
 FULL_LOCAL_REGRESSION_COMMAND = (
-    ".venv/bin/pytest",
+    venv_command("pytest"),
     "-q",
     *(f"--ignore={path}" for path in FULL_LOCAL_REGRESSION_EXCLUDED_TESTS),
 )

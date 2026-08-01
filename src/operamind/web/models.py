@@ -11,6 +11,24 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
+class ProjectCreate(StrictModel):
+    """Local paths required to initialize one project from the Web screen."""
+
+    project_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    name: str = Field(min_length=1, max_length=300)
+    workspace_root: str = Field(min_length=1, max_length=4000)
+    document_roots: list[str] = Field(min_length=1, max_length=20)
+
+    @field_validator("document_roots")
+    @classmethod
+    def validate_document_roots(cls, value: list[str]) -> list[str]:
+        if any(not root.strip() or len(root) > 4000 for root in value):
+            raise ValueError("document_roots must contain non-blank paths up to 4000 characters")
+        if len(value) != len(set(value)):
+            raise ValueError("document_roots must be unique")
+        return value
+
+
 class LocalEnvironmentExtensionDiagnostic(StrictModel):
     """Secret-free VS Code observation accepted only by the loopback Bridge."""
 

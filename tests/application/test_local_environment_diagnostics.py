@@ -22,7 +22,7 @@ def report(
         consumer_id="vscode-test",
         observed_at=observed_at,
         workspace_fingerprint="a" * 64,
-        vsix_version="0.3.1",
+        vsix_version="0.4.0",
         bridge_url_loopback=True,
         bridge_token_configured=True,
         workspace_trusted=True,

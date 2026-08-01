@@ -92,6 +92,15 @@ class ChangeRequestInput:
     submitted_by: str
 
 
+@dataclass(frozen=True, slots=True)
+class ProjectInitializationInput:
+    project_id: str
+    name: str
+    workspace_root: Path
+    document_roots: tuple[Path, ...]
+    configured_by: str
+
+
 class WebControlPlaneService:
     """Coordinate Web commands without weakening existing transaction boundaries."""
 
@@ -227,10 +236,67 @@ class WebControlPlaneService:
             response["case_blocker"] = case_blocker
         return response
 
+    def initialize_project(self, value: ProjectInitializationInput) -> dict[str, object]:
+        """Register local code and document roots without requiring version control."""
+
+        workspace_root = _resolved_local_directory(
+            value.workspace_root,
+            field_name="コード Workspace",
+        )
+        document_roots = tuple(
+            _resolved_local_directory(root, field_name="設計書の場所")
+            for root in value.document_roots
+        )
+        if len(document_roots) != len(set(document_roots)):
+            raise ValueError("設計書の場所に同じフォルダーを重複して登録できません")
+        source_control_kind = "git" if (workspace_root / ".git").exists() else "local_files"
+        record = self._repository.initialize_project(
+            project_id=value.project_id,
+            name=value.name,
+            workspace_root=str(workspace_root),
+            source_control_kind=source_control_kind,
+            document_roots=tuple(str(root) for root in document_roots),
+            configured_by=value.configured_by,
+        )
+        return {
+            "created": record.created,
+            "project": {
+                "project_id": record.project_id,
+                "name": record.name,
+                "workspace_root": record.workspace_root,
+                "document_roots": list(record.document_roots),
+                "source_control_kind": record.source_control_kind,
+            },
+        }
+
     def _ensure_change_request_case(self, value: ChangeRequestInput) -> str:
         registration = self._repository.project_repository_registration(value.project_id)
         if registration is None:
-            raise ValueError("Project has no registered Repository for automatic Analysis Case")
+            workspace = self._repository.project_workspace_registration(value.project_id)
+            if workspace is None:
+                raise ValueError("Project has no registered Workspace for automatic Analysis Case")
+            if workspace["source_control_kind"] != "git":
+                raise ValueError(
+                    "ローカルファイル Workspace はファイル Digest 基線が完成するまで"
+                    "自動 Analysis Case の対象外です"
+                )
+            workspace_root = Path(workspace["workspace_root"]).resolve(strict=True)
+            git = GitWorkspaceInspector().inspect(workspace_root)
+            repository_id = _web_id(
+                "repository", value.project_id, git.remote_url, str(workspace_root)
+            )
+            self._repository.register_repository(
+                repository_id=repository_id,
+                project_id=value.project_id,
+                remote_url=git.remote_url,
+                workspace_root=str(workspace_root),
+            )
+            registration = {
+                "project_name": workspace["project_name"],
+                "repository_id": repository_id,
+                "remote_url": git.remote_url,
+                "workspace_root": str(workspace_root),
+            }
         workspace_root = Path(registration["workspace_root"]).resolve(strict=True)
         git = GitWorkspaceInspector().inspect(workspace_root)
         if git.remote_url != registration["remote_url"]:
@@ -1426,6 +1492,20 @@ def _public_test_case_proposal(proposal: dict[str, Any]) -> dict[str, object]:
         ],
         "blocking_reasons": list(cast(list[str], proposal["blocking_reasons"])),
     }
+
+
+def _resolved_local_directory(value: Path, *, field_name: str) -> Path:
+    if not value.is_absolute():
+        raise ValueError(f"{field_name}には絶対パスを入力してください")
+    try:
+        resolved = value.resolve(strict=True)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise ValueError(
+            f"{field_name}が存在しないか、読み取ることができません: {value}"
+        ) from error
+    if not resolved.is_dir():
+        raise ValueError(f"{field_name}にはフォルダーを指定してください: {value}")
+    return resolved
 
 
 def _web_id(prefix: str, *values: str) -> str:

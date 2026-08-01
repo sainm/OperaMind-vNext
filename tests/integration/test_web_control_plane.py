@@ -9,6 +9,7 @@ import pytest
 from operamind.application.web_control_plane import (
     BusinessRuleInput,
     ChangeRequestInput,
+    ProjectInitializationInput,
     WebControlPlaneService,
 )
 from operamind.contracts import ContractCatalog
@@ -25,6 +26,61 @@ from operamind.profiles import ProfileCatalog
 ROOT = Path(__file__).parents[2]
 DATABASE_URL = os.getenv("OPERAMIND_TEST_DATABASE_URL")
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
+def test_project_initialization_accepts_local_code_and_document_directories(
+    tmp_path: Path,
+) -> None:
+    assert DATABASE_URL is not None
+    suffix = uuid4().hex
+    project_id = f"local-project-{suffix}"
+    workspace = tmp_path / "code"
+    documents = tmp_path / "design"
+    shared_documents = tmp_path / "shared-api"
+    workspace.mkdir()
+    documents.mkdir()
+    shared_documents.mkdir()
+
+    with psycopg.connect(DATABASE_URL) as connection:
+        MigrationRunner(connection, MigrationCatalog.load(ROOT / "migrations")).apply()
+        service = WebControlPlaneService(connection=connection, repository_root=ROOT)
+        value = ProjectInitializationInput(
+            project_id=project_id,
+            name="Local files project",
+            workspace_root=workspace,
+            document_roots=(documents, shared_documents),
+            configured_by="local-user",
+        )
+
+        created = service.initialize_project(value)
+        replay = service.initialize_project(value)
+        projects = service.list_projects()["projects"]
+        assert isinstance(projects, list)
+        listed = next(
+            project
+            for project in projects
+            if isinstance(project, dict) and project.get("project_id") == project_id
+        )
+
+        assert created["created"] is True
+        assert replay["created"] is False
+        assert created["project"] == {
+            "project_id": project_id,
+            "name": "Local files project",
+            "workspace_root": str(workspace.resolve()),
+            "document_roots": [
+                str(documents.resolve()),
+                str(shared_documents.resolve()),
+            ],
+            "source_control_kind": "local_files",
+        }
+        assert listed["workspace_root"] == str(workspace.resolve())
+        assert listed["document_roots"] == [
+            str(documents.resolve()),
+            str(shared_documents.resolve()),
+        ]
+        connection.rollback()
 
 
 @pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")

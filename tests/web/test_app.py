@@ -50,9 +50,25 @@ class FakeService:
                     "name": "Demo",
                     "case_count": 3,
                     "change_request_count": 4,
+                    "workspace_root": "/workspace/demo",
+                    "document_roots": ["/documents/demo"],
+                    "source_control_kind": "local_files",
                 }
             ],
             "count": 1,
+        }
+
+    def initialize_project(self, value: Any) -> dict[str, object]:
+        self.calls.append(("project-initialize", value))
+        return {
+            "created": True,
+            "project": {
+                "project_id": value.project_id,
+                "name": value.name,
+                "workspace_root": str(value.workspace_root),
+                "document_roots": [str(root) for root in value.document_roots],
+                "source_control_kind": "local_files",
+            },
         }
 
     def list_change_requests(self, *, project_id: str) -> dict[str, object]:
@@ -218,10 +234,22 @@ def test_web_lifespan_starts_and_stops_internal_coordinator(
 def test_local_web_exposes_only_project_selection_and_six_stage_flow() -> None:
     client, _ = client_with_fake()
 
-    assert client.get("/health").json() == {"status": "ok"}
+    assert client.get("/health").json() == {
+        "status": "ok",
+        "product": "operamind",
+        "version": "0.1.0.dev0",
+    }
     assert client.get("/").status_code == 200
     assert client.get("/api/v1/projects").json() == {
-        "projects": [{"project_id": "demo", "name": "Demo"}],
+        "projects": [
+            {
+                "project_id": "demo",
+                "name": "Demo",
+                "workspace_root": "/workspace/demo",
+                "document_roots": ["/documents/demo"],
+                "source_control_kind": "local_files",
+            }
+        ],
         "count": 1,
     }
     requests = client.get("/api/v1/change-requests?project_id=demo")
@@ -253,6 +281,40 @@ def test_local_web_exposes_only_project_selection_and_six_stage_flow() -> None:
         "blocking_reasons",
         "stages",
     }
+
+
+def test_project_is_initialized_from_local_paths_without_git_or_sql_steps() -> None:
+    client, fake = client_with_fake()
+
+    response = client.post(
+        "/api/v1/projects",
+        json={
+            "project_id": "local-demo",
+            "name": "ローカル資料プロジェクト",
+            "workspace_root": "/local/code",
+            "document_roots": ["/local/design", "/shared/api"],
+        },
+        headers={
+            "X-OperaMind-Actor": "local-user",
+            "Idempotency-Key": "project-init-1",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "created": True,
+        "project": {
+            "project_id": "local-demo",
+            "name": "ローカル資料プロジェクト",
+            "workspace_root": "/local/code",
+            "document_roots": ["/local/design", "/shared/api"],
+            "source_control_kind": "local_files",
+        },
+    }
+    assert [name for name, _value in fake.calls] == ["command", "project-initialize"]
+    initialized = fake.calls[1][1]
+    assert initialized.configured_by == "local-user"
+    assert initialized.workspace_root == Path("/local/code")
 
 
 def test_change_request_starts_internal_flow_without_user_authentication() -> None:
@@ -413,3 +475,28 @@ def test_single_flow_css_keeps_long_japanese_content_responsive() -> None:
     assert "minmax(0, 1fr)" in stylesheet
     assert "overflow-wrap: anywhere" in stylesheet
     assert "内部の承認、キュー、担当割当は自動処理されます" in page
+
+
+def test_change_request_dialog_guides_submission_without_changing_the_api_flow() -> None:
+    stylesheet = (ROOT / "src/operamind/web/static/app.css").read_text(encoding="utf-8")
+    page = (ROOT / "src/operamind/web/static/index.html").read_text(encoding="utf-8")
+    script = (ROOT / "src/operamind/web/static/app.js").read_text(encoding="utf-8")
+
+    assert "変更要求を送信" in page
+    assert 'id="requestProjectName"' in page
+    assert 'id="requestWorkspaceSummary"' in page
+    assert 'id="requestDocumentSummary"' in page
+    assert 'id="requirementCount"' in page
+    assert "関連する設計書を特定" in page
+    assert "データ生成、UI 検証、レポート" in page
+
+    assert 'elements.requirementText.addEventListener("input", updateRequirementCount)' in script
+    assert 'setRequestSubmitting(true)' in script
+    assert 'setRequestFormStatus(error.message, "error")' in script
+    assert 'api("/api/v1/change-requests"' in script
+
+    assert ".change-request-dialog" in stylesheet
+    assert ".request-context-grid" in stylesheet
+    assert ".request-writing-guide" in stylesheet
+    assert ".request-form-status.error" in stylesheet
+    assert "grid-template-columns: 1fr" in stylesheet

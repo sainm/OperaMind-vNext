@@ -1,10 +1,14 @@
+import os
 import time
 from pathlib import Path
 
-from operamind.application.command_execution import _execute
+import pytest
+
+from operamind.application.command_execution import _execute, _windows_gradle_batch
 from operamind.domain import SafeCommandTemplate
 
 ROOT = Path(__file__).parents[2]
+PYTHON_COMMAND = "python.exe" if os.name == "nt" else "python3"
 
 
 def _template(*argv: str, timeout: int = 5, output_limit: int = 1024) -> SafeCommandTemplate:
@@ -35,7 +39,7 @@ def test_runner_records_nonzero_exit_without_persisting_output_text() -> None:
 def test_runner_kills_timed_out_process() -> None:
     result = _execute(
         template=_template(
-            "python3",
+            PYTHON_COMMAND,
             "-c",
             "import time; time.sleep(2)",
             timeout=1,
@@ -60,7 +64,7 @@ def test_runner_records_missing_executable_as_launch_failure() -> None:
 def test_runner_marks_digest_only_output_over_the_profile_limit() -> None:
     result = _execute(
         template=_template(
-            "python3",
+            PYTHON_COMMAND,
             "-c",
             "print('x' * 2048)",
             output_limit=1024,
@@ -73,11 +77,15 @@ def test_runner_marks_digest_only_output_over_the_profile_limit() -> None:
     assert result.output_truncated
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows taskkill can bound live command trees but cannot recover an exited parent PID",
+)
 def test_runner_kills_descendants_left_after_parent_exit() -> None:
     started_at = time.monotonic()
     result = _execute(
         template=_template(
-            "python3",
+            PYTHON_COMMAND,
             "-c",
             (
                 "import subprocess, sys; "
@@ -93,3 +101,10 @@ def test_runner_kills_descendants_left_after_parent_exit() -> None:
     assert result.status == "failed"
     assert result.exit_code == 0
     assert result.stdout_bytes == len("spawned\n")
+
+
+def test_windows_gradle_batch_wrapper_is_resolved_without_shell_fallback(tmp_path: Path) -> None:
+    batch = tmp_path / "gradlew.bat"
+    batch.write_text("@echo off\r\n", encoding="utf-8")
+
+    assert _windows_gradle_batch(tmp_path, "./gradlew", platform_name="nt") == batch

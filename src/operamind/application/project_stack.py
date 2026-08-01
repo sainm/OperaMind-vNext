@@ -58,6 +58,7 @@ class ProjectStackDetection:
     status: str
     evidence: tuple[str, ...]
     missing_signals: tuple[str, ...]
+    gradle_wrapper_command: str | None = None
 
     @property
     def supported(self) -> bool:
@@ -73,6 +74,9 @@ class ProjectStackDetection:
                 "evidence": list(self.evidence),
                 "missing_signals": list(self.missing_signals),
             }
+        wrapper = self.gradle_wrapper_command or (
+            "./gradlew.bat" if os.name == "nt" else "./gradlew"
+        )
         return {
             "detection_status": "supported",
             "stack_id": self.stack_id,
@@ -85,9 +89,9 @@ class ProjectStackDetection:
                 "変更要件に含まれない Framework / Build Tool の更新を行わない",
                 "JAVA_HOME に設定された対象工程互換 JDK を使用する",
             ],
-            "compile_command": ["./gradlew", "classes", "testClasses", "--no-daemon"],
-            "test_command": ["./gradlew", "test", "--no-daemon"],
-            "build_command": ["./gradlew", "build", "--no-daemon"],
+            "compile_command": [wrapper, "classes", "testClasses", "--no-daemon"],
+            "test_command": [wrapper, "test", "--no-daemon"],
+            "build_command": [wrapper, "build", "--no-daemon"],
             "evidence": list(self.evidence),
             "missing_signals": [],
         }
@@ -135,9 +139,9 @@ def detect_project_stack(workspace_root: Path) -> ProjectStackDetection:
     evidence: list[str] = []
     missing: list[str] = []
 
-    gradle_wrapper = root / "gradlew"
+    gradle_wrapper = _gradle_wrapper(root)
     wrapper_properties = root / "gradle" / "wrapper" / "gradle-wrapper.properties"
-    if gradle_wrapper.is_file() and wrapper_properties.is_file() and build_files:
+    if gradle_wrapper is not None and wrapper_properties.is_file() and build_files:
         evidence.extend(
             [
                 _relative(root, gradle_wrapper),
@@ -169,12 +173,23 @@ def detect_project_stack(workspace_root: Path) -> ProjectStackDetection:
             evidence=unique_evidence,
             missing_signals=tuple(missing),
         )
+    if gradle_wrapper is None:
+        raise AssertionError("Supported stack requires a Gradle wrapper")
     return ProjectStackDetection(
         stack_id=SPRINGBOOT15_THYMELEAF_GRADLE,
         status="supported",
         evidence=unique_evidence,
         missing_signals=(),
+        gradle_wrapper_command=f"./{gradle_wrapper.name}",
     )
+
+
+def _gradle_wrapper(root: Path, *, platform_name: str | None = None) -> Path | None:
+    """Find the checked-in Gradle wrapper for either POSIX or Windows."""
+
+    platform = os.name if platform_name is None else platform_name
+    names = ("gradlew.bat", "gradlew") if platform == "nt" else ("gradlew", "gradlew.bat")
+    return next((root / name for name in names if (root / name).is_file()), None)
 
 
 class ProjectProfileBootstrapper:
