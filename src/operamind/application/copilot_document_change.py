@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
+import tempfile
 from dataclasses import dataclass
 from nturl2path import url2pathname as windows_url2pathname
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
+from openpyxl import load_workbook
 from psycopg import Connection
 
 from operamind.application.document_diff import (
@@ -24,6 +27,7 @@ from operamind.domain import (
     ChangeReviewStatus,
     StructuredChangeBuilder,
 )
+from operamind.domain.canonical_facts import normalize_business_value
 from operamind.domain.document_conventions import DocumentConvention
 from operamind.infrastructure.documents import DocumentSignalExtractorRegistry
 from operamind.infrastructure.postgres import (
@@ -46,6 +50,33 @@ class _PreparedDocument:
     target_document_version_id: str
     target: DocumentSnapshotBuildResult
     convention: DocumentConvention
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentFieldEdit:
+    """One Copilot-requested Canonical field update applied by OperaMind."""
+
+    document_id: str
+    stable_key: str
+    field: str
+    new_value: str
+
+    def __post_init__(self) -> None:
+        values = (self.document_id, self.stable_key, self.field, self.new_value)
+        if any(not value.strip() for value in values):
+            raise ValueError("Document field edit values must not be blank")
+        if len(self.new_value) > 20_000:
+            raise ValueError("Document field edit value exceeds 20,000 characters")
+        if self.new_value.lstrip().startswith("="):
+            raise ValueError("Document field edit must not introduce a spreadsheet formula")
+
+
+@dataclass(frozen=True, slots=True)
+class _StagedDocument:
+    source: CanonicalDocumentSlice
+    path: Path
+    replacement: Path
+    backup: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,16 +179,33 @@ class CopilotDocumentChangeService:
         target_keys = [fact.fact.stable_key for fact in target_snapshot.facts]
         if len(source_keys) != len(set(source_keys)) or len(target_keys) != len(set(target_keys)):
             raise ValueError("Selected design documents contain duplicate Canonical Stable Keys")
-        domains = {item.convention.document_type for item in prepared}
-        if len(domains) != 1:
-            raise ValueError("Selected design documents use different Canonical domains")
-        changes = self._change_builder.diff(
-            project_id=project_id,
-            source=source_snapshot,
-            target=target_snapshot,
-            domain=next(iter(domains)),
-            confidence=ChangeConfidence.HIGH,
-            review_status=ChangeReviewStatus.ACCEPTED,
+        changes = tuple(
+            change
+            for domain in sorted({item.convention.document_type for item in prepared})
+            for change in self._change_builder.diff(
+                project_id=project_id,
+                source=CanonicalSnapshot(
+                    snapshot_id=source_snapshot_id,
+                    facts=tuple(
+                        fact
+                        for item in prepared
+                        if item.convention.document_type == domain
+                        for fact in item.source.snapshot.facts
+                    ),
+                ),
+                target=CanonicalSnapshot(
+                    snapshot_id=target_snapshot_id,
+                    facts=tuple(
+                        fact
+                        for item in prepared
+                        if item.convention.document_type == domain
+                        for fact in item.target.snapshot.facts
+                    ),
+                ),
+                domain=domain,
+                confidence=ChangeConfidence.HIGH,
+                review_status=ChangeReviewStatus.ACCEPTED,
+            )
         )
         if not changes:
             raise ValueError("Modified design documents produced no semantic Canonical changes")
@@ -180,6 +228,150 @@ class CopilotDocumentChangeService:
             document_ids=tuple(source.document_id for source in sources),
             source_paths=source_paths,
             change_refs=tuple(change.change_id for change in changes),
+        )
+
+    def apply_and_materialize(
+        self,
+        *,
+        project_id: str,
+        analysis_case_id: str,
+        coding_task_id: str,
+        source_snapshot_id: str,
+        document_ids: tuple[str, ...],
+        document_edits: tuple[DocumentFieldEdit, ...],
+    ) -> CopilotDocumentChangeResult:
+        """Apply bounded Canonical XLSX field edits, then materialize their semantic diff."""
+
+        if not document_edits:
+            raise ValueError("Structured document edits must not be empty")
+        if {edit.document_id for edit in document_edits} != set(document_ids):
+            raise ValueError("Structured document edits must cover exactly selected documents")
+        edit_keys = [
+            (edit.document_id, edit.stable_key, edit.field) for edit in document_edits
+        ]
+        if len(edit_keys) != len(set(edit_keys)):
+            raise ValueError("Structured document edits contain duplicate Canonical fields")
+        sources = {
+            document_id: self._required_source(
+                project_id=project_id,
+                source_snapshot_id=source_snapshot_id,
+                document_id=document_id,
+            )
+            for document_id in sorted(document_ids)
+        }
+        staged = tuple(
+            self._stage_xlsx_edits(
+                source=sources[document_id],
+                edits=tuple(
+                    edit for edit in document_edits if edit.document_id == document_id
+                ),
+            )
+            for document_id in sorted(document_ids)
+        )
+        try:
+            for item in staged:
+                if _file_digest(item.path) != item.source.content_digest:
+                    raise ValueError(
+                        "Design document changed after its structured edit was prepared: "
+                        f"{item.source.document_id}"
+                    )
+            for item in staged:
+                shutil.copy2(item.path, item.backup)
+            for item in staged:
+                os.replace(item.replacement, item.path)
+            try:
+                return self.materialize(
+                    project_id=project_id,
+                    analysis_case_id=analysis_case_id,
+                    coding_task_id=coding_task_id,
+                    source_snapshot_id=source_snapshot_id,
+                    document_ids=document_ids,
+                )
+            except Exception:
+                for item in staged:
+                    if item.backup.exists():
+                        os.replace(item.backup, item.path)
+                raise
+        finally:
+            for item in staged:
+                item.replacement.unlink(missing_ok=True)
+                item.backup.unlink(missing_ok=True)
+
+    def _stage_xlsx_edits(
+        self,
+        *,
+        source: CanonicalDocumentSlice,
+        edits: tuple[DocumentFieldEdit, ...],
+    ) -> _StagedDocument:
+        path = _trusted_file_path(source.source_ref)
+        if path.suffix.casefold() != ".xlsx":
+            raise ValueError(
+                "Structured document editing currently supports only XLSX design documents"
+            )
+        if _file_digest(path) != source.content_digest:
+            raise ValueError(
+                "Design document differs from the discovered Canonical baseline: "
+                f"{source.document_id}"
+            )
+        facts = {item.fact.stable_key: item.fact for item in source.snapshot.facts}
+        workbook = load_workbook(path, read_only=False, data_only=False, keep_links=False)
+        replacement = _temporary_sibling(path, "replacement")
+        backup = _temporary_sibling(path, "backup")
+        try:
+            for edit in edits:
+                fact = facts.get(edit.stable_key)
+                if fact is None:
+                    raise ValueError(
+                        "Structured document edit Stable Key is outside the selected document: "
+                        f"{edit.stable_key}"
+                    )
+                baseline_value = fact.values.get(edit.field)
+                evidence = [
+                    item
+                    for item in fact.field_evidence
+                    if item.canonical_field == edit.field
+                ]
+                if baseline_value is None or len(evidence) != 1:
+                    raise ValueError(
+                        "Structured document edit field is not uniquely backed by "
+                        "Canonical evidence: "
+                        f"{edit.stable_key}/{edit.field}"
+                    )
+                source_refs = evidence[0].source_refs
+                if len(source_refs) != 1:
+                    raise ValueError(
+                        "Structured document edit field maps to multiple source cells: "
+                        f"{edit.stable_key}/{edit.field}"
+                    )
+                sheet_name, coordinate = _xlsx_location(path, source_refs[0])
+                try:
+                    cell = workbook[sheet_name][coordinate]
+                except KeyError as error:
+                    raise ValueError(
+                        f"Structured document edit worksheet does not exist: {sheet_name}"
+                    ) from error
+                if cell.data_type == "f":
+                    raise ValueError("Structured document edit must not replace a formula cell")
+                current_value = "" if cell.value is None else str(cell.value)
+                if normalize_business_value(current_value) != baseline_value:
+                    raise ValueError(
+                        "Structured document edit source cell differs from Canonical evidence: "
+                        f"{edit.stable_key}/{edit.field}"
+                    )
+                cell.value = edit.new_value
+            workbook.save(replacement)
+            os.chmod(replacement, path.stat().st_mode)
+        except Exception:
+            replacement.unlink(missing_ok=True)
+            backup.unlink(missing_ok=True)
+            raise
+        finally:
+            workbook.close()
+        return _StagedDocument(
+            source=source,
+            path=path,
+            replacement=replacement,
+            backup=backup,
         )
 
     def _required_source(
@@ -224,6 +416,7 @@ class CopilotDocumentChangeService:
             snapshot_id=target_snapshot_id,
             fact_type=next(iter(fact_types)),
             convention=convention,
+            stable_key_namespace=_source_namespace(source),
         )
         return _PreparedDocument(
             source=source,
@@ -270,6 +463,30 @@ class CopilotDocumentChangeService:
         )
 
 
+def _temporary_sibling(path: Path, purpose: str) -> Path:
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{path.stem}.operamind-{purpose}-",
+        suffix=path.suffix,
+        dir=path.parent,
+        delete=False,
+    ) as stream:
+        return Path(stream.name)
+
+
+def _xlsx_location(path: Path, source_ref: str) -> tuple[str, str]:
+    filename, separator, location = source_ref.partition("#")
+    sheet_name, cell_separator, coordinate = location.rpartition("!")
+    if (
+        separator != "#"
+        or cell_separator != "!"
+        or filename != path.name
+        or not sheet_name.strip()
+        or not coordinate.strip()
+    ):
+        raise ValueError("Canonical XLSX field evidence has an invalid source cell reference")
+    return sheet_name, coordinate
+
+
 def _trusted_file_path(source_ref: str) -> Path:
     parsed = urlsplit(source_ref)
     if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
@@ -278,6 +495,16 @@ def _trusted_file_path(source_ref: str) -> Path:
     if not path.is_file():
         raise ValueError("Canonical design document source is not a regular file")
     return path
+
+
+def _source_namespace(source: CanonicalDocumentSlice) -> str | None:
+    """Preserve the namespace used by multi-document baseline Snapshots."""
+
+    expected = f"{source.document_id}/"
+    local_keys = [fact.fact.stable_key.partition(":")[2] for fact in source.snapshot.facts]
+    if local_keys and all(local_key.startswith(expected) for local_key in local_keys):
+        return source.document_id
+    return None
 
 
 def _file_uri_path(source_ref: str, *, platform_name: str | None = None) -> Path:

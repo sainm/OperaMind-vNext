@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from operamind.application import (
     DocumentDiffRequest,
@@ -14,7 +14,10 @@ from operamind.application import (
     PersistedDocumentDiffRequest,
     PersistedDocumentDiffService,
 )
-from operamind.application.copilot_document_change import CopilotDocumentChangeService
+from operamind.application.copilot_document_change import (
+    CopilotDocumentChangeService,
+    DocumentFieldEdit,
+)
 from operamind.contracts import ContractCatalog
 from operamind.domain import ChangeReviewStatus
 from operamind.infrastructure.documents import DocumentSignalExtractorRegistry
@@ -317,16 +320,23 @@ def test_persisted_document_diff_is_atomic_and_idempotent(tmp_path: Path) -> Non
                 ),
             )
             assert cursor.fetchone() == (1, 2, 2, 4, 1, 2, 1)
-        write_screen_design(after_path, "差戻し")
         copilot_change = CopilotDocumentChangeService(
             connection=connection,
             repository_root=ROOT,
-        ).materialize(
+        ).apply_and_materialize(
             project_id=project_id,
             analysis_case_id=case_id,
             coding_task_id=f"copilot-task-{suffix}",
             source_snapshot_id=request.diff.target_snapshot_id,
             document_ids=(request.document_id,),
+            document_edits=(
+                DocumentFieldEdit(
+                    document_id=request.document_id,
+                    stable_key="screen_element:screen_expense_list/expense-search-status",
+                    field="default_value",
+                    new_value="差戻し",
+                ),
+            ),
         )
         assert copilot_change.document_ids == (request.document_id,)
         assert len(copilot_change.change_refs) == 1
@@ -337,6 +347,9 @@ def test_persisted_document_diff_is_atomic_and_idempotent(tmp_path: Path) -> Non
         assert accepted_change["review_status"] == "accepted"
         assert accepted_change["before"]["values"]["default_value"] == "すべて"
         assert accepted_change["after"]["values"]["default_value"] == "差戻し"
+        workbook = load_workbook(after_path, read_only=True, data_only=False)
+        assert workbook["画面項目一覧"]["C2"].value == "差戻し"
+        workbook.close()
         connection.rollback()
 
 

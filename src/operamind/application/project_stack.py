@@ -222,6 +222,9 @@ class ProjectProfileBootstrapper:
         activated: list[str] = []
         for profile_type, (filename, binding_prefix) in _PROFILE_FILES.items():
             binding_key = f"{binding_prefix}:{repository_id}"
+            profile = _load_profile(self._profiles.root / filename)
+            if profile.get("profile_type") != profile_type:
+                raise ValueError(f"Built-in Profile has unexpected type: {filename}")
             current = self._repository.get_active(
                 project_id=project_id,
                 binding_key=binding_key,
@@ -231,12 +234,9 @@ class ProjectProfileBootstrapper:
                     raise ValueError(
                         f"Active Profile binding has unexpected type: {binding_key}"
                     )
-                active.append(current)
-                continue
-
-            profile = _load_profile(self._profiles.root / filename)
-            if profile.get("profile_type") != profile_type:
-                raise ValueError(f"Built-in Profile has unexpected type: {filename}")
+                if not _built_in_upgrade_available(current.profile, profile):
+                    active.append(current)
+                    continue
             profile_version_id = (
                 f"{profile['profile_id']}-{binding_prefix}-{profile['profile_version']}"
             )
@@ -322,6 +322,28 @@ def _load_profile(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"Built-in Profile is not a JSON object: {path.name}")
     return cast(dict[str, Any], value)
+
+
+def _built_in_upgrade_available(
+    current: dict[str, Any], built_in: dict[str, Any]
+) -> bool:
+    """Upgrade only an older binding of the same built-in Profile family."""
+
+    if current.get("profile_id") != built_in.get("profile_id"):
+        return False
+    current_version = _numeric_version(current.get("profile_version"))
+    built_in_version = _numeric_version(built_in.get("profile_version"))
+    return (
+        current_version is not None
+        and built_in_version is not None
+        and built_in_version > current_version
+    )
+
+
+def _numeric_version(value: object) -> tuple[int, ...] | None:
+    if not isinstance(value, str) or not re.fullmatch(r"\d+(?:\.\d+)*", value):
+        return None
+    return tuple(int(part) for part in value.split("."))
 
 
 def _relative(root: Path, path: Path) -> str:

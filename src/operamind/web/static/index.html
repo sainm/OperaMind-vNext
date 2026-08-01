@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>OperaMind 変更フロー</title>
-  <link rel="stylesheet" href="/app.css?v=20260731-change-request">
+  <link rel="stylesheet" href="/app.css?v=20260801-fixed-sidebar-scroll">
 </head>
 <body>
   <a class="skip-link" href="#main">メインコンテンツへ移動</a>
@@ -126,9 +126,10 @@
       <div class="dialog-note">
         Workspace と設計書は Git 管理外の通常フォルダーでも登録できます。OperaMind は原本を移動せず、入力した場所をプロジェクト設定として保存します。
       </div>
+      <p id="projectFormStatus" class="request-form-status hidden" role="status" aria-live="polite"></p>
       <div class="dialog-actions">
         <button id="cancelProjectDialogButton" class="secondary" type="button">キャンセル</button>
-        <button class="primary" type="submit">初期化</button>
+        <button id="submitProjectButton" class="primary" type="submit"><span>初期化</span></button>
       </div>
     </form>
   </dialog>

@@ -84,6 +84,57 @@ def test_project_initialization_accepts_local_code_and_document_directories(
 
 
 @pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
+def test_local_files_project_rejects_change_before_digest_baseline(
+    tmp_path: Path,
+) -> None:
+    assert DATABASE_URL is not None
+    suffix = uuid4().hex
+    project_id = f"local-project-{suffix}"
+    request_id = f"local-request-{suffix}"
+    workspace = tmp_path / "code"
+    documents = tmp_path / "design"
+    workspace.mkdir()
+    documents.mkdir()
+
+    with psycopg.connect(DATABASE_URL) as connection:
+        MigrationRunner(connection, MigrationCatalog.load(ROOT / "migrations")).apply()
+        service = WebControlPlaneService(connection=connection, repository_root=ROOT)
+        service.initialize_project(
+            ProjectInitializationInput(
+                project_id=project_id,
+                name="Local files project",
+                workspace_root=workspace,
+                document_roots=(documents,),
+                configured_by="local-user",
+            )
+        )
+        request = ChangeRequestInput(
+            change_request_id=request_id,
+            project_id=project_id,
+            analysis_case_id=None,
+            input_mode="natural_language",
+            requirement_text="検索結果を変更する",
+            source_document_ref=None,
+            target_document_ref=None,
+            business_rules=(
+                BusinessRuleInput("rule-local", "変更結果を確認できること", ()),
+            ),
+            ambiguity_status="clear",
+            ambiguities=(),
+            submitted_by="local-user",
+        )
+
+        with pytest.raises(ValueError, match="ファイル Digest 基線"):
+            service.submit_change_request(request)
+        with pytest.raises(ValueError, match="does not exist"):
+            WebControlPlaneRepository(
+                connection,
+                ContractCatalog.load(ROOT / "contracts"),
+            ).get_change_request(request_id)
+        connection.rollback()
+
+
+@pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
 def test_change_request_auto_binds_detected_springboot15_runtime_profiles(
     tmp_path: Path,
 ) -> None:

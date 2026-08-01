@@ -1,8 +1,10 @@
 import io
 import json
+import sys
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from operamind.commands.mcp_server import main
 from operamind.mcp.server import (
@@ -14,6 +16,7 @@ from operamind.mcp.server import (
     _public_command_result,
     _public_edit_result,
     _public_flow_status,
+    _tool_validation_error_message,
 )
 
 ROOT = Path(__file__).parents[2]
@@ -26,6 +29,20 @@ class _StubDispatcher:
         if arguments.get("coding_task_id") == "raise-error":
             raise ValueError("simulated business error")
         return {"tool": name, "arguments": arguments}
+
+
+class _TransactionCounter:
+    def __init__(self) -> None:
+        self.entered = 0
+
+    def transaction(self) -> "_TransactionCounter":
+        return self
+
+    def __enter__(self) -> None:
+        self.entered += 1
+
+    def __exit__(self, *_args: object) -> None:
+        return None
 
 
 def _initialize(server: OperaMindMcpServer) -> None:
@@ -89,6 +106,29 @@ def test_mcp_lists_bounded_annotated_copilot_tools_after_initialization() -> Non
         "test_planning",
     ]
     assert len(outputs["oneOf"]) == 3
+    assert outputs["oneOf"][0]["required"] == ["document_ids", "document_edits"]
+    assert outputs["properties"]["document_edits"]["items"]["required"] == [
+        "document_id",
+        "stable_key",
+        "field",
+        "new_value",
+    ]
+    test_plan_schema = outputs["properties"]["test_plan"]
+    assert test_plan_schema["additionalProperties"] is False
+    assert set(test_plan_schema["required"]) == {
+        "artifact_type",
+        "schema_version",
+        "test_plan_id",
+        "change_request_id",
+        "project_id",
+        "status",
+        "test_cases",
+    }
+    test_data_schema = outputs["properties"]["test_data_plan"]
+    assert test_data_schema["additionalProperties"] is False
+    assert test_data_schema["properties"]["generation_flows"]["items"]["$ref"] == (
+        "#/properties/test_data_plan/$defs/generationFlow"
+    )
     assert "ui_test_result_refs" not in by_name["copilot_record_task_result"][
         "inputSchema"
     ]["properties"]
@@ -107,6 +147,91 @@ def test_mcp_lists_bounded_annotated_copilot_tools_after_initialization() -> Non
             "orchestration",
         )
     )
+
+
+def test_mcp_rejects_non_contract_test_planning_shape_with_actionable_location() -> None:
+    tool = next(
+        tool for tool in TOOLS if tool["name"] == "copilot_record_change_outputs"
+    )
+    arguments = {
+        "coding_task_id": "task-1",
+        "workspace_root": "/workspace",
+        "output_stage": "test_planning",
+        "test_plan": {"cases": []},
+        "test_data_plan": {"ui": []},
+    }
+
+    errors = sorted(
+        Draft202012Validator(tool["inputSchema"]).iter_errors(arguments),
+        key=lambda error: list(error.absolute_path),
+    )
+
+    assert errors
+    assert list(errors[0].absolute_path) == ["test_data_plan"]
+    assert "Additional properties are not allowed" in errors[0].message
+    message = _tool_validation_error_message(errors)
+    assert "test_data_plan: Additional properties are not allowed" in message
+    assert "test_data_plan: 'artifact_type' is a required property" in message
+    assert "test_plan: Additional properties are not allowed" in message
+    assert "test_plan: 'artifact_type' is a required property" in message
+
+
+def test_mcp_contract_schema_uses_frozen_resource_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from operamind.mcp.server import _artifact_input_schema
+
+    schema_directory = tmp_path / "contracts" / "schemas"
+    schema_directory.mkdir(parents=True)
+    (schema_directory / "sample.schema.json").write_text(
+        json.dumps(
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": "https://operamind.dev/contracts/sample.schema.json",
+                "title": "Sample",
+                "type": "object",
+                "required": ["value"],
+                "properties": {"value": {"type": "string"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+
+    schema = _artifact_input_schema("sample", "sample")
+
+    assert schema["required"] == ["value"]
+    assert "$schema" not in schema
+    assert "$id" not in schema
+    assert "title" not in schema
+
+
+def test_command_tool_does_not_wrap_child_process_in_dispatcher_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from operamind.mcp.server import CopilotToolDispatcher
+
+    connection = _TransactionCounter()
+    dispatcher = object.__new__(CopilotToolDispatcher)
+    dispatcher._connection = connection  # type: ignore[assignment]
+    monkeypatch.setattr(
+        dispatcher,
+        "_dispatch",
+        lambda name, args: {"name": name, "arguments": args},
+    )
+
+    result = dispatcher.call(
+        "copilot_run_task_command",
+        {
+            "coding_task_id": "task-1",
+            "command_execution_id": "command-1",
+            "command_ref": "springboot15-compile",
+            "workspace_root": "/workspace",
+        },
+    )
+
+    assert result["name"] == "copilot_run_task_command"
+    assert connection.entered == 0
 
 
 def test_mcp_flow_status_drops_internal_automation_and_scheduler_fields() -> None:

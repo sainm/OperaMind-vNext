@@ -1,7 +1,7 @@
 {
   "profile_type": "CodeFrameworkProfile",
   "profile_id": "springboot15-thymeleaf-gradle",
-  "profile_version": "1.0.0",
+  "profile_version": "1.0.1",
   "languages": [
     "java",
     "javascript",
@@ -29,6 +29,7 @@
   "anchor_extractors": [
     "java_symbol",
     "java_field_access",
+    "javascript_symbol",
     "spring_endpoint",
     "spring_config_binding",
     "spring_data_access",

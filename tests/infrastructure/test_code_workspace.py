@@ -42,6 +42,39 @@ def test_workspace_scanner_is_bounded_deterministic_and_profile_filtered(
     assert files[0].content == b"class App {}\n"
 
 
+def test_workspace_scanner_skips_optional_scan_roots_that_do_not_exist(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "src/main/java/example/App.java"
+    source.parent.mkdir(parents=True)
+    source.write_text("class App {}\n", encoding="utf-8")
+
+    scanner = WorkspaceScanner()
+    files = scanner.discover(
+        workspace_root=tmp_path,
+        scan_roots=("src/main", "src/test"),
+        excluded_globs=(),
+        languages=("java",),
+    )
+    explicit_files = scanner.discover(
+        workspace_root=tmp_path,
+        scan_roots=("src/main", "src/test"),
+        excluded_globs=(),
+        languages=("java",),
+        allowed_paths=frozenset(
+            {
+                "src/main/java/example/App.java",
+                "src/test/java/example/AppTest.java",
+            }
+        ),
+    )
+
+    assert [file.path for file in files] == ["src/main/java/example/App.java"]
+    assert [file.path for file in explicit_files] == [
+        "src/main/java/example/App.java"
+    ]
+
+
 @pytest.mark.parametrize(
     ("scan_roots", "excluded_globs", "message"),
     [

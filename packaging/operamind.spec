@@ -1,7 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from pathlib import Path
 import sys
+from pathlib import Path
+
+from PyInstaller.utils.hooks import copy_metadata
 
 
 ROOT = Path(SPECPATH).parent
@@ -13,6 +15,8 @@ RESOURCE_DIRECTORIES = (
     "readiness",
 )
 datas = [(str(ROOT / name), name) for name in RESOURCE_DIRECTORIES]
+datas += copy_metadata("openpyxl")
+datas += copy_metadata("python-docx")
 datas.append((str(ROOT / "src" / "operamind" / "web" / "static"), "operamind/web/static"))
 datas.append((str(ROOT / "vscode-extension" / "package.json"), "vscode-extension"))
 

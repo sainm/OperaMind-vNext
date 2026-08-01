@@ -375,7 +375,7 @@ class ImpactRepository:
                 raise ValueError(f"Impact Report is blocked by Profile drift: {drift[0]}")
             cursor.execute(
                 """
-                SELECT is_current, status, %s <= now()
+                SELECT is_current, status, %s <= clock_timestamp()
                 FROM code_graph_snapshots
                 WHERE code_graph_snapshot_id = %s AND project_id = %s
                 FOR SHARE
@@ -493,12 +493,8 @@ class ImpactRepository:
             artifact["analysis_case_id"],
             artifact["document_snapshot_id"],
         )
-        actual_context = (
-            context.get("project_id") if context is not None else None,
-            context.get("analysis_case_id") if context is not None else None,
-            context.get("document_snapshot_id") if context is not None else None,
-        )
-        if context is None or context.get("artifact_type") != "ContextPackage":
+        actual_context = _impact_context_scope(context)
+        if actual_context is None:
             raise PersistenceConflictError(
                 f"Impact Report Context Package is missing: {state.impact_report_id}"
             )
@@ -736,17 +732,13 @@ class ImpactRepository:
         project_id = str(artifact["project_id"])
         case_id = str(artifact["analysis_case_id"])
         context = self._artifacts.get(str(artifact["context_package_id"]))
-        if context is None or context.get("artifact_type") != "ContextPackage":
+        actual_context = _impact_context_scope(context)
+        if actual_context is None:
             raise ValueError("Impact Report Context Package does not exist")
         expected_context = (
             project_id,
             case_id,
             artifact["document_snapshot_id"],
-        )
-        actual_context = (
-            context.get("project_id"),
-            context.get("analysis_case_id"),
-            context.get("document_snapshot_id"),
         )
         if actual_context != expected_context:
             raise ValueError("Impact Report Context Package is outside report scope")
@@ -883,6 +875,25 @@ class ImpactRepository:
         )
         row = cursor.fetchone()
         return tuple(row) if row is not None else None
+
+
+def _impact_context_scope(
+    context: dict[str, Any] | None,
+) -> tuple[object, object, object] | None:
+    if context is None:
+        return None
+    artifact_type = context.get("artifact_type")
+    if artifact_type == "ContextPackage":
+        snapshot_id = context.get("document_snapshot_id")
+    elif artifact_type == "CopilotImpactContext":
+        snapshot_id = context.get("target_document_snapshot_id")
+    else:
+        return None
+    return (
+        context.get("project_id"),
+        context.get("analysis_case_id"),
+        snapshot_id,
+    )
 
 
 def _validate_report_semantics(artifact: dict[str, Any]) -> None:

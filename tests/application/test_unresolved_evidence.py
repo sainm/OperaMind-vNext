@@ -154,6 +154,38 @@ def test_report_classifies_every_unresolved_edge_and_exposes_guidance() -> None:
     assert call["reason"] == "unresolved_reference"
 
 
+def test_multiple_unresolved_calls_at_one_location_have_distinct_item_ids() -> None:
+    contracts = ContractCatalog.load(ROOT / "contracts")
+    graph = _graph()
+    duplicate_location = dict(graph["edges"][2]["source_location"])
+    graph["edges"].append(
+        {
+            "edge_id": "edge-call-another-helper",
+            "edge_type": "calls",
+            "from_ref": "endpoint-customer",
+            "to_ref": "unresolved:call:helper.other/0",
+            "resolution_status": "unresolved",
+            "confidence": "low",
+            "extractor": "java_call",
+            "profile_version": "generic-web@1",
+            "provenance": "static",
+            "evidence_refs": [],
+            "source_location": duplicate_location,
+        }
+    )
+
+    result = UnresolvedEvidenceReportBuilder(contracts).build(graph=graph)
+    calls = [
+        item
+        for item in result.artifact["items"]
+        if item["edge_ref"] in {"edge-call-refresh", "edge-call-another-helper"}
+    ]
+
+    assert len(calls) == 2
+    assert len({item["item_id"] for item in calls}) == 2
+    assert len({item["finding_key"] for item in calls}) == 2
+
+
 def test_multiple_static_candidates_remain_open_and_are_all_visible() -> None:
     contracts = ContractCatalog.load(ROOT / "contracts")
     graph = _graph()

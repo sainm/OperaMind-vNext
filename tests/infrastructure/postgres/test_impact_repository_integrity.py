@@ -86,14 +86,24 @@ def _header(*, confirmed: bool = False) -> tuple[object, ...]:
     )
 
 
-def _repository(*, confirmation_artifact: dict[str, Any] | None = None) -> ImpactRepository:
+def _repository(
+    *,
+    confirmation_artifact: dict[str, Any] | None = None,
+    copilot_context: bool = False,
+) -> ImpactRepository:
     repository = ImpactRepository(MagicMock(), MagicMock())
     artifacts = MagicMock()
     context_artifact = {
-        "artifact_type": "ContextPackage",
+        "artifact_type": (
+            "CopilotImpactContext" if copilot_context else "ContextPackage"
+        ),
         "project_id": "project-001",
         "analysis_case_id": "case-001",
-        "document_snapshot_id": "snapshot-001",
+        (
+            "target_document_snapshot_id"
+            if copilot_context
+            else "document_snapshot_id"
+        ): "snapshot-001",
     }
     artifacts.get.side_effect = lambda artifact_id: (
         context_artifact
@@ -130,6 +140,14 @@ def _cursor(
 
 def test_impact_report_read_validates_full_item_ledger() -> None:
     _repository()._validate_report_integrity(
+        _cursor(),
+        state=_state(),
+        artifact=_report_artifact(),
+    )
+
+
+def test_impact_report_read_accepts_bounded_copilot_impact_context() -> None:
+    _repository(copilot_context=True)._validate_report_integrity(
         _cursor(),
         state=_state(),
         artifact=_report_artifact(),

@@ -9,6 +9,7 @@ from operamind.application.copilot_coding_task import (
     _public_task_artifact,
     _public_workspace,
     _validate_planning_alignment,
+    _validate_planning_artifact_scope,
     build_bridge_task_view,
 )
 from operamind.application.test_data_ui_verification import _ui_scenario_evidence
@@ -57,6 +58,24 @@ def test_test_planning_requires_ui_flow_for_ui_impact() -> None:
         test_data_plan=test_data_plan,
         ui_impacted=True,
     )
+
+
+def test_test_planning_scope_error_names_every_incorrect_binding() -> None:
+    with pytest.raises(ValueError) as raised:
+        _validate_planning_artifact_scope(
+            artifact_name="TestPlan",
+            artifact={"cases": []},
+            expected={
+                "artifact_type": "TestPlan",
+                "project_id": "project-1",
+                "status": "ready",
+            },
+        )
+
+    message = str(raised.value)
+    assert "artifact_type must be 'TestPlan' (received None)" in message
+    assert "project_id must be 'project-1' (received None)" in message
+    assert "status must be 'ready' (received None)" in message
 
 
 def test_copilot_context_exposes_constraints_without_internal_authorization_records() -> None:
@@ -162,6 +181,18 @@ def test_copilot_document_discovery_hides_search_index_implementation_ids() -> N
                     "summary": "差戻し状態の検索条件",
                     "logical_name": "02_画面設計書_経費一覧.xlsx",
                     "document_ref": "file:///design/expense.xlsx",
+                    "canonical_document": {
+                        "document_id": "expense-design",
+                        "logical_name": "02_画面設計書_経費一覧.xlsx",
+                        "document_ref": "file:///design/expense.xlsx",
+                        "facts": [
+                            {
+                                "stable_key": "screen_element:expense/status",
+                                "fact_type": "screen_element",
+                                "values": {"default_value": "申請中"},
+                            }
+                        ],
+                    },
                     "relevance_reason": "変更要件と一致",
                     "evidence_refs": ["document:expense-design"],
                     "embedding_distance": 0.01,
@@ -183,6 +214,18 @@ def test_copilot_document_discovery_hides_search_index_implementation_ids() -> N
                 "summary": "差戻し状態の検索条件",
                 "logical_name": "02_画面設計書_経費一覧.xlsx",
                 "document_ref": "file:///design/expense.xlsx",
+                "canonical_document": {
+                    "document_id": "expense-design",
+                    "logical_name": "02_画面設計書_経費一覧.xlsx",
+                    "document_ref": "file:///design/expense.xlsx",
+                    "facts": [
+                        {
+                            "stable_key": "screen_element:expense/status",
+                            "fact_type": "screen_element",
+                            "values": {"default_value": "申請中"},
+                        }
+                    ],
+                },
                 "relevance_reason": "変更要件と一致",
                 "evidence_refs": ["document:expense-design"],
             }
@@ -217,8 +260,20 @@ def test_explicit_document_ref_still_requires_canonical_rag(
     service._document_nodes = object()  # type: ignore[attr-defined]
     service._canonical = SimpleNamespace(  # type: ignore[attr-defined]
         get_document_slice=lambda **_values: SimpleNamespace(
+            document_id="expense-design",
             logical_name="02_画面設計書_経費一覧.xlsx",
             source_ref="file:///design/expense.xlsx",
+            snapshot=SimpleNamespace(
+                facts=(
+                    SimpleNamespace(
+                        fact=SimpleNamespace(
+                            stable_key="screen_element:expense/status",
+                            fact_type="screen_element",
+                            values={"default_value": "申請中"},
+                        )
+                    ),
+                )
+            ),
         )
     )
 
@@ -266,6 +321,18 @@ def test_explicit_document_ref_still_requires_canonical_rag(
             "section_id": "status-filter",
             "logical_name": "02_画面設計書_経費一覧.xlsx",
             "document_ref": "file:///design/expense.xlsx",
+            "canonical_document": {
+                "document_id": "expense-design",
+                "logical_name": "02_画面設計書_経費一覧.xlsx",
+                "document_ref": "file:///design/expense.xlsx",
+                "facts": [
+                    {
+                        "stable_key": "screen_element:expense/status",
+                        "fact_type": "screen_element",
+                        "values": {"default_value": "申請中"},
+                    }
+                ],
+            },
         }
     ]
 

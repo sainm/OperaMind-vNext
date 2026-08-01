@@ -87,6 +87,11 @@ class WorkspaceScanner:
             scan_root_path = root / relative_root
             if scan_root_path.is_symlink():
                 raise ValueError(f"Scan root must not be a symlink: {original_root}")
+            if not scan_root_path.exists():
+                # Framework profiles describe the roots that may contain code.  A
+                # repository is not required to materialize every optional root
+                # (for example, src/test before its first generated test).
+                continue
             absolute_root = scan_root_path.resolve(strict=True)
             if not absolute_root.is_relative_to(root):
                 raise ValueError(f"Scan root escapes workspace: {original_root}")
@@ -163,6 +168,8 @@ class WorkspaceScanner:
             scan_root_path = root / relative_root
             if scan_root_path.is_symlink():
                 raise ValueError(f"Scan root must not be a symlink: {original_root}")
+            if not scan_root_path.exists():
+                continue
             absolute_root = scan_root_path.resolve(strict=True)
             if not absolute_root.is_relative_to(root):
                 raise ValueError(f"Scan root escapes workspace: {original_root}")

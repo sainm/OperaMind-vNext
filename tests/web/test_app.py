@@ -500,3 +500,14 @@ def test_change_request_dialog_guides_submission_without_changing_the_api_flow()
     assert ".request-writing-guide" in stylesheet
     assert ".request-form-status.error" in stylesheet
     assert "grid-template-columns: 1fr" in stylesheet
+
+
+def test_project_dialog_keeps_long_rag_initialization_status_visible() -> None:
+    page = (ROOT / "src/operamind/web/static/index.html").read_text(encoding="utf-8")
+    script = (ROOT / "src/operamind/web/static/app.js").read_text(encoding="utf-8")
+
+    assert 'id="projectFormStatus"' in page
+    assert 'id="submitProjectButton"' in page
+    assert 'setProjectSubmitting(true)' in script
+    assert "RAG 基線を準備しています" in script
+    assert 'setProjectFormStatus(error.message, "error")' in script

@@ -125,7 +125,12 @@ def _open_item(
     )
     finding_key = _finding_key(edge)
     return {
-        "item_id": _item_id(report_id, finding_key, "open"),
+        "item_id": _item_id(
+            report_id,
+            finding_key,
+            "open",
+            edge_ref=str(edge["edge_id"]),
+        ),
         "finding_key": finding_key,
         "edge_ref": str(edge["edge_id"]),
         "status": "open",
@@ -155,6 +160,7 @@ def _closed_items(
     if predecessor is None:
         return []
     resolved_by_key: dict[str, list[dict[str, Any]]] = {}
+    resolved_by_location: dict[tuple[str, ...], list[dict[str, Any]]] = {}
     for edge in cast(list[dict[str, Any]], graph["edges"]):
         if edge["resolution_status"] != "resolved":
             continue
@@ -164,12 +170,23 @@ def _closed_items(
             keys.add(f"edge:{static_ref}")
         for key in keys:
             resolved_by_key.setdefault(key, []).append(edge)
+        resolved_by_location.setdefault(_edge_location_key(edge), []).append(edge)
+    prior_items = [
+        prior
+        for prior in cast(list[dict[str, Any]], predecessor["items"])
+        if prior["status"] == "open"
+    ]
+    prior_location_counts: dict[tuple[str, ...], int] = {}
+    for prior in prior_items:
+        location_key = _item_location_key(prior)
+        prior_location_counts[location_key] = prior_location_counts.get(location_key, 0) + 1
     values: list[dict[str, Any]] = []
-    for prior in cast(list[dict[str, Any]], predecessor["items"]):
-        if prior["status"] != "open":
-            continue
+    for prior in prior_items:
         candidates = resolved_by_key.get(str(prior["finding_key"]), [])
         candidates.extend(resolved_by_key.get(f"edge:{prior['edge_ref']}", []))
+        location_key = _item_location_key(prior)
+        if prior_location_counts[location_key] == 1:
+            candidates.extend(resolved_by_location.get(location_key, []))
         unique = {str(edge["edge_id"]): edge for edge in candidates}
         if len(unique) != 1:
             continue
@@ -202,7 +219,12 @@ def _closed_items(
         finding_key = str(prior["finding_key"])
         values.append(
             {
-                "item_id": _item_id(report_id, finding_key, "closed"),
+                "item_id": _item_id(
+                    report_id,
+                    finding_key,
+                    "closed",
+                    edge_ref=str(prior["edge_ref"]),
+                ),
                 "finding_key": finding_key,
                 "edge_ref": str(prior["edge_ref"]),
                 "status": "closed",
@@ -244,13 +266,44 @@ def _finding_key(edge: dict[str, Any]) -> str:
             str(edge["source_location"]["path"]),
             str(edge["source_location"]["start_line"]),
             str(edge["source_location"]["end_line"]),
+            str(edge["to_ref"]),
         )
     )
     return f"finding-{hashlib.sha256(material.encode()).hexdigest()[:24]}"
 
 
-def _item_id(report_id: str, finding_key: str, status: str) -> str:
-    material = "\0".join((report_id, finding_key, status))
+def _edge_location_key(edge: dict[str, Any]) -> tuple[str, ...]:
+    location = cast(dict[str, Any], edge["source_location"])
+    return (
+        str(edge["edge_type"]),
+        str(edge["from_ref"]),
+        str(location["path"]),
+        str(location["start_line"]),
+        str(location["end_line"]),
+    )
+
+
+def _item_location_key(item: dict[str, Any]) -> tuple[str, ...]:
+    location = cast(dict[str, Any], item["source_location"])
+    return (
+        str(item["edge_type"]),
+        str(item["source_ref"]),
+        str(location["path"]),
+        str(location["start_line"]),
+        str(location["end_line"]),
+    )
+
+
+def _item_id(
+    report_id: str,
+    finding_key: str,
+    status: str,
+    *,
+    edge_ref: str,
+) -> str:
+    # Keep the normalized identity tied to the exact edge as an additional
+    # safeguard even though finding_key is also unique inside one report.
+    material = "\0".join((report_id, finding_key, status, edge_ref))
     return f"unresolved-item-{hashlib.sha256(material.encode()).hexdigest()[:24]}"
 
 

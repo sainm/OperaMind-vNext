@@ -14,7 +14,10 @@ from operamind.application.command_execution import (
     ApprovedCommandRequest,
     ApprovedCommandService,
 )
-from operamind.application.copilot_document_change import CopilotDocumentChangeService
+from operamind.application.copilot_document_change import (
+    CopilotDocumentChangeService,
+    DocumentFieldEdit,
+)
 from operamind.application.copilot_impact import CopilotImpactService
 from operamind.application.copilot_task_context import (
     CopilotTaskContextRequest,
@@ -418,10 +421,14 @@ class CopilotCodingTaskService:
                         if discovery_ready
                         else "Stop before editing and report the document_discovery blocker."
                     ),
-                    "Modify only the selected design documents.",
+                    (
+                        "For XLSX documents, derive bounded field updates from each "
+                        "canonical_document fact; OperaMind applies them without requiring "
+                        "the source file inside the code Workspace."
+                    ),
                     (
                         "Call copilot_record_change_outputs with "
-                        "output_stage=document_change and document_ids."
+                        "output_stage=document_change, document_ids, and document_edits."
                     ),
                 ]
             elif task.current_stage == "code_scope":
@@ -671,6 +678,7 @@ class CopilotCodingTaskService:
                     **candidate,
                     "logical_name": document.logical_name,
                     "document_ref": document.source_ref,
+                    "canonical_document": _public_canonical_document(document),
                 }
             )
         return resolved
@@ -721,6 +729,7 @@ class CopilotCodingTaskService:
         workspace_root: Path,
         output_stage: str,
         document_ids: tuple[str, ...] = (),
+        document_edits: tuple[DocumentFieldEdit, ...] = (),
         code_scope: tuple[dict[str, Any], ...] = (),
         test_plan: dict[str, Any] | None = None,
         test_data_plan: dict[str, Any] | None = None,
@@ -732,14 +741,22 @@ class CopilotCodingTaskService:
             raise ValueError("Copilot Change Task Workspace does not match output recording")
         if output_stage == "document_change":
             if code_scope or test_plan is not None or test_data_plan is not None:
-                raise ValueError("Document output stage accepts only document_ids")
+                raise ValueError(
+                    "Document output stage accepts only document_ids and document_edits"
+                )
             return self._record_document_outputs(
                 coding_task_id=coding_task_id,
                 workspace_root=workspace_root,
                 document_ids=document_ids,
+                document_edits=document_edits,
             )
         if output_stage == "code_scope":
-            if document_ids or test_plan is not None or test_data_plan is not None:
+            if (
+                document_ids
+                or document_edits
+                or test_plan is not None
+                or test_data_plan is not None
+            ):
                 raise ValueError("Code scope output stage accepts only code_scope")
             return self._record_code_scope_output(
                 coding_task_id=coding_task_id,
@@ -747,7 +764,13 @@ class CopilotCodingTaskService:
                 code_scope=code_scope,
             )
         if output_stage == "test_planning":
-            if document_ids or code_scope or test_plan is None or test_data_plan is None:
+            if (
+                document_ids
+                or document_edits
+                or code_scope
+                or test_plan is None
+                or test_data_plan is None
+            ):
                 raise ValueError(
                     "Test planning output stage requires only test_plan and test_data_plan"
                 )
@@ -764,6 +787,7 @@ class CopilotCodingTaskService:
         coding_task_id: str,
         workspace_root: Path,
         document_ids: tuple[str, ...],
+        document_edits: tuple[DocumentFieldEdit, ...],
     ) -> dict[str, object]:
         task = self._tasks.get(coding_task_id)
         if not document_ids or len(document_ids) != len(set(document_ids)):
@@ -793,16 +817,27 @@ class CopilotCodingTaskService:
             )
         if not set(document_ids).issubset(candidate_document_ids):
             raise ValueError("Document output is outside Canonical RAG candidate scope")
-        materialized = CopilotDocumentChangeService(
+        document_changes = CopilotDocumentChangeService(
             connection=self._connection,
             repository_root=self._root,
-        ).materialize(
-            project_id=task.project_id,
-            analysis_case_id=case_id,
-            coding_task_id=coding_task_id,
-            source_snapshot_id=source_snapshot_id,
-            document_ids=document_ids,
         )
+        if document_edits:
+            materialized = document_changes.apply_and_materialize(
+                project_id=task.project_id,
+                analysis_case_id=case_id,
+                coding_task_id=coding_task_id,
+                source_snapshot_id=source_snapshot_id,
+                document_ids=document_ids,
+                document_edits=document_edits,
+            )
+        else:
+            materialized = document_changes.materialize(
+                project_id=task.project_id,
+                analysis_case_id=case_id,
+                coding_task_id=coding_task_id,
+                source_snapshot_id=source_snapshot_id,
+                document_ids=document_ids,
+            )
         document_change_refs = materialized.change_refs
         search_index_build_id = discovery.get("search_index_build_id")
         if not isinstance(search_index_build_id, str) or not search_index_build_id.strip():
@@ -948,21 +983,27 @@ class CopilotCodingTaskService:
                 "TestPlan must be generated after copilot_validate_task_diff "
                 "has accepted the current code diff"
             )
-        if (
-            test_plan.get("artifact_type") != "TestPlan"
-            or test_plan.get("project_id") != task.project_id
-            or test_plan.get("change_request_id") != task.change_request_id
-            or test_plan.get("status") != "ready"
-        ):
-            raise ValueError("TestPlan output is outside Copilot Change Task scope")
+        _validate_planning_artifact_scope(
+            artifact_name="TestPlan",
+            artifact=test_plan,
+            expected={
+                "artifact_type": "TestPlan",
+                "project_id": task.project_id,
+                "change_request_id": task.change_request_id,
+                "status": "ready",
+            },
+        )
         test_plan_id = str(test_plan.get("test_plan_id") or "")
-        if (
-            test_data_plan.get("artifact_type") != "TestDataPlan"
-            or test_data_plan.get("project_id") != task.project_id
-            or test_data_plan.get("test_plan_id") != test_plan_id
-            or test_data_plan.get("status") != "ready"
-        ):
-            raise ValueError("TestDataPlan output is outside Copilot Change Task scope")
+        _validate_planning_artifact_scope(
+            artifact_name="TestDataPlan",
+            artifact=test_data_plan,
+            expected={
+                "artifact_type": "TestDataPlan",
+                "project_id": task.project_id,
+                "test_plan_id": test_plan_id,
+                "status": "ready",
+            },
+        )
         test_data_plan_id = str(test_data_plan.get("test_data_plan_id") or "")
         if not test_plan_id or not test_data_plan_id:
             raise ValueError("Change Task output identities must not be blank")
@@ -1179,6 +1220,21 @@ def _validate_planning_alignment(
             )
 
 
+def _validate_planning_artifact_scope(
+    *,
+    artifact_name: str,
+    artifact: dict[str, Any],
+    expected: dict[str, str],
+) -> None:
+    mismatches = [
+        f"{key} must be {expected_value!r} (received {artifact.get(key)!r})"
+        for key, expected_value in expected.items()
+        if artifact.get(key) != expected_value
+    ]
+    if mismatches:
+        raise ValueError(f"{artifact_name} scope mismatch: " + "; ".join(mismatches))
+
+
 def _bound_task_scope(
     task: Any,
 ) -> tuple[str, str, str]:
@@ -1282,6 +1338,7 @@ def _public_document_discovery(discovery: dict[str, object]) -> dict[str, object
                 "summary",
                 "logical_name",
                 "document_ref",
+                "canonical_document",
                 "relevance_reason",
                 "evidence_refs",
             )
@@ -1298,4 +1355,22 @@ def _public_document_discovery(discovery: dict[str, object]) -> dict[str, object
         "explicit_document_refs": discovery.get("explicit_document_refs", []),
         "candidates": candidates,
         "blocking_reason": discovery.get("blocking_reason"),
+    }
+
+
+def _public_canonical_document(document: CanonicalDocumentSlice) -> dict[str, object]:
+    """Expose complete normalized business content without parser-internal provenance."""
+
+    return {
+        "document_id": document.document_id,
+        "logical_name": document.logical_name,
+        "document_ref": document.source_ref,
+        "facts": [
+            {
+                "stable_key": item.fact.stable_key,
+                "fact_type": item.fact.fact_type,
+                "values": dict(item.fact.values),
+            }
+            for item in document.snapshot.facts
+        ],
     }

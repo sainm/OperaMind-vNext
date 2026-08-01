@@ -34,6 +34,7 @@ from operamind.application.orchestration_task import (
     OrchestrationSchedulingPolicy,
     build_orchestration_task,
 )
+from operamind.application.project_document_baseline import ProjectDocumentBaselineService
 from operamind.application.project_stack import ProjectProfileBootstrapper
 from operamind.application.test_case_revision_service import TestCaseRevisionService
 from operamind.contracts import ContractCatalog
@@ -195,6 +196,11 @@ class WebControlPlaneService:
                 analysis_case_id = self._ensure_change_request_case(value)
             except ValueError as error:
                 case_blocker = str(error)
+        if case_blocker is not None:
+            raise ValueError(
+                "変更要件を開始できません。Project のコード基線を準備してください: "
+                f"{case_blocker}"
+            )
         record = self._repository.submit_change_request(
             artifact=artifact,
             analysis_case_id=analysis_case_id,
@@ -232,12 +238,10 @@ class WebControlPlaneService:
                         idempotency_key="initial-change-task",
                     )
                 )
-        if case_blocker is not None:
-            response["case_blocker"] = case_blocker
         return response
 
     def initialize_project(self, value: ProjectInitializationInput) -> dict[str, object]:
-        """Register local code and document roots without requiring version control."""
+        """Register local roots and prepare the Canonical RAG baseline when Git is available."""
 
         workspace_root = _resolved_local_directory(
             value.workspace_root,
@@ -258,7 +262,7 @@ class WebControlPlaneService:
             document_roots=tuple(str(root) for root in document_roots),
             configured_by=value.configured_by,
         )
-        return {
+        response: dict[str, object] = {
             "created": record.created,
             "project": {
                 "project_id": record.project_id,
@@ -268,6 +272,26 @@ class WebControlPlaneService:
                 "source_control_kind": record.source_control_kind,
             },
         }
+        if source_control_kind == "git":
+            baseline = ProjectDocumentBaselineService(
+                connection=self._connection,
+                repository_root=self._root,
+            ).ensure(
+                project_id=value.project_id,
+                document_roots=document_roots,
+                actor=value.configured_by,
+            )
+            response["document_baseline"] = {
+                "status": "ready",
+                "snapshot_id": baseline.snapshot_id,
+                "document_count": baseline.document_count,
+                "index_build_id": baseline.index_build_id,
+                "generated_vector_count": baseline.generated_vector_count,
+                "embedding_profile_binding_key": (
+                    baseline.embedding_profile_binding_key
+                ),
+            }
+        return response
 
     def _ensure_change_request_case(self, value: ChangeRequestInput) -> str:
         registration = self._repository.project_repository_registration(value.project_id)

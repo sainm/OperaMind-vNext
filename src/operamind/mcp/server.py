@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, TextIO, cast
@@ -16,6 +17,7 @@ from operamind.application import (
     ChangedLineCoverageEvidence,
     CopilotCodingTaskService,
 )
+from operamind.application.copilot_document_change import DocumentFieldEdit
 from operamind.contracts import ContractCatalog
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
@@ -74,6 +76,46 @@ def _changed_line_coverage_schema() -> dict[str, object]:
     }
 
 
+def _artifact_input_schema(artifact_type: str, property_name: str) -> dict[str, object]:
+    """Expose one canonical Artifact contract as an MCP tool input subschema."""
+
+    frozen_root = getattr(sys, "_MEIPASS", None)
+    resource_root = (
+        Path(frozen_root).resolve()
+        if isinstance(frozen_root, str) and frozen_root
+        else Path(__file__).resolve().parents[3]
+    )
+    schema_path = (
+        resource_root
+        / "contracts"
+        / "schemas"
+        / f"{artifact_type}.schema.json"
+    )
+    schema = cast(dict[str, object], json.loads(schema_path.read_text(encoding="utf-8")))
+    schema.pop("$schema", None)
+    schema.pop("$id", None)
+    schema.pop("title", None)
+    return cast(
+        dict[str, object],
+        _rewrite_local_schema_refs(schema, f"#/properties/{property_name}"),
+    )
+
+
+def _rewrite_local_schema_refs(value: object, root_ref: str) -> object:
+    if isinstance(value, dict):
+        return {
+            key: (
+                f"{root_ref}{item[1:]}"
+                if key == "$ref" and isinstance(item, str) and item.startswith("#/")
+                else _rewrite_local_schema_refs(item, root_ref)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_rewrite_local_schema_refs(item, root_ref) for item in value]
+    return value
+
+
 def _change_outputs_schema() -> dict[str, object]:
     schema = _schema(
         {
@@ -87,6 +129,26 @@ def _change_outputs_schema() -> dict[str, object]:
                 "minItems": 1,
                 "uniqueItems": True,
                 "items": _string(),
+            },
+            "document_edits": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "document_id",
+                        "stable_key",
+                        "field",
+                        "new_value",
+                    ],
+                    "properties": {
+                        "document_id": _string(),
+                        "stable_key": _string(),
+                        "field": _string(),
+                        "new_value": _string(),
+                    },
+                },
             },
             "code_scope": {
                 "type": "array",
@@ -123,15 +185,17 @@ def _change_outputs_schema() -> dict[str, object]:
                     },
                 },
             },
-            "test_plan": {"type": "object"},
-            "test_data_plan": {"type": "object"},
+            "test_plan": _artifact_input_schema("test-plan", "test_plan"),
+            "test_data_plan": _artifact_input_schema(
+                "test-data-plan", "test_data_plan"
+            ),
         },
         ("coding_task_id", "workspace_root", "output_stage"),
     )
     schema["oneOf"] = [
         {
             "properties": {"output_stage": {"const": "document_change"}},
-            "required": ["document_ids"],
+            "required": ["document_ids", "document_edits"],
         },
         {
             "properties": {"output_stage": {"const": "code_scope"}},
@@ -298,13 +362,17 @@ class CopilotToolDispatcher:
         schema = cast(dict[str, Any], tool["inputSchema"])
         errors = sorted(
             Draft202012Validator(schema).iter_errors(arguments),
-            key=lambda error: list(error.absolute_path),
+            key=lambda error: (list(error.absolute_path), error.message),
         )
         if errors:
-            error = errors[0]
-            location = "/".join(str(part) for part in error.absolute_path) or "$"
-            raise ValueError(f"Invalid tool arguments at {location}: {error.message}")
+            raise ValueError(_tool_validation_error_message(errors))
         args = cast(dict[str, object], arguments)
+        if name == "copilot_run_task_command":
+            # ApprovedCommandService persists the reservation before launching the
+            # child process and records its result in a separate transaction.  An
+            # outer transaction would retain Task/Grant locks for the full Gradle
+            # runtime and can deadlock with the Web task-resume poller.
+            return self._dispatch(name, args)
         with self._connection.transaction():
             return self._dispatch(name, args)
 
@@ -336,6 +404,15 @@ class CopilotToolDispatcher:
                 document_ids=tuple(
                     str(value)
                     for value in cast(list[object], args.get("document_ids", []))
+                ),
+                document_edits=tuple(
+                    DocumentFieldEdit(
+                        document_id=_text(cast(dict[str, object], value), "document_id"),
+                        stable_key=_text(cast(dict[str, object], value), "stable_key"),
+                        field=_text(cast(dict[str, object], value), "field"),
+                        new_value=_text(cast(dict[str, object], value), "new_value"),
+                    )
+                    for value in cast(list[object], args.get("document_edits", []))
                 ),
                 code_scope=tuple(
                     cast(dict[str, Any], value)
@@ -543,6 +620,16 @@ class OperaMindMcpServer:
         else:
             result_payload = _tool_result(result, is_error=False)
         return _success(request_id, result_payload)
+
+
+def _tool_validation_error_message(errors: list[Any], *, limit: int = 20) -> str:
+    details = []
+    for error in errors[:limit]:
+        location = "/".join(str(part) for part in error.absolute_path) or "$"
+        details.append(f"{location}: {error.message}")
+    remaining = len(errors) - len(details)
+    suffix = f"; ... and {remaining} more" if remaining else ""
+    return "Invalid tool arguments: " + "; ".join(details) + suffix
 
 
 def _changed_line_coverage(

@@ -9,6 +9,7 @@ from typing import Any
 
 from operamind.contracts import ContractCatalog
 from operamind.domain import (
+    CanonicalFact,
     CanonicalFactMapper,
     CanonicalSnapshot,
     SnapshotFact,
@@ -205,19 +206,21 @@ class DocumentDiffService:
         snapshot_id: str,
         fact_type: str,
         convention: DocumentConvention,
+        stable_key_namespace: str | None = None,
     ) -> DocumentSnapshotBuildResult:
         """Build a Canonical Snapshot using the same rules as the persisted Diff path."""
 
         signals = self._extractors.extract(path)
         sheet_signals = self._extractors.extract_sheet_signals(path)
         if sheet_signals:
-            return self._build_multi_sheet_snapshot(
+            built = self._build_multi_sheet_snapshot(
                 path=path,
                 snapshot_id=snapshot_id,
                 fact_type=fact_type,
                 convention=convention,
                 sheet_signals=sheet_signals,
             )
+            return _with_stable_key_namespace(built, stable_key_namespace)
         match = self._matcher.match(convention, signals)
         if match.status is not MatchStatus.AUTO_MATCHED or match.selected_variant_id is None:
             raise DocumentDiffBlockedError(
@@ -258,11 +261,12 @@ class DocumentDiffService:
             raise DocumentDiffBlockedError(
                 "Canonical mapping requires review: " + ", ".join(blocked_records)
             )
-        return DocumentSnapshotBuildResult(
+        built = DocumentSnapshotBuildResult(
             snapshot=CanonicalSnapshot(snapshot_id=snapshot_id, facts=tuple(facts)),
             selected_variant_ids=(match.selected_variant_id,),
             fact_variant_ids=tuple(fact_variant_ids),
         )
+        return _with_stable_key_namespace(built, stable_key_namespace)
 
     def _build_multi_sheet_snapshot(
         self,
@@ -364,6 +368,51 @@ class DocumentDiffService:
 def _fact_ref(snapshot_id: str, stable_key: str) -> str:
     material = f"{snapshot_id}\x00{stable_key}".encode()
     return f"fact-{sha256(material).hexdigest()[:24]}"
+
+
+def _with_stable_key_namespace(
+    result: DocumentSnapshotBuildResult,
+    namespace: str | None,
+) -> DocumentSnapshotBuildResult:
+    """Keep Stable Keys unique when one Snapshot contains several documents."""
+
+    if namespace is None:
+        return result
+    normalized_namespace = namespace.strip()
+    if not normalized_namespace or any(char in normalized_namespace for char in (":", "/")):
+        raise ValueError("Canonical Stable Key namespace must be a non-blank path segment")
+    variants = dict(result.fact_variant_ids)
+    namespaced_facts: list[SnapshotFact] = []
+    namespaced_variants: list[tuple[str, str]] = []
+    for snapshot_fact in result.snapshot.facts:
+        fact = snapshot_fact.fact
+        _prefix, separator, local_key = fact.stable_key.partition(":")
+        if not separator or not local_key:
+            raise ValueError("Canonical Stable Key has no fact type prefix")
+        stable_key = f"{fact.fact_type}:{normalized_namespace}/{local_key}"
+        fact_ref = _fact_ref(result.snapshot.snapshot_id, stable_key)
+        namespaced_facts.append(
+            SnapshotFact(
+                fact_ref=fact_ref,
+                fact=CanonicalFact(
+                    fact_type=fact.fact_type,
+                    stable_key=stable_key,
+                    values=fact.values,
+                    source_refs=fact.source_refs,
+                    field_evidence=fact.field_evidence,
+                ),
+            )
+        )
+        namespaced_variants.append((fact_ref, variants[snapshot_fact.fact_ref]))
+    return DocumentSnapshotBuildResult(
+        snapshot=CanonicalSnapshot(
+            snapshot_id=result.snapshot.snapshot_id,
+            facts=tuple(namespaced_facts),
+        ),
+        selected_variant_ids=result.selected_variant_ids,
+        fact_variant_ids=tuple(namespaced_variants),
+        ignored_sections=result.ignored_sections,
+    )
 
 
 def _file_digest(path: Path) -> str:

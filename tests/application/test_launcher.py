@@ -1,10 +1,30 @@
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 
+import pytest
 from pytest import MonkeyPatch
 
 from operamind.commands import launcher
+
+
+def test_packaged_document_runtime_requires_extractor_metadata(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    def distribution_version(distribution: str) -> str:
+        if distribution == "python-docx":
+            raise PackageNotFoundError(distribution)
+        return "1.0"
+
+    monkeypatch.setattr(launcher, "distribution_version", distribution_version)
+
+    with pytest.raises(ValueError) as raised:
+        launcher._verify_packaged_document_runtime()
+
+    assert str(raised.value) == (
+        "Document extractor package metadata is missing: python-docx"
+    )
 
 
 def test_launcher_prepares_runtime_and_starts_web(

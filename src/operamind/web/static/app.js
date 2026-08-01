@@ -38,6 +38,8 @@ const elements = {
   projectName: document.getElementById("projectName"),
   projectWorkspaceRoot: document.getElementById("projectWorkspaceRoot"),
   projectDocumentRoots: document.getElementById("projectDocumentRoots"),
+  projectFormStatus: document.getElementById("projectFormStatus"),
+  submitProjectButton: document.getElementById("submitProjectButton"),
   requestDialog: document.getElementById("requestDialog"),
   requestForm: document.getElementById("requestForm"),
   requestId: document.getElementById("requestId"),
@@ -210,8 +212,25 @@ function openProjectDialog() {
   elements.projectName.value = "";
   elements.projectWorkspaceRoot.value = "";
   elements.projectDocumentRoots.value = "";
+  setProjectFormStatus();
+  setProjectSubmitting(false);
   elements.projectDialog.showModal();
   elements.projectId.focus();
+}
+
+function setProjectFormStatus(message = "", kind = "info") {
+  elements.projectFormStatus.textContent = message;
+  elements.projectFormStatus.className = message
+    ? `request-form-status ${kind}`
+    : "request-form-status hidden";
+}
+
+function setProjectSubmitting(submitting) {
+  elements.projectForm.setAttribute("aria-busy", String(submitting));
+  elements.submitProjectButton.disabled = submitting;
+  elements.submitProjectButton.innerHTML = submitting
+    ? '<span class="button-spinner" aria-hidden="true"></span><span>RAG 基線を準備しています</span>'
+    : '<span>初期化</span>';
 }
 
 async function createProject(event) {
@@ -224,6 +243,8 @@ async function createProject(event) {
     .map(value => value.trim())
     .filter(Boolean);
   if (!projectId || !name || !workspaceRoot || documentRoots.length === 0) return;
+  setProjectSubmitting(true);
+  setProjectFormStatus("設計書を解析し、検索用の RAG 基線を準備しています。この画面を閉じずにお待ちください。");
   try {
     const idempotencyScope = `project:${projectId}`;
     const result = await api("/api/v1/projects", {
@@ -241,7 +262,9 @@ async function createProject(event) {
     clearCommandKey(idempotencyScope);
     showNotice("プロジェクトを初期化しました。");
   } catch (error) {
-    showNotice(error.message, "error");
+    setProjectFormStatus(error.message, "error");
+  } finally {
+    setProjectSubmitting(false);
   }
 }
 

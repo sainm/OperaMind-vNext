@@ -45,7 +45,9 @@ test("Change Task prompt carries identity, test planning, and MCP result tools",
   assert.match(prompt, /task-1/);
   assert.match(prompt, /TestPlan/);
   assert.match(prompt, /TestDataPlan/);
-  assert.match(prompt, /設計書を変更/);
+  assert.match(prompt, /canonical_document facts/);
+  assert.match(prompt, /document_edits/);
+  assert.match(prompt, /OperaMind が限定セルだけ更新/);
   assert.match(prompt, /Spring Boot 1\.5 \/ Thymeleaf \/ Gradle Wrapper/);
   assert.match(prompt, /Framework を更新しない/);
   assert.match(prompt, /\.\/gradlew classes testClasses --no-daemon/);

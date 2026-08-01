@@ -119,10 +119,17 @@ class EditPacketService:
             raise ValueError(
                 f"Edit Packet add paths already exist in the bound Revision: {existing_add_paths}"
             )
+        # A Graph-validated test_file_ref may intentionally describe the first
+        # test added to a repository.  Approval exposes this separately through
+        # the add_test action, so it must not be treated as an absent existing
+        # file.  Existing test refs remain revision-bound as before.
+        planned_test_add_paths = set(test_files) - evidence.tracked_paths
         missing_tracked = sorted(
             path
             for path in all_paths
-            if path not in evidence.tracked_paths and path not in add_paths
+            if path not in evidence.tracked_paths
+            and path not in add_paths
+            and path not in planned_test_add_paths
         )
         if missing_tracked:
             raise ValueError(

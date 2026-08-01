@@ -95,6 +95,38 @@ def test_document_diff_service_returns_valid_change_envelope(tmp_path: Path) -> 
     contracts.validate_artifact(changes[0])
 
 
+def test_document_snapshot_namespace_avoids_cross_document_stable_key_conflicts(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "02_画面設計書_経費一覧.xlsx"
+    write_screen_design(path, "申請中")
+    service = DocumentDiffService(
+        extractors=DocumentSignalExtractorRegistry.default(),
+        contracts=ContractCatalog.load(ROOT / "contracts"),
+    )
+
+    first = service.build_snapshot(
+        path=path,
+        snapshot_id="snapshot-shared",
+        fact_type="screen_element",
+        convention=load_screen_convention(),
+        stable_key_namespace="document-first",
+    )
+    second = service.build_snapshot(
+        path=path,
+        snapshot_id="snapshot-shared",
+        fact_type="screen_element",
+        convention=load_screen_convention(),
+        stable_key_namespace="document-second",
+    )
+
+    first_fact = first.snapshot.facts[0]
+    second_fact = second.snapshot.facts[0]
+    assert first_fact.fact.stable_key.startswith("screen_element:document-first/")
+    assert second_fact.fact.stable_key.startswith("screen_element:document-second/")
+    assert first_fact.fact_ref != second_fact.fact_ref
+
+
 def test_document_diff_maps_multiple_sheet_variants_into_one_snapshot(
     tmp_path: Path,
 ) -> None:

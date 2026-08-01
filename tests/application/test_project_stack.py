@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -154,6 +155,58 @@ def test_bootstrap_leaves_unrecognized_project_unchanged(tmp_path: Path) -> None
     assert result.active_bindings == ()
     assert repository.versions == {}
     assert repository.activation_calls == []
+
+
+def test_bootstrap_upgrades_only_an_older_binding_of_the_same_builtin_profile(
+    tmp_path: Path,
+) -> None:
+    _write_supported_project(tmp_path)
+    repository = _ProfileRepository()
+    profile_value: object = json.loads(
+        (ROOT / "profiles/springboot15-thymeleaf-gradle-code-framework-profile.example.json")
+        .read_text(encoding="utf-8")
+    )
+    assert isinstance(profile_value, dict)
+    old_profile: dict[str, Any] = {
+        **profile_value,
+        "profile_version": "1.0.0",
+    }
+    old_profile["anchor_extractors"] = [
+        value
+        for value in old_profile["anchor_extractors"]
+        if value != "javascript_symbol"
+    ]
+    repository.bindings[("project-1", "code-framework:repository-1")] = (
+        ActiveProfileBinding(
+            project_id="project-1",
+            binding_key="code-framework:repository-1",
+            profile_version_id="springboot15-thymeleaf-gradle-code-framework-1.0.0",
+            activated_by="automation:operamind",
+            activated_at=datetime.now(UTC),
+            profile=old_profile,
+        )
+    )
+
+    result = ProjectProfileBootstrapper(
+        profiles=ProfileCatalog.load(ROOT / "profiles"),
+        repository=repository,
+    ).ensure(
+        project_id="project-1",
+        repository_id="repository-1",
+        workspace_root=tmp_path,
+    )
+
+    code_binding = next(
+        binding
+        for binding in result.active_bindings
+        if binding.binding_key == "code-framework:repository-1"
+    )
+    assert code_binding.profile["profile_version"] == "1.0.1"
+    assert "javascript_symbol" in code_binding.profile["anchor_extractors"]
+    assert result.activated_binding_keys == (
+        "code-framework:repository-1",
+        "command-execution:repository-1",
+    )
 
 
 def test_gradle_wrapper_detection_accepts_windows_batch_wrapper(tmp_path: Path) -> None:

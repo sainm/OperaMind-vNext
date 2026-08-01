@@ -14,6 +14,12 @@ import urllib.request
 import webbrowser
 from collections.abc import Sequence
 from contextlib import suppress
+from importlib.metadata import (
+    PackageNotFoundError,
+)
+from importlib.metadata import (
+    version as distribution_version,
+)
 from pathlib import Path
 
 from operamind.commands import mcp_server, web
@@ -87,6 +93,21 @@ def _report_error(message: str) -> None:
             )
 
 
+def _verify_packaged_document_runtime() -> None:
+    """Require extractor provenance metadata in the distributable runtime."""
+
+    missing: list[str] = []
+    for distribution in ("openpyxl", "python-docx"):
+        try:
+            distribution_version(distribution)
+        except PackageNotFoundError:
+            missing.append(distribution)
+    if missing:
+        raise ValueError(
+            "Document extractor package metadata is missing: " + ", ".join(missing)
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     source_root = (args.root or source_resource_root()).expanduser().resolve()
@@ -94,6 +115,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         runtime_root = prepare_runtime_root(source_root, paths)
         if args.package_smoke_test:
+            _verify_packaged_document_runtime()
             return 0
         candidates = []
         if args.env_file is not None:

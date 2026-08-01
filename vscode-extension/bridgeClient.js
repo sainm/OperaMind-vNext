@@ -186,7 +186,7 @@ function buildCopilotPrompt(taskView, workspaceRoot) {
     ...targetLines,
     "最初に operaMind MCP の copilot_get_coding_task を task ID と Workspace で呼び出してください。",
     "document_discovery が blocked の場合は編集せず、その blocking_reason を報告してください。",
-    "設計書段階では Canonical RAG 候補で特定した設計書を変更し、output_stage=document_change と document_ids を copilot_record_change_outputs に記録してください。",
+    "設計書段階では Canonical RAG 候補の canonical_document facts から変更対象の stable_key、field、new_value を決め、output_stage=document_change、document_ids、document_edits を copilot_record_change_outputs に渡してください。XLSX 原本は OperaMind が限定セルだけ更新するため、コード Workspace 内でファイルを探したり shell で編集したりしないでください。",
     "次にコードを読み取り専用で調査し、Graph で確認できる code_scope を output_stage=code_scope として記録してください。",
     "next_context の execution_scope.bound が true になった後だけ、editable/test 範囲内でコードとテストを変更してください。",
     "コード変更後、まず copilot_validate_task_diff を実行してください。",
