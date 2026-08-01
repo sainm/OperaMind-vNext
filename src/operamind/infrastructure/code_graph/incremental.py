@@ -21,6 +21,7 @@ from operamind.infrastructure.code_graph.java import (
     code_file_id,
 )
 from operamind.infrastructure.code_graph.scanner import (
+    _LEXICAL_CODE_LANGUAGES,
     _REQUIRED_EXTRACTOR_BY_LANGUAGE,
     _SEMANTIC_CODE_LANGUAGES,
     _SUPPORTED_EXTRACTORS,
@@ -309,6 +310,7 @@ class IncrementalCodeGraphScanner:
             for file in file_artifacts
             if file["role"] in {"production", "test"}
             and file["language"] not in _SEMANTIC_CODE_LANGUAGES
+            and file["language"] not in _LEXICAL_CODE_LANGUAGES
         )
         markers = _framework_markers(
             profile=profile,

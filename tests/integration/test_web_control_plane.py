@@ -15,6 +15,7 @@ from operamind.application.web_control_plane import (
 from operamind.contracts import ContractCatalog
 from operamind.infrastructure.postgres import (
     ArtifactRepository,
+    ChangeAutomationRepository,
     MigrationCatalog,
     MigrationRunner,
     OrchestrationTaskRepository,
@@ -222,7 +223,7 @@ def test_change_request_auto_binds_detected_springboot15_runtime_profiles(
 
 
 @pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
-def test_change_request_diff_and_automatic_review_are_canonical_and_idempotent() -> None:
+def test_change_request_diff_waits_for_shared_human_confirmation() -> None:
     assert DATABASE_URL is not None
     suffix = uuid4().hex
     project_id = f"web-project-{suffix}"
@@ -274,26 +275,57 @@ def test_change_request_diff_and_automatic_review_are_canonical_and_idempotent()
         claimed_review_task = OrchestrationTaskRepository(connection).claim_next(
             executor_kind="human",
             executor_id="integration-reviewer",
-            capabilities=("document_review",),
+            capabilities=("requirement_review",),
             project_id=project_id,
         )
-        assert claimed_review_task is None
+        assert claimed_review_task is not None
         stored = web_repository.get_change_request(request_id)
         resumed_automation = automation["run"]
+        automation_repository = ChangeAutomationRepository(connection)
+        run_id = str(resumed_automation["automation_run_id"])
+        recorded = automation_repository.record_confirmation(
+            confirmation_id=f"confirmation-{suffix}",
+            run_id=run_id,
+            checkpoint="requirement",
+            subject_digest="a" * 64,
+            decision="confirmed",
+            surface="web",
+            actor="integration-reviewer",
+            note=None,
+        )
+        replayed = automation_repository.record_confirmation(
+            confirmation_id=f"confirmation-{suffix}",
+            run_id=run_id,
+            checkpoint="requirement",
+            subject_digest="a" * 64,
+            decision="confirmed",
+            surface="web",
+            actor="integration-reviewer",
+            note=None,
+        )
 
         assert first["created"] is True
         assert replay["created"] is False
         assert diff["total"] == 1
         assert automation["created"] is True
         assert automation_replay["created"] is False
-        assert automation["run"]["current_stage"] == "impact_analysis"
+        assert automation["run"]["current_stage"] == "requirement_confirmation"
         assert isinstance(resumed_automation, dict)
-        assert resumed_automation["current_stage"] == "impact_analysis"
-        assert resumed_automation["current_task"]["action"] == "prepare_canonical_analysis"
-        assert len(resumed_automation["events"]) == 2
+        assert resumed_automation["current_stage"] == "requirement_confirmation"
+        assert resumed_automation["current_task"]["action"] == "confirm_requirement"
+        assert len(resumed_automation["events"]) == 1
         assert diff["changes"][0]["summary"] == "费用状态筛选增加差戻し选项"
-        assert stored["document_review"]["status"] == "confirmed"
-        assert stored["document_review"]["actor"] == "automation:operamind"
+        assert stored["document_review"]["status"] == "pending"
+        assert recorded["created"] is True
+        assert replayed["created"] is False
+        assert automation_repository.current_confirmations(
+            run_id=run_id,
+            subject_digests={"requirement": "a" * 64},
+        )["requirement"]["surface"] == "web"
+        assert automation_repository.current_confirmations(
+            run_id=run_id,
+            subject_digests={"requirement": "b" * 64},
+        ) == {}
         assert first["copilot_task"] is None
         assert first["task_blocker"]
         connection.rollback()

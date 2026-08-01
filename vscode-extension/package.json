@@ -43,6 +43,14 @@
         "title": "OperaMind: 変更タスクを確認"
       },
       {
+        "command": "operamind.confirmCurrentCheckpoint",
+        "title": "OperaMind: 現在の工程を確認"
+      },
+      {
+        "command": "operamind.rejectCurrentCheckpoint",
+        "title": "OperaMind: 現在の工程を差戻し"
+      },
+      {
         "command": "operamind.configureBridgeToken",
         "title": "OperaMind: Bridge Token を復旧設定"
       },

@@ -89,6 +89,7 @@ class CodeGraphScanner:
                     for file in files
                     if file.role in {"production", "test"}
                     and file.language not in _SEMANTIC_CODE_LANGUAGES
+                    and file.language not in _LEXICAL_CODE_LANGUAGES
                 }
             )
         )
@@ -269,6 +270,7 @@ _REQUIRED_EXTRACTOR_BY_LANGUAGE = {
 _SEMANTIC_CODE_LANGUAGES = frozenset(
     {"java", "properties", "sql", "xml", *SEMANTIC_EXTRACTOR_BY_LANGUAGE}
 )
+_LEXICAL_CODE_LANGUAGES = frozenset({"css", "gradle"})
 _SQL_TABLE = re.compile(
     r"\b(?P<operation>CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|INSERT\s+INTO|UPDATE|FROM|JOIN)\s+"
     r"(?P<table>[A-Za-z_][A-Za-z0-9_.$\"]*)",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -49,6 +50,7 @@ from operamind.infrastructure.postgres import (
     ChangeAutomationRunRecord,
     ChangeClosureRepository,
     ChangeOrchestrationRepository,
+    CodeGraphSnapshotRepository,
     ImpactRepository,
     OrchestrationTaskRepository,
     PersistenceConflictError,
@@ -119,6 +121,7 @@ class WebControlPlaneService:
         self._repository = WebControlPlaneRepository(connection, self._contracts)
         self._web_commands = WebCommandRepository(connection)
         self._artifacts = ArtifactRepository(connection, self._contracts)
+        self._code_graphs = CodeGraphSnapshotRepository(connection, self._contracts)
         self._impacts = ImpactRepository(connection, self._contracts)
         self._grant_service = ApprovalGrantService(
             connection=connection,
@@ -386,6 +389,11 @@ class WebControlPlaneService:
                 project_id=str(request["project_id"]),
                 case_id=str(case_id),
             )
+            impact_artifact = workspace["impact_artifact"]
+            if isinstance(impact_artifact, dict):
+                graph_id = impact_artifact.get("code_graph_snapshot_id")
+                if isinstance(graph_id, str) and graph_id:
+                    workspace["code_graph_artifact"] = self._code_graphs.get(graph_id)
         automation = self._automation_runs.latest_for_request(request_id)
         task = CopilotCodingTaskService(
             connection=self._connection,
@@ -533,35 +541,107 @@ class WebControlPlaneService:
             run_id=record.automation_run_id, actor=actor, created=record.created
         )
 
+    def decide_change_checkpoint(
+        self,
+        *,
+        request_id: str,
+        checkpoint: str,
+        decision: str,
+        surface: str,
+        actor: str,
+        idempotency_key: str,
+        note: str | None = None,
+    ) -> dict[str, object]:
+        """Record one shared human decision and resume deterministic work."""
+        action_checkpoints = {
+            "confirm_requirement": "requirement",
+            "confirm_rag_documents": "rag_documents",
+            "confirm_document_diff": "document_diff",
+            "confirm_code_scope": "code_scope",
+            "confirm_test_plan": "test_plan",
+            "confirm_ui_test": "ui_test",
+            "confirm_final_report": "final_report",
+        }
+        if decision not in {"confirmed", "rejected"}:
+            raise ValueError("確認結果は confirmed または rejected を指定してください")
+        run_view = self._automation_runs.latest_for_request(request_id)
+        if run_view is None:
+            raise ValueError("変更フローが開始されていません")
+        run_id = str(run_view["automation_run_id"])
+        record = self._automation_runs.get(run_id)
+        request, diff, workspace, bundle, execution = self._automation_inputs(record)
+        current, _discovery, subjects, _confirmations = self._automation_decision(
+            record=record,
+            request=request,
+            diff=diff,
+            workspace=workspace,
+            bundle=bundle,
+            execution=execution,
+        )
+        expected_checkpoint = action_checkpoints.get(str(current.next_action))
+        if checkpoint != expected_checkpoint:
+            raise ValueError(
+                "現在の確認点と一致しません: "
+                f"expected={expected_checkpoint or 'none'}, actual={checkpoint}"
+            )
+        subject_digest = subjects.get(checkpoint)
+        if subject_digest is None:
+            raise ValueError("現在の証跡から確認対象を作成できません")
+        confirmation_id = _web_id(
+            "change-checkpoint-confirmation",
+            run_id,
+            checkpoint,
+            subject_digest,
+            decision,
+            idempotency_key,
+        )
+        if decision == "confirmed" and checkpoint == "document_diff":
+            self._confirm_document_diff(
+                record=record,
+                confirmation_id=confirmation_id,
+                actor=actor,
+                note=note,
+            )
+        if decision == "confirmed" and checkpoint == "code_scope":
+            if workspace is None:
+                raise RuntimeError("コード範囲確認の Case workspace が失われました")
+            self._confirm_impact(
+                record=record,
+                confirmation_id=confirmation_id,
+                actor=actor,
+                workspace=workspace,
+                note=note,
+            )
+        confirmation = self._automation_runs.record_confirmation(
+            confirmation_id=confirmation_id,
+            run_id=run_id,
+            checkpoint=checkpoint,
+            subject_digest=subject_digest,
+            decision=decision,
+            surface=surface,
+            actor=actor,
+            note=note,
+        )
+        advanced = self._advance_change_automation(
+            run_id=run_id,
+            actor=actor,
+            created=False,
+        )
+        return {"confirmation": confirmation, **advanced}
+
     def _advance_change_automation(
         self, *, run_id: str, actor: str, created: bool
     ) -> dict[str, object]:
         record = self._automation_runs.get(run_id)
         request, diff, workspace, bundle, execution = self._automation_inputs(record)
-        decision = decide_change_automation(
+        decision, _discovery, _subjects, _confirmations = self._automation_decision(
+            record=record,
             request=request,
             diff=diff,
             workspace=workspace,
-            has_orchestration=bundle is not None,
+            bundle=bundle,
             execution=execution,
         )
-        for _ in range(2):
-            if decision.next_action == "auto_confirm_document_diff":
-                self._auto_confirm_document_diff(record=record, run_id=run_id)
-            elif decision.next_action == "auto_confirm_impact":
-                if workspace is None:
-                    raise RuntimeError("Automatic impact confirmation lost its Case workspace")
-                self._auto_confirm_impact(record=record, run_id=run_id, workspace=workspace)
-            else:
-                break
-            request, diff, workspace, bundle, execution = self._automation_inputs(record)
-            decision = decide_change_automation(
-                request=request,
-                diff=diff,
-                workspace=workspace,
-                has_orchestration=bundle is not None,
-                execution=execution,
-            )
         if decision.next_action == "provision_execution_scope":
             decision = self._provision_execution_scope_or_block(
                 record=record,
@@ -570,11 +650,12 @@ class WebControlPlaneService:
             )
             if decision.status != "blocked":
                 request, diff, workspace, bundle, execution = self._automation_inputs(record)
-                decision = decide_change_automation(
+                decision, _discovery, _subjects, _confirmations = self._automation_decision(
+                    record=record,
                     request=request,
                     diff=diff,
                     workspace=workspace,
-                    has_orchestration=bundle is not None,
+                    bundle=bundle,
                     execution=execution,
                 )
         if decision.next_action == "start_test_data_execution" and bundle is not None:
@@ -671,11 +752,12 @@ class WebControlPlaneService:
                 )
             else:
                 bundle = self._orchestrations.latest_bundle(record.change_request_id)
-                decision = decide_change_automation(
+                decision, _discovery, _subjects, _confirmations = self._automation_decision(
+                    record=record,
                     request=request,
                     diff=diff,
                     workspace=workspace,
-                    has_orchestration=True,
+                    bundle=bundle,
                     execution=self.execution_management(record.change_request_id),
                 )
                 orchestration = cast_dict(result.orchestration)
@@ -708,11 +790,12 @@ class WebControlPlaneService:
                         request, diff, workspace, bundle, execution = self._automation_inputs(
                             record
                         )
-                        decision = decide_change_automation(
+                        decision, _discovery, _subjects, _confirmations = self._automation_decision(
+                            record=record,
                             request=request,
                             diff=diff,
                             workspace=workspace,
-                            has_orchestration=bundle is not None,
+                            bundle=bundle,
                             execution=execution,
                         )
             finally:
@@ -988,41 +1071,112 @@ class WebControlPlaneService:
         )
         return request, diff, workspace, bundle, execution
 
-    def _auto_confirm_document_diff(
-        self, *, record: ChangeAutomationRunRecord, run_id: str
+    def _automation_decision(
+        self,
+        *,
+        record: ChangeAutomationRunRecord,
+        request: dict[str, object],
+        diff: dict[str, object],
+        workspace: dict[str, object] | None,
+        bundle: dict[str, object] | None,
+        execution: dict[str, object] | None,
+    ) -> tuple[
+        ChangeAutomationDecision,
+        dict[str, object],
+        dict[str, str],
+        dict[str, dict[str, object]],
+    ]:
+        requirement_subjects = _checkpoint_subjects(
+            request=request,
+            diff=diff,
+            workspace=workspace,
+            bundle=bundle,
+            execution=execution,
+            rag_discovery=None,
+        )
+        current = self._automation_runs.current_confirmations(
+            run_id=record.automation_run_id,
+            subject_digests=requirement_subjects,
+        )
+        requirement_confirmation = current.get("requirement")
+        requirement_confirmed = (
+            isinstance(requirement_confirmation, dict)
+            and requirement_confirmation.get("decision") == "confirmed"
+        )
+        discovery = (
+            CopilotCodingTaskService(
+                connection=self._connection,
+                repository_root=self._root,
+            ).document_discovery_for_request(record.change_request_id)
+            if requirement_confirmed
+            else {
+                "status": "pending",
+                "candidates": [],
+                "blocking_reason": None,
+            }
+        )
+        subjects = _checkpoint_subjects(
+            request=request,
+            diff=diff,
+            workspace=workspace,
+            bundle=bundle,
+            execution=execution,
+            rag_discovery=discovery,
+        )
+        current = self._automation_runs.current_confirmations(
+            run_id=record.automation_run_id,
+            subject_digests=subjects,
+        )
+        decisions = {
+            checkpoint: str(confirmation["decision"])
+            for checkpoint, confirmation in current.items()
+        }
+        return (
+            decide_change_automation(
+                request=request,
+                diff=diff,
+                workspace=workspace,
+                has_orchestration=bundle is not None,
+                execution=execution,
+                confirmations=decisions,
+                rag_discovery=discovery,
+            ),
+            discovery,
+            subjects,
+            current,
+        )
+
+    def _confirm_document_diff(
+        self,
+        *,
+        record: ChangeAutomationRunRecord,
+        confirmation_id: str,
+        actor: str,
+        note: str | None,
     ) -> None:
-        automatic_actor = "automation:operamind"
         self._repository.record_document_review(
             event_id=_web_id(
                 "document-review",
                 record.project_id,
                 record.change_request_id,
-                f"automatic:{run_id}",
+                confirmation_id,
             ),
             request_id=record.change_request_id,
             project_id=record.project_id,
             decision="confirmed",
-            actor=automatic_actor,
-            note="高信頼かつ確認事項のない差分を自動確認",
-        )
-        self._automation_runs.transition(
-            run_id=run_id,
-            actor=automatic_actor,
-            stage="document_confirmation",
-            status="completed",
-            next_action=None,
-            blocking_reason=None,
-            message="確定的な設計書差分を自動確認しました。",
+            actor=actor,
+            note=note or "統一確認フローで設計書差分を確認",
         )
 
-    def _auto_confirm_impact(
+    def _confirm_impact(
         self,
         *,
         record: ChangeAutomationRunRecord,
-        run_id: str,
+        confirmation_id: str,
+        actor: str,
         workspace: dict[str, object],
+        note: str | None,
     ) -> None:
-        automatic_actor = "automation:operamind"
         report = cast_dict(workspace["impact_artifact"])
         report_id = str(report["impact_report_id"])
         case_id = str(workspace["analysis_case_id"])
@@ -1035,29 +1189,19 @@ class WebControlPlaneService:
                 record.project_id,
                 case_id,
                 report_id,
-                f"automatic:{run_id}",
+                confirmation_id,
             ),
             "impact_report_id": report_id,
-            "confirmed_by": automatic_actor,
+            "confirmed_by": actor,
             "approved_item_ids": item_ids,
             "rejected_item_ids": [],
-            "user_note": "未知項目のない確定的な影響範囲を自動確認",
+            "user_note": note or "統一確認フローでコード影響範囲を確認",
             "confirmed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         }
         self._impacts.confirm(
             project_id=record.project_id,
             analysis_case_id=case_id,
             artifact=artifact,
-        )
-        self._automation_runs.transition(
-            run_id=run_id,
-            actor=automatic_actor,
-            stage="impact_confirmation",
-            status="completed",
-            next_action=None,
-            blocking_reason=None,
-            message="確定的な影響範囲を自動確認しました。",
-            artifact_refs=(str(artifact["confirmation_id"]),),
         )
 
     def _sync_orchestration_task(
@@ -1097,6 +1241,18 @@ class WebControlPlaneService:
         run = self._automation_runs.latest_for_request(request_id)
         return self._decorate_automation(run) if run is not None else None
 
+    def next_change_confirmation(self, *, workspace_root: Path) -> dict[str, object]:
+        """Return the same pending confirmation shown by Web for one Workspace."""
+        resolved = _resolved_local_directory(workspace_root, field_name="コード Workspace")
+        project_id = self._repository.project_id_for_workspace(str(resolved))
+        if project_id is None:
+            return {"confirmation": None}
+        run = self._automation_runs.latest_confirmation_for_project(project_id)
+        if run is None:
+            return {"confirmation": None}
+        decorated = self._decorate_automation(run)
+        return {"confirmation": decorated.get("pending_confirmation")}
+
     def _decorate_automation(self, run: dict[str, object]) -> dict[str, object]:
         value = dict(run)
         value["current_stage_label"] = STAGE_LABELS.get(
@@ -1132,6 +1288,48 @@ class WebControlPlaneService:
                 in {"ready", "claimed", "running", "submitted", "blocked", "failed"}
             ),
             None,
+        )
+        record = self._automation_runs.get(str(run["automation_run_id"]))
+        request, diff, workspace, bundle, execution = self._automation_inputs(record)
+        decision, discovery, subjects, confirmations = self._automation_decision(
+            record=record,
+            request=request,
+            diff=diff,
+            workspace=workspace,
+            bundle=bundle,
+            execution=execution,
+        )
+        value["confirmations"] = [confirmations[key] for key in confirmations]
+        action_checkpoints = {
+            "confirm_requirement": "requirement",
+            "confirm_rag_documents": "rag_documents",
+            "confirm_document_diff": "document_diff",
+            "confirm_code_scope": "code_scope",
+            "confirm_test_plan": "test_plan",
+            "confirm_ui_test": "ui_test",
+            "confirm_final_report": "final_report",
+        }
+        checkpoint = action_checkpoints.get(str(decision.next_action))
+        value["pending_confirmation"] = (
+            {
+                "change_request_id": record.change_request_id,
+                "automation_run_id": record.automation_run_id,
+                "checkpoint": checkpoint,
+                "stage": decision.stage,
+                "stage_label": STAGE_LABELS.get(decision.stage, decision.stage),
+                "message": decision.message,
+                "subject_digest": subjects[checkpoint],
+                "details": _confirmation_details(
+                    checkpoint=checkpoint,
+                    request=request,
+                    diff=diff,
+                    workspace=workspace,
+                    execution=execution,
+                    rag_discovery=discovery,
+                ),
+            }
+            if checkpoint is not None and checkpoint in subjects
+            else None
         )
         return value
 
@@ -1530,6 +1728,129 @@ def _resolved_local_directory(value: Path, *, field_name: str) -> Path:
     if not resolved.is_dir():
         raise ValueError(f"{field_name}にはフォルダーを指定してください: {value}")
     return resolved
+
+
+def _checkpoint_subjects(
+    *,
+    request: dict[str, object],
+    diff: dict[str, object],
+    workspace: dict[str, object] | None,
+    bundle: dict[str, object] | None,
+    execution: dict[str, object] | None,
+    rag_discovery: dict[str, object] | None,
+) -> dict[str, str]:
+    """Bind every confirmation to the exact evidence visible at that step."""
+    subjects: dict[str, object] = {"requirement": cast_dict(request["artifact"])}
+    if rag_discovery is not None and rag_discovery.get("status") == "ready":
+        subjects["rag_documents"] = rag_discovery
+    diff_total = diff.get("total")
+    if isinstance(diff_total, int) and diff_total > 0:
+        subjects["document_diff"] = {
+            "change_request_id": request.get("change_request_id"),
+            "changes": diff.get("changes", []),
+        }
+    impact_value = workspace.get("impact_artifact") if workspace is not None else None
+    impact = impact_value if isinstance(impact_value, dict) else {}
+    if impact.get("impact_report_id") is not None:
+        subjects["code_scope"] = impact
+    management = execution or {}
+    test_plan = management.get("test_plan")
+    if bundle is not None and isinstance(test_plan, dict) and test_plan.get("status") == "ready":
+        subjects["test_plan"] = {
+            "test_plan": test_plan,
+            "test_data_plan": management.get("test_data_plan"),
+            "business_coverage": management.get("business_coverage"),
+            "changed_line_coverage": management.get("changed_line_coverage"),
+        }
+    if bundle is not None and isinstance(test_plan, dict) and test_plan.get("status") == "ready":
+        subjects["ui_test"] = {
+            "test_data_plan": management.get("test_data_plan"),
+            "test_plan": test_plan,
+        }
+    closure = management.get("change_closure")
+    if isinstance(closure, dict) and closure.get("status") == "passed":
+        subjects["final_report"] = {
+            "change_closure": closure,
+            "business_coverage": management.get("business_coverage"),
+            "changed_line_coverage": management.get("changed_line_coverage"),
+            "screenshots": management.get("screenshots", []),
+        }
+    return {
+        checkpoint: hashlib.sha256(
+            json.dumps(
+                subject,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode()
+        ).hexdigest()
+        for checkpoint, subject in subjects.items()
+    }
+
+
+def _confirmation_details(
+    *,
+    checkpoint: str,
+    request: dict[str, object],
+    diff: dict[str, object],
+    workspace: dict[str, object] | None,
+    execution: dict[str, object] | None,
+    rag_discovery: dict[str, object],
+) -> dict[str, object]:
+    if checkpoint == "requirement":
+        artifact = cast_dict(request["artifact"])
+        return {
+            "requirement_text": artifact.get("requirement_text"),
+            "business_rules": artifact.get("business_rules", []),
+            "ambiguities": artifact.get("ambiguities", []),
+        }
+    if checkpoint == "rag_documents":
+        return rag_discovery
+    if checkpoint == "document_diff":
+        return {"changes": diff.get("changes", []), "total": diff.get("total", 0)}
+    if checkpoint == "code_scope":
+        impact = cast_dict(workspace.get("impact_artifact")) if workspace is not None else {}
+        return {
+            "ui_impact_status": impact.get("ui_impact_status"),
+            "blocking_unknowns": impact.get("blocking_unknowns", []),
+            "items": [
+                {
+                    key: item[key]
+                    for key in (
+                        "target_path",
+                        "target_symbols",
+                        "recommended_action",
+                        "test_file_refs",
+                        "rationale",
+                        "unknowns",
+                    )
+                    if key in item
+                }
+                for item in cast_list(impact.get("items", []))
+            ],
+        }
+    management = execution or {}
+    if checkpoint == "test_plan":
+        return {
+            "test_plan": management.get("test_plan"),
+            "test_data_plan": management.get("test_data_plan"),
+            "business_coverage": management.get("business_coverage"),
+            "changed_line_coverage": management.get("changed_line_coverage"),
+        }
+    if checkpoint == "ui_test":
+        return {
+            "test_data_plan": management.get("test_data_plan"),
+            "test_plan": management.get("test_plan"),
+        }
+    if checkpoint == "final_report":
+        return {
+            "change_closure": management.get("change_closure"),
+            "business_coverage": management.get("business_coverage"),
+            "changed_line_coverage": management.get("changed_line_coverage"),
+            "screenshots": management.get("screenshots", []),
+        }
+    raise ValueError(f"Unknown change confirmation checkpoint: {checkpoint}")
 
 
 def _web_id(prefix: str, *values: str) -> str:

@@ -346,6 +346,8 @@ def _looks_like_test_path(value: str) -> bool:
 
 
 _LANGUAGE_SUFFIXES = {
+    "css": {".css"},
+    "gradle": {".gradle"},
     "java": {".java"},
     "javascript": {".js", ".jsx", ".mjs", ".cjs"},
     "typescript": {".ts", ".tsx", ".mts", ".cts"},

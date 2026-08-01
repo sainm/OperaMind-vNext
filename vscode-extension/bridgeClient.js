@@ -111,6 +111,32 @@ class BridgeClient {
     );
   }
 
+  nextConfirmation(workspaceRoot) {
+    const query = new URLSearchParams({workspace_root: workspaceRoot});
+    return this.transport(
+      this.baseUrl,
+      this.token,
+      "GET",
+      `api/v1/local-bridge/confirmations/next?${query}`,
+    );
+  }
+
+  decideConfirmation(requestId, checkpoint, decision, actor, idempotencyKey, note) {
+    return this.transport(
+      this.baseUrl,
+      this.token,
+      "POST",
+      `api/v1/local-bridge/change-requests/${encodeURIComponent(requestId)}` +
+        `/confirmations/${encodeURIComponent(checkpoint)}`,
+      {
+        decision,
+        actor,
+        idempotency_key: idempotencyKey,
+        ...(note ? {note} : {}),
+      },
+    );
+  }
+
   acceptTask(codingTaskId, workspaceRoot, consumerId, acceptedBy) {
     return this.transport(
       this.baseUrl,

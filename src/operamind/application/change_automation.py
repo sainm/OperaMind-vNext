@@ -17,17 +17,21 @@ class ChangeAutomationDecision:
 
 STAGE_LABELS = {
     "requirement_confirmation": "変更要件の確認",
+    "rag_document_confirmation": "RAG 対象設計書の確認",
     "document_generation": "設計書ドラフト生成",
     "document_revision": "設計書の再修正",
     "document_confirmation": "設計書差分の確認",
     "impact_analysis": "影響分析",
-    "impact_confirmation": "影響範囲の確認",
-    "planning": "コード・テスト編成",
-    "code_change": "VS Code GitHub Copilot によるコード変更",
+    "impact_confirmation": "コード影響範囲の確認",
     "execution_approval": "実行範囲の自動準備",
+    "code_change": "VS Code GitHub Copilot によるコード変更",
+    "planning": "コード・テスト編成",
+    "test_plan_confirmation": "テスト計画の確認",
+    "ui_test_confirmation": "UI テスト実行の確認",
     "test_data_execution": "テストデータ生成・検証",
     "ui_verification": "UI テスト・結果検証",
     "closure": "変更クローズ判定",
+    "final_report_confirmation": "最終レポートの確認",
     "completed": "完了",
 }
 
@@ -39,14 +43,41 @@ def decide_change_automation(
     workspace: dict[str, object] | None,
     has_orchestration: bool,
     execution: dict[str, object] | None,
+    confirmations: dict[str, str] | None = None,
+    rag_discovery: dict[str, object] | None = None,
 ) -> ChangeAutomationDecision:
     """Return the next trusted checkpoint without inventing missing evidence."""
-    artifact = _dict(request.get("artifact"))
-    if artifact.get("ambiguity_status") != "clear" or artifact.get("confirmation_required") is True:
+    confirmations = confirmations or {}
+    requirement = _confirmation_decision(
+        confirmations,
+        checkpoint="requirement",
+        stage="requirement_confirmation",
+        action="confirm_requirement",
+        message="変更要件を確認してください。",
+    )
+    if requirement is not None:
+        return requirement
+    discovery = rag_discovery or {}
+    if discovery.get("status") != "ready":
+        reason = str(
+            discovery.get("blocking_reason")
+            or "Canonical RAG から対象設計書を取得できません。"
+        )
+        return _blocked("rag_document_confirmation", reason)
+    rag_documents = _confirmation_decision(
+        confirmations,
+        checkpoint="rag_documents",
+        stage="rag_document_confirmation",
+        action="confirm_rag_documents",
+        message="RAG が選定した対象設計書と根拠箇所を確認してください。",
+    )
+    if rag_documents is not None:
+        return rag_documents
+    if request.get("analysis_case_id") is None:
         return _waiting(
-            "requirement_confirmation",
-            "confirm_requirement",
-            "変更要件に曖昧さがあります。内容を確認してください。",
+            "document_generation",
+            "prepare_document_with_copilot",
+            "VS Code 上の GitHub Copilot で設計書ドラフトを生成してください。",
         )
     total = diff.get("total")
     if request.get("analysis_case_id") is None or not isinstance(total, int) or total == 0:
@@ -64,19 +95,15 @@ def decide_change_automation(
             "指摘内容に従って設計書を修正し、差分を再生成してください。",
         )
     if review.get("status") != "confirmed":
-        if _document_diff_is_deterministic(diff):
-            return ChangeAutomationDecision(
-                "document_confirmation",
-                "running",
-                "auto_confirm_document_diff",
-                None,
-                "高信頼かつ確認事項のない設計書差分を自動確認します。",
-            )
-        return _waiting(
-            "document_confirmation",
-            "confirm_document_diff",
-            "生成された設計書差分を確認してください。",
+        document_diff = _confirmation_decision(
+            confirmations,
+            checkpoint="document_diff",
+            stage="document_confirmation",
+            action="confirm_document_diff",
+            message="生成された設計書差分を確認してください。",
         )
+        if document_diff is not None:
+            return document_diff
     if workspace is None:
         return _waiting(
             "impact_analysis",
@@ -94,19 +121,15 @@ def decide_change_automation(
         )
     confirmation = _dict(workspace.get("confirmation"))
     if confirmation.get("id") is None or impact.get("status") != "confirmed":
-        if _impact_is_deterministic(_dict(workspace.get("impact_artifact"))):
-            return ChangeAutomationDecision(
-                "impact_confirmation",
-                "running",
-                "auto_confirm_impact",
-                None,
-                "未知項目のない確定的な影響範囲を自動確認します。",
-            )
-        return _waiting(
-            "impact_confirmation",
-            "confirm_impact",
-            "影響項目ごとに承認または却下を選択してください。",
+        code_scope = _confirmation_decision(
+            confirmations,
+            checkpoint="code_scope",
+            stage="impact_confirmation",
+            action="confirm_code_scope",
+            message="変更対象コードとテスト影響範囲を確認してください。",
         )
+        if code_scope is not None:
+            return code_scope
     grant = _dict(workspace.get("approval_grant"))
     if grant.get("id") is None:
         return ChangeAutomationDecision(
@@ -153,6 +176,24 @@ def decide_change_automation(
             ),
         )
     management = execution or {}
+    test_plan = _confirmation_decision(
+        confirmations,
+        checkpoint="test_plan",
+        stage="test_plan_confirmation",
+        action="confirm_test_plan",
+        message="生成された TestPlan、TestDataPlan、業務カバレッジを確認してください。",
+    )
+    if test_plan is not None:
+        return test_plan
+    ui_test = _confirmation_decision(
+        confirmations,
+        checkpoint="ui_test",
+        stage="ui_test_confirmation",
+        action="confirm_ui_test",
+        message="テストデータ生成手順と UI シナリオを確認し、実ブラウザ実行を許可してください。",
+    )
+    if ui_test is not None:
+        return ui_test
     data_result = _dict(management.get("test_data_execution"))
     if not data_result:
         return _waiting(
@@ -174,6 +215,15 @@ def decide_change_automation(
             "実ブラウザで UI シナリオを実行し、スクリーンショット証跡を保存してください。",
         )
     if closure.get("status") == "passed":
+        final_report = _confirmation_decision(
+            confirmations,
+            checkpoint="final_report",
+            stage="final_report_confirmation",
+            action="confirm_final_report",
+            message="最終レポートと証跡を確認してください。",
+        )
+        if final_report is not None:
+            return final_report
         return ChangeAutomationDecision(
             "completed", "completed", None, None, "文書、コード、テスト、UI 検証が完了しました。"
         )
@@ -188,34 +238,21 @@ def _blocked(stage: str, reason: str) -> ChangeAutomationDecision:
     return ChangeAutomationDecision(stage, "blocked", "resolve_blocker", reason, reason)
 
 
+def _confirmation_decision(
+    confirmations: dict[str, str],
+    *,
+    checkpoint: str,
+    stage: str,
+    action: str,
+    message: str,
+) -> ChangeAutomationDecision | None:
+    decision = confirmations.get(checkpoint)
+    if decision == "confirmed":
+        return None
+    if decision == "rejected":
+        return _blocked(stage, f"{message} ユーザーにより差し戻されました。")
+    return _waiting(stage, action, message)
+
+
 def _dict(value: object) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
-
-
-def _document_diff_is_deterministic(diff: dict[str, object]) -> bool:
-    changes = diff.get("changes")
-    return bool(changes) and isinstance(changes, list) and all(
-        isinstance(change, dict)
-        and change.get("confidence") == "high"
-        and change.get("review_status") == "accepted"
-        and not change.get("unknowns")
-        for change in changes
-    )
-
-
-def _impact_is_deterministic(report: dict[str, Any]) -> bool:
-    items = report.get("items")
-    return (
-        report.get("status") == "awaiting_confirmation"
-        and report.get("ui_impact_status") != "unknown"
-        and not report.get("blocking_unknowns")
-        and bool(items)
-        and isinstance(items, list)
-        and all(
-            isinstance(item, dict)
-            and item.get("impact_level") != "unknown"
-            and item.get("requires_confirmation") is False
-            and not item.get("unknowns")
-            for item in items
-        )
-    )

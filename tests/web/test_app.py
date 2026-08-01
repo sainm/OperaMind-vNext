@@ -164,6 +164,20 @@ class FakeService:
         self.calls.append(("revision-confirm", values))
         return {"state": "applied", "flow": self.main_change_flow(str(values["request_id"]))}
 
+    def decide_change_checkpoint(self, **values: object) -> dict[str, object]:
+        self.calls.append(("checkpoint-decision", values))
+        return {"confirmation": values, "created": False, "run": {"status": "waiting"}}
+
+    def next_change_confirmation(self, **values: object) -> dict[str, object]:
+        self.calls.append(("bridge-confirmation-next", values))
+        return {
+            "confirmation": {
+                "change_request_id": "change-1",
+                "checkpoint": "requirement",
+                "subject_digest": "a" * 64,
+            }
+        }
+
     def screenshot_path(self, **values: str) -> Path:
         self.calls.append(("screenshot", values))
         if self.screenshot is None:
@@ -410,15 +424,44 @@ def test_openapi_contains_only_six_stage_web_and_token_protected_bridge_routes()
         "/api/v1/projects",
         "/api/v1/change-requests",
         "/api/v1/change-requests/{request_id}/flow",
+        "/api/v1/change-requests/{request_id}/confirmations/{checkpoint}",
         "/api/v1/change-requests/{request_id}/test-case-revisions",
         ("/api/v1/change-requests/{request_id}/test-case-revisions/{proposal_id}/confirm"),
         "/api/v1/change-requests/{request_id}/screenshots/{evidence_id}",
         "/api/v1/local-bridge/tasks/next",
+        "/api/v1/local-bridge/confirmations/next",
+        "/api/v1/local-bridge/change-requests/{request_id}/confirmations/{checkpoint}",
         "/api/v1/local-bridge/tasks/{coding_task_id}/accept",
         "/api/v1/local-bridge/tasks/{coding_task_id}/resume",
         "/api/v1/local-bridge/tasks/{coding_task_id}/cancel",
         "/api/v1/local-bridge/diagnostics",
     }
+
+
+def test_web_and_vscode_use_the_same_checkpoint_command() -> None:
+    client, fake = client_with_fake(bridge_token="bridge-secret")
+    web = client.post(
+        "/api/v1/change-requests/change-1/confirmations/requirement",
+        headers={
+            "X-OperaMind-Actor": "web-user",
+            "Idempotency-Key": "web-confirm-1",
+        },
+        json={"decision": "confirmed"},
+    )
+    bridge = client.post(
+        "/api/v1/local-bridge/change-requests/change-1/confirmations/requirement",
+        headers={"Authorization": "Bearer bridge-secret"},
+        json={
+            "decision": "confirmed",
+            "actor": "vscode-user",
+            "idempotency_key": "vscode-confirm-1",
+        },
+    )
+
+    assert web.status_code == 200
+    assert bridge.status_code == 200
+    decisions = [value for name, value in fake.calls if name == "checkpoint-decision"]
+    assert [value["surface"] for value in decisions] == ["web", "vscode_copilot"]
 
 
 def test_loopback_bridge_remains_token_protected() -> None:
@@ -474,7 +517,7 @@ def test_single_flow_css_keeps_long_japanese_content_responsive() -> None:
 
     assert "minmax(0, 1fr)" in stylesheet
     assert "overflow-wrap: anywhere" in stylesheet
-    assert "内部の承認、キュー、担当割当は自動処理されます" in page
+    assert "重要工程は利用者が確認し、確認後の内部実行範囲" in page
 
 
 def test_change_request_dialog_guides_submission_without_changing_the_api_flow() -> None:

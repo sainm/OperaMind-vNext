@@ -134,5 +134,5 @@ OPERAMIND_DATABASE_URL='postgresql://...' \
 
 ## 后续任务与有意边界
 
-- Scope 结果到正式 ImpactReport、确定性自动确认、Edit Packet 和内部 Approval Grant 的状态机已经在 P4 实现。Scope Resolver 只生成候选台账，主流程再用当前 Graph、Revision 与 Test Binding 做 fail-closed 验证；具体边界见 [P4 Impact](P4-IMPACT.md)。
+- Scope 结果到正式 ImpactReport、Web／VS Code 共通人工确认、Edit Packet 和内部 Approval Grant 的状态机已经在 P4 实现。Scope Resolver 只生成候选台账，主流程再用当前 Graph、Revision 与 Test Binding 做 fail-closed 验证；具体边界见 [P4 Impact](P4-IMPACT.md)。
 - Struts 1 Adapter 当前只解析静态配置和字面量导航。运行时生成的 Forward、请求参数选择的 DispatchAction 方法、插件自定义 ActionMapping／RequestProcessor 行为和无法唯一确定的多模块前缀继续 unresolved，等待运行时 Route Evidence 或项目专用 Profile 提供证明。

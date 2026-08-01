@@ -86,6 +86,30 @@ def test_stage_details_ignore_unknown_internal_stages() -> None:
     assert "表示してはいけない内部情報" not in html
 
 
+def test_stage_details_render_one_shared_human_confirmation() -> None:
+    stages = [
+        {
+            **_stage("requirement", "変更要件", "waiting"),
+            "details": {
+                "requirement_text": "検索条件を変更する",
+                "confirmation": {
+                    "checkpoint": "requirement",
+                    "stage_label": "変更要件の確認",
+                    "message": "変更要件を確認してください。",
+                    "subject_digest": "a" * 64,
+                },
+            },
+        }
+    ]
+
+    html = _run("stageDetails", stages)
+
+    assert "変更要件の確認" in html
+    assert "確認して進む" in html
+    assert "差し戻す" in html
+    assert 'data-confirm-checkpoint="requirement"' in html
+
+
 def test_stage_details_render_document_scope_and_command_results_as_business_content() -> None:
     stages = [
         {
@@ -134,6 +158,73 @@ def test_stage_details_render_document_scope_and_command_results_as_business_con
     assert "targeted-unit" in html
     assert "exit 0" in html
     assert ">項目<" not in html
+
+
+def test_stage_details_render_clickable_code_graph_and_inline_test_case_editor() -> None:
+    stages = [
+        {
+            **_stage("code_scope", "コード影響範囲", "completed"),
+            "details": {
+                "impact_graph": {
+                    "nodes": [
+                        {
+                            "path": "src/ExpenseService.java",
+                            "role": "production",
+                            "language": "java",
+                            "directly_impacted": True,
+                            "recommended_action": "modify",
+                            "rationale": "状態条件を追加するため",
+                            "symbols": ["search"],
+                            "related_tests": ["test/ExpenseServiceTest.java"],
+                        },
+                        {
+                            "path": "test/ExpenseServiceTest.java",
+                            "role": "test",
+                            "language": "java",
+                            "directly_impacted": False,
+                            "symbols": ["searchReturned"],
+                            "related_tests": [],
+                        },
+                    ],
+                    "edges": [
+                        {
+                            "from_path": "src/ExpenseService.java",
+                            "to_path": "test/ExpenseServiceTest.java",
+                            "relation": "related_test",
+                            "evidence_source": "impact_report",
+                        }
+                    ],
+                    "visible_file_count": 2,
+                    "relation_count": 1,
+                    "total_file_count": 2,
+                    "truncated": False,
+                }
+            },
+        },
+        {
+            **_stage("compile_test", "コード変更・コンパイル・テスト", "completed"),
+            "details": {
+                "test_cases": [
+                    {
+                        "title": "差戻し状態で検索する",
+                        "steps": ["一覧を開く", "差戻しを選択して検索する"],
+                        "expected_results": ["対象申請が表示される"],
+                    }
+                ]
+            },
+        },
+    ]
+
+    html = _run("stageDetails", stages)
+
+    assert "Code Graph に基づく影響関係" in html
+    assert "<svg" in html
+    assert 'data-impact-node-index="0"' in html
+    assert "状態条件を追加するため" in html
+    assert "search" in html
+    assert "関連テスト" in html
+    assert 'data-open-test-case-revision' in html
+    assert "自然言語で修正" in html
 
 
 def test_stage_details_escape_user_content_and_render_blockers() -> None:

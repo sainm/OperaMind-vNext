@@ -15,18 +15,23 @@ from operamind.application.orchestration_task import (
 
 EXPECTED_CHANGE_AUTOMATION_ACTIONS = {
     "confirm_requirement",
+    "confirm_rag_documents",
     "prepare_document_with_copilot",
     "revise_document_with_copilot",
     "confirm_document_diff",
     "prepare_canonical_analysis",
     "confirm_impact",
+    "confirm_code_scope",
     "generate_orchestration",
+    "confirm_test_plan",
     "provision_execution_scope",
     "apply_code_change_with_copilot",
     "issue_approval_grant",
     "start_test_data_execution",
     "refresh",
     "run_ui_verification",
+    "confirm_ui_test",
+    "confirm_final_report",
     "resolve_blocker",
 }
 

@@ -43,12 +43,12 @@ def build_main_change_flow(
     """Build the only workflow shape exposed by the Web application."""
 
     stages = [
-        _requirement_stage(request),
+        _requirement_stage(request, automation),
         _document_stage(document_diff, automation),
         _code_scope_stage(workspace, automation),
-        _compile_test_stage(workspace, copilot_task, execution),
-        _ui_stage(execution),
-        _report_stage(execution),
+        _compile_test_stage(workspace, copilot_task, execution, automation),
+        _ui_stage(execution, automation),
+        _report_stage(execution, automation),
     ]
     current_index = next(
         (
@@ -86,23 +86,30 @@ def build_main_change_flow(
     }
 
 
-def _requirement_stage(request: dict[str, object]) -> dict[str, object]:
+def _requirement_stage(
+    request: dict[str, object], automation: dict[str, object] | None
+) -> dict[str, object]:
     artifact = _dict(request.get("artifact"))
     rules = _dict_list(artifact.get("business_rules"))
     ambiguities = _string_list(artifact.get("ambiguities"))
-    blocked = artifact.get("ambiguity_status") != "clear" or bool(ambiguities)
+    automation_stage = str((automation or {}).get("current_stage") or "")
+    automation_status = str((automation or {}).get("status") or "")
+    blocked = automation_stage == "requirement_confirmation" and automation_status == "blocked"
+    waiting = automation_stage == "requirement_confirmation" and not blocked
     requirement = str(artifact.get("requirement_text") or "").strip()
     return _stage(
         "requirement",
         "変更要件",
-        "blocked" if blocked else "completed",
+        "blocked" if blocked else "waiting" if waiting else "completed",
         requirement or "登録済みの業務ルールを変更要件として使用します。",
         "user",
-        blocking_reasons=ambiguities
-        or (["変更要件に未解決の曖昧さがあります。"] if blocked else []),
+        blocking_reasons=(
+            ambiguities or ["変更要件が差し戻されました。"] if blocked else []
+        ),
         details={
             "requirement_text": requirement or None,
             "business_rules": [rule.get("text") for rule in rules if rule.get("text")],
+            "confirmation": _pending_confirmation(automation, {"requirement"}),
         },
     )
 
@@ -115,11 +122,18 @@ def _document_stage(
     automation_stage = str((automation or {}).get("current_stage") or "")
     automation_status = str((automation or {}).get("status") or "")
     blockers = _automation_blockers(
-        automation, {"document_generation", "document_revision", "document_confirmation"}
+        automation,
+        {
+            "rag_document_confirmation",
+            "document_generation",
+            "document_revision",
+            "document_confirmation",
+        },
     )
     if blockers:
         status = "blocked"
     elif automation_stage in {
+        "rag_document_confirmation",
         "document_generation",
         "document_revision",
         "document_confirmation",
@@ -143,6 +157,10 @@ def _document_stage(
         details={
             "change_count": len(changes),
             "changes": [_document_change_summary(change) for change in changes],
+            "rag_documents": _rag_document_summaries(automation),
+            "confirmation": _pending_confirmation(
+                automation, {"rag_documents", "document_diff"}
+            ),
         },
     )
 
@@ -198,6 +216,11 @@ def _code_scope_stage(
                 }
                 for item in _dict_list(impact_artifact.get("items"))
             ],
+            "impact_graph": _impact_graph(
+                impact_artifact=impact_artifact,
+                code_graph=_dict((workspace or {}).get("code_graph_artifact")),
+            ),
+            "confirmation": _pending_confirmation(automation, {"code_scope"}),
         },
     )
 
@@ -206,6 +229,7 @@ def _compile_test_stage(
     workspace: dict[str, object] | None,
     copilot_task: dict[str, object] | None,
     execution: dict[str, object] | None,
+    automation: dict[str, object] | None,
 ) -> dict[str, object]:
     edit = _dict((workspace or {}).get("edit_result"))
     edit_status = str(edit.get("status") or "pending")
@@ -215,8 +239,14 @@ def _compile_test_stage(
     commands = _dict_list((copilot_task or {}).get("commands"))
     test_plan = _dict((execution or {}).get("test_plan"))
     test_plan_status = str(test_plan.get("status") or "pending")
+    confirmation_waiting = (
+        str((automation or {}).get("current_stage") or "")
+        == "test_plan_confirmation"
+    )
     plan_blockers = _string_list(test_plan.get("blocking_reasons"))
-    if (
+    if confirmation_waiting:
+        status = "waiting"
+    elif (
         edit.get("id") is not None
         and edit_status == "in_scope"
         and edit_validation_mode == "committed"
@@ -278,11 +308,15 @@ def _compile_test_stage(
                 }
                 for command in commands
             ],
+            "confirmation": _pending_confirmation(automation, {"test_plan"}),
         },
     )
 
 
-def _ui_stage(execution: dict[str, object] | None) -> dict[str, object]:
+def _ui_stage(
+    execution: dict[str, object] | None,
+    automation: dict[str, object] | None,
+) -> dict[str, object]:
     execution = execution or {}
     data_run = _dict(execution.get("test_data_execution"))
     data_plan = _dict(execution.get("test_data_plan"))
@@ -295,7 +329,20 @@ def _ui_stage(execution: dict[str, object] | None) -> dict[str, object]:
     )
     failed = data_plan_status == "blocked" or data_status in _FAILED_STATES
     running = data_status in _ACTIVE_STATES
-    status = "completed" if passed else "blocked" if failed else "running" if running else "waiting"
+    confirmation_waiting = (
+        str((automation or {}).get("current_stage") or "") == "ui_test_confirmation"
+    )
+    status = (
+        "blocked"
+        if failed
+        else "waiting"
+        if confirmation_waiting
+        else "completed"
+        if passed
+        else "running"
+        if running
+        else "waiting"
+    )
     blockers = (
         _string_list(data_plan.get("blocking_reasons"))
         + _string_list(closure.get("blocking_reasons"))
@@ -333,16 +380,26 @@ def _ui_stage(execution: dict[str, object] | None) -> dict[str, object]:
                 }
                 for item in screenshots
             ],
+            "confirmation": _pending_confirmation(automation, {"ui_test"}),
         },
     )
 
 
-def _report_stage(execution: dict[str, object] | None) -> dict[str, object]:
+def _report_stage(
+    execution: dict[str, object] | None,
+    automation: dict[str, object] | None,
+) -> dict[str, object]:
     execution = execution or {}
     closure = _dict(execution.get("change_closure"))
     status_value = str(closure.get("status") or "pending")
     blockers = _string_list(closure.get("blocking_reasons"))
-    if status_value in _SUCCESS_STATES:
+    confirmation_waiting = (
+        str((automation or {}).get("current_stage") or "")
+        == "final_report_confirmation"
+    )
+    if confirmation_waiting:
+        status = "waiting"
+    elif status_value in _SUCCESS_STATES:
         status = "completed"
     elif status_value in _FAILED_STATES or blockers:
         status = "blocked"
@@ -373,6 +430,7 @@ def _report_stage(execution: dict[str, object] | None) -> dict[str, object]:
                 test_plan=test_plan,
             ),
             "unresolved_items": _string_list(closure.get("unresolved_items")),
+            "confirmation": _pending_confirmation(automation, {"final_report"}),
         },
     )
 
@@ -547,6 +605,193 @@ def _automation_blockers(
         return []
     reason = automation.get("blocking_reason") or automation.get("message")
     return [str(reason)] if reason else ["工程が停止しました。"]
+
+
+def _impact_graph(
+    *,
+    impact_artifact: dict[str, Any],
+    code_graph: dict[str, Any],
+) -> dict[str, object] | None:
+    """Project one bounded, file-level view from Canonical Code Graph evidence."""
+
+    impact_items = _dict_list(impact_artifact.get("items"))
+    graph_files = _dict_list(code_graph.get("files"))
+    if not impact_items or not graph_files:
+        return None
+
+    files_by_path = {
+        str(item["path"]): item
+        for item in graph_files
+        if isinstance(item.get("path"), str) and item["path"]
+    }
+    ref_to_path: dict[str, str] = {}
+    for path, file in files_by_path.items():
+        file_id = file.get("file_id")
+        if isinstance(file_id, str):
+            ref_to_path[file_id] = path
+        ref_to_path[path] = path
+        for symbol in _dict_list(file.get("symbols")):
+            symbol_id = symbol.get("symbol_id")
+            if isinstance(symbol_id, str):
+                ref_to_path[symbol_id] = path
+
+    item_by_path = {
+        str(item["target_path"]): item
+        for item in impact_items
+        if isinstance(item.get("target_path"), str) and item["target_path"]
+    }
+    direct_paths = set(item_by_path)
+    test_paths = {
+        value
+        for item in impact_items
+        for value in _string_list(item.get("test_file_refs"))
+    }
+    seed_paths = direct_paths | test_paths
+    edge_candidates: list[dict[str, object]] = []
+    connected_paths: set[str] = set(seed_paths)
+    for edge in _dict_list(code_graph.get("edges")):
+        if edge.get("resolution_status") != "resolved":
+            continue
+        from_path = ref_to_path.get(str(edge.get("from_ref") or ""))
+        to_path = ref_to_path.get(str(edge.get("to_ref") or ""))
+        if from_path is None or to_path is None or from_path == to_path:
+            continue
+        if from_path not in seed_paths and to_path not in seed_paths:
+            continue
+        connected_paths.update((from_path, to_path))
+        location = _dict(edge.get("source_location"))
+        edge_candidates.append(
+            {
+                "from_path": from_path,
+                "to_path": to_path,
+                "relation": edge.get("edge_type"),
+                "evidence_source": "code_graph",
+                "source_path": location.get("path"),
+                "start_line": location.get("start_line"),
+            }
+        )
+
+    ordered_paths = sorted(
+        connected_paths,
+        key=lambda path: (
+            0 if path in direct_paths else 1 if path in test_paths else 2,
+            path,
+        ),
+    )
+    visible_paths = set(ordered_paths[:40])
+    edges_by_pair: dict[tuple[str, str], dict[str, object]] = {}
+    for candidate in edge_candidates:
+        from_path = str(candidate["from_path"])
+        to_path = str(candidate["to_path"])
+        if from_path not in visible_paths or to_path not in visible_paths:
+            continue
+        key = (from_path, to_path)
+        relation = str(candidate.get("relation") or "depends_on")
+        current = edges_by_pair.get(key)
+        if current is None:
+            edges_by_pair[key] = {**candidate, "relations": [relation]}
+        else:
+            relations = current["relations"]
+            if isinstance(relations, list) and relation not in relations:
+                relations.append(relation)
+    edges = list(edges_by_pair.values())
+    existing_pairs = {
+        frozenset((str(edge["from_path"]), str(edge["to_path"]))) for edge in edges
+    }
+    for target_path, item in item_by_path.items():
+        if target_path not in visible_paths:
+            continue
+        for test_path in _string_list(item.get("test_file_refs")):
+            if test_path not in visible_paths:
+                continue
+            pair = frozenset((target_path, test_path))
+            if pair in existing_pairs:
+                continue
+            edges.append(
+                {
+                    "from_path": target_path,
+                    "to_path": test_path,
+                    "relation": "related_test",
+                    "relations": ["related_test"],
+                    "evidence_source": "impact_report",
+                    "source_path": None,
+                    "start_line": None,
+                }
+            )
+            existing_pairs.add(pair)
+
+    nodes: list[dict[str, object]] = []
+    for path in ordered_paths[:40]:
+        file = files_by_path.get(path, {})
+        impact_item = item_by_path.get(path, {})
+        graph_symbols = [
+            str(symbol.get("name") or symbol.get("signature"))
+            for symbol in _dict_list(file.get("symbols"))
+            if symbol.get("name") or symbol.get("signature")
+        ]
+        target_symbols = _string_list(impact_item.get("target_symbols"))
+        related_tests = _string_list(impact_item.get("test_file_refs"))
+        nodes.append(
+            {
+                "path": path,
+                "role": file.get("role") or ("test" if path in test_paths else "unknown"),
+                "language": file.get("language"),
+                "directly_impacted": path in direct_paths,
+                "recommended_action": impact_item.get("recommended_action"),
+                "rationale": impact_item.get("rationale")
+                or _dependency_reason(path=path, edges=edge_candidates, direct_paths=direct_paths),
+                "symbols": (target_symbols or graph_symbols)[:12],
+                "symbol_count": len(target_symbols or graph_symbols),
+                "related_tests": related_tests,
+            }
+        )
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "total_file_count": len(ordered_paths),
+        "visible_file_count": len(nodes),
+        "relation_count": len(edges),
+        "truncated": len(ordered_paths) > len(nodes),
+    }
+
+
+def _dependency_reason(
+    *, path: str, edges: list[dict[str, object]], direct_paths: set[str]
+) -> str:
+    relation = next(
+        (
+            str(edge.get("relation") or "depends_on")
+            for edge in edges
+            if path in {edge.get("from_path"), edge.get("to_path")}
+            and ({edge.get("from_path"), edge.get("to_path")} & direct_paths)
+        ),
+        "depends_on",
+    )
+    return f"Code Graph の {relation} 関係で変更対象に接続しています。"
+
+
+def _pending_confirmation(
+    automation: dict[str, object] | None, checkpoints: set[str]
+) -> dict[str, object] | None:
+    value = _dict((automation or {}).get("pending_confirmation"))
+    return value if value.get("checkpoint") in checkpoints else None
+
+
+def _rag_document_summaries(
+    automation: dict[str, object] | None,
+) -> list[dict[str, object]]:
+    confirmation = _pending_confirmation(automation, {"rag_documents"})
+    details = _dict((confirmation or {}).get("details"))
+    return [
+        {
+            "logical_name": candidate.get("logical_name"),
+            "document_ref": candidate.get("document_ref"),
+            "heading_path": candidate.get("heading_path"),
+            "summary": candidate.get("summary"),
+            "relevance_reason": candidate.get("relevance_reason"),
+        }
+        for candidate in _dict_list(details.get("candidates"))
+    ]
 
 
 def _dict(value: object) -> dict[str, Any]:

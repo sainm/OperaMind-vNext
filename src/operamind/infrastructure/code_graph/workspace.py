@@ -235,6 +235,8 @@ class WorkspaceScanner:
 
 
 _EXTENSIONS_BY_LANGUAGE = {
+    "css": (".css",),
+    "gradle": (".gradle",),
     "java": (".java",),
     "javascript": (".js", ".jsx", ".mjs", ".cjs"),
     "json": (".json",),

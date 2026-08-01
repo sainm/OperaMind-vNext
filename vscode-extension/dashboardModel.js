@@ -28,6 +28,7 @@ function dashboardState(overrides = {}) {
     workspaceRoot: undefined,
     task: undefined,
     taskState: "idle",
+    confirmation: undefined,
     ...overrides,
   };
 }
@@ -62,6 +63,15 @@ function buildDashboardTree(value) {
           icon: "root-folder",
         },
         {
+          id: "operamind.status.confirmation",
+          label: "人工確認",
+          description: state.confirmation ? state.confirmation.stage_label : "なし",
+          tooltip: state.confirmation
+            ? state.confirmation.message
+            : "現在、確認待ちの工程はありません。",
+          icon: state.confirmation ? "question" : "pass-filled",
+        },
+        {
           id: "operamind.status.task",
           label: "Coding Task",
           description: taskId || "なし",
@@ -83,6 +93,20 @@ function buildDashboardTree(value) {
       icon: "tools",
       expanded: true,
       children: [
+        action(
+          "checkpointConfirm",
+          "現在の工程を確認",
+          "operamind.confirmCurrentCheckpoint",
+          "check",
+          "Web と共有される確認記録を保存し、次の確定処理へ進みます。",
+        ),
+        action(
+          "checkpointReject",
+          "現在の工程を差戻し",
+          "operamind.rejectCurrentCheckpoint",
+          "discard",
+          "理由を記録して現在の工程を停止します。",
+        ),
         action(
           "confirm",
           "確認して Copilot を開く",

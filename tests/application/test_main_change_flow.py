@@ -125,6 +125,69 @@ def test_projection_exposes_exactly_six_product_stages_and_no_internal_approval(
                     }
                 ],
             },
+            "code_graph_artifact": {
+                "files": [
+                    {
+                        "file_id": "file-service",
+                        "path": "src/ExpenseService.java",
+                        "language": "java",
+                        "role": "production",
+                        "symbols": [
+                            {"symbol_id": "symbol-search", "name": "search"}
+                        ],
+                    },
+                    {
+                        "file_id": "file-repository",
+                        "path": "src/ExpenseRepository.java",
+                        "language": "java",
+                        "role": "production",
+                        "symbols": [
+                            {"symbol_id": "symbol-find", "name": "findByStatus"}
+                        ],
+                    },
+                    {
+                        "file_id": "file-test",
+                        "path": "test/ExpenseServiceTest.java",
+                        "language": "java",
+                        "role": "test",
+                        "symbols": [
+                            {"symbol_id": "symbol-test", "name": "searchReturned"}
+                        ],
+                    },
+                ],
+                "edges": [
+                    {
+                        "edge_type": "calls",
+                        "from_ref": "symbol-search",
+                        "to_ref": "symbol-find",
+                        "resolution_status": "resolved",
+                        "source_location": {
+                            "path": "src/ExpenseService.java",
+                            "start_line": 20,
+                        },
+                    },
+                    {
+                        "edge_type": "calls",
+                        "from_ref": "symbol-search",
+                        "to_ref": "symbol-find",
+                        "resolution_status": "resolved",
+                        "source_location": {
+                            "path": "src/ExpenseService.java",
+                            "start_line": 24,
+                        },
+                    },
+                    {
+                        "edge_type": "tests",
+                        "from_ref": "symbol-test",
+                        "to_ref": "symbol-search",
+                        "resolution_status": "resolved",
+                        "source_location": {
+                            "path": "test/ExpenseServiceTest.java",
+                            "start_line": 15,
+                        },
+                    },
+                ],
+            },
             "edit_result": {
                 "id": "edit-001",
                 "status": "in_scope",
@@ -225,6 +288,21 @@ def test_projection_exposes_exactly_six_product_stages_and_no_internal_approval(
     assert result["stages"][2]["details"]["items"][0]["target_path"] == (
         "src/ExpenseService.java"
     )
+    impact_graph = result["stages"][2]["details"]["impact_graph"]
+    assert [node["path"] for node in impact_graph["nodes"]] == [
+        "src/ExpenseService.java",
+        "test/ExpenseServiceTest.java",
+        "src/ExpenseRepository.java",
+    ]
+    assert {edge["relation"] for edge in impact_graph["edges"]} == {
+        "calls",
+        "tests",
+    }
+    assert impact_graph["relation_count"] == 2
+    assert impact_graph["nodes"][0]["rationale"] == "状態条件を追加するため"
+    assert impact_graph["nodes"][0]["related_tests"] == [
+        "test/ExpenseServiceTest.java"
+    ]
     assert result["stages"][3]["details"]["commands"][0] == {
         "command_ref": "targeted-unit",
         "status": "passed",

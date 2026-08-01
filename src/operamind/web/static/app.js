@@ -8,6 +8,7 @@ const state = {
   flow: null,
   pollTimer: null,
   revisionProposal: null,
+  impactNodePath: null,
   commandKeys: new Map()
 };
 
@@ -50,7 +51,6 @@ const elements = {
   requestDocumentSummary: document.getElementById("requestDocumentSummary"),
   requestFormStatus: document.getElementById("requestFormStatus"),
   submitRequestButton: document.getElementById("submitRequestButton"),
-  testCaseRevisionPanel: document.getElementById("testCaseRevisionPanel"),
   testCaseRevisionDialog: document.getElementById("testCaseRevisionDialog"),
   testCaseRevisionForm: document.getElementById("testCaseRevisionForm"),
   testCaseRevisionInstruction: document.getElementById("testCaseRevisionInstruction"),
@@ -147,6 +147,7 @@ async function loadRequests(preferredId = null) {
 }
 
 async function selectRequest(requestId) {
+  if (state.requestId !== requestId) state.impactNodePath = null;
   state.requestId = requestId;
   for (const item of elements.requestList.querySelectorAll(".request-item")) {
     item.classList.toggle("active", item.dataset.requestId === requestId);
@@ -174,16 +175,51 @@ function renderFlow(flow) {
   elements.progressBar.style.width = `${flow.progress_percent}%`;
   elements.flowStages.innerHTML = view.stageRail(flow.stages, flow.current_stage);
   elements.stageDetails.innerHTML = view.stageDetails(flow.stages);
-  const compileStage = flow.stages.find(stage => stage.stage_id === "compile_test");
-  const testCases = compileStage?.details?.test_cases;
-  elements.testCaseRevisionPanel.classList.toggle(
-    "hidden",
-    !Array.isArray(testCases) || testCases.length === 0
-  );
+  for (const button of elements.stageDetails.querySelectorAll("[data-confirm-checkpoint]")) {
+    button.addEventListener("click", () => decideCheckpoint(
+      button.dataset.confirmCheckpoint,
+      button.dataset.subjectDigest,
+      "confirmed"
+    ));
+  }
+  for (const button of elements.stageDetails.querySelectorAll("[data-reject-checkpoint]")) {
+    button.addEventListener("click", () => decideCheckpoint(
+      button.dataset.rejectCheckpoint,
+      button.dataset.subjectDigest,
+      "rejected"
+    ));
+  }
+  for (const button of elements.stageDetails.querySelectorAll("[data-open-test-case-revision]")) {
+    button.addEventListener("click", openTestCaseRevisionDialog);
+  }
+  bindImpactGraph(flow);
   for (const button of elements.flowStages.querySelectorAll("[data-stage-target]")) {
     button.addEventListener("click", () => {
       document.getElementById(`stage-${button.dataset.stageTarget}`)?.scrollIntoView({behavior: "smooth", block: "start"});
     });
+  }
+}
+
+async function decideCheckpoint(checkpoint, subjectDigest, decision) {
+  if (!state.requestId || !checkpoint) return;
+  const note = decision === "rejected"
+    ? window.prompt("差し戻し理由を入力してください")
+    : null;
+  if (decision === "rejected" && (!note || !note.trim())) return;
+  const scope = `confirmation:${state.requestId}:${checkpoint}:${subjectDigest}:${decision}`;
+  try {
+    await api(
+      `/api/v1/change-requests/${encodeURIComponent(state.requestId)}/confirmations/${encodeURIComponent(checkpoint)}`,
+      {
+        method: "POST",
+        idempotencyScope: scope,
+        body: JSON.stringify({decision, ...(note ? {note: note.trim()} : {})})
+      }
+    );
+    showNotice(decision === "confirmed" ? "確認しました。次の処理を開始します。" : "差し戻しました。", "success");
+    await loadFlow();
+  } catch (error) {
+    showNotice(error.message, "error");
   }
 }
 
@@ -196,7 +232,6 @@ function showEmptyState() {
   elements.pageDescription.textContent = "変更要件を選択してください。設計書、コード、テスト、UI 証跡を一つの流れで追跡します。";
   elements.flowStatus.textContent = "未選択";
   elements.flowStatus.className = "status-badge neutral";
-  elements.testCaseRevisionPanel.classList.add("hidden");
   const hasProject = Boolean(state.projectId);
   elements.emptyStateTitle.textContent = hasProject ? "変更要件から始めます" : "プロジェクトを初期化します";
   elements.emptyStateDescription.textContent = hasProject
@@ -205,6 +240,39 @@ function showEmptyState() {
   elements.emptyNewProjectButton.classList.toggle("hidden", hasProject);
   elements.emptyNewRequestButton.classList.toggle("hidden", !hasProject);
   schedulePolling(false);
+}
+
+function bindImpactGraph(flow) {
+  const codeScope = flow.stages.find(stage => stage.stage_id === "code_scope");
+  const nodes = codeScope?.details?.impact_graph?.nodes;
+  if (!Array.isArray(nodes)) return;
+  const graph = elements.stageDetails.querySelector("[data-impact-graph]");
+  if (!graph) return;
+  const selectNode = index => {
+    const node = nodes[index];
+    if (!node) return;
+    state.impactNodePath = node.path;
+    for (const element of graph.querySelectorAll("[data-impact-node-index]")) {
+      element.classList.toggle("selected", Number(element.dataset.impactNodeIndex) === index);
+    }
+    const details = graph.querySelector("[data-impact-node-details]");
+    if (details) details.innerHTML = view.impactNodeDetails(node);
+  };
+  for (const node of graph.querySelectorAll("[data-impact-node-index]")) {
+    const index = Number(node.dataset.impactNodeIndex);
+    node.addEventListener("click", () => selectNode(index));
+    node.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectNode(index);
+      }
+    });
+  }
+  const selectedIndex = Math.max(
+    0,
+    nodes.findIndex(node => node.path === state.impactNodePath)
+  );
+  selectNode(selectedIndex);
 }
 
 function openProjectDialog() {
@@ -460,7 +528,6 @@ document.getElementById("newRequestButton").addEventListener("click", openReques
 document.getElementById("newProjectButton").addEventListener("click", openProjectDialog);
 elements.emptyNewProjectButton.addEventListener("click", openProjectDialog);
 elements.emptyNewRequestButton.addEventListener("click", openRequestDialog);
-document.getElementById("openTestCaseRevisionButton").addEventListener("click", openTestCaseRevisionDialog);
 document.getElementById("refreshButton").addEventListener("click", () => loadRequests(state.requestId));
 document.getElementById("closeDialogButton").addEventListener("click", () => elements.requestDialog.close());
 document.getElementById("cancelDialogButton").addEventListener("click", () => elements.requestDialog.close());

@@ -84,7 +84,57 @@ class _MainFlowService:
                     "test_file_refs": ["test/ExpenseServiceTest.java"],
                     "rationale": "状態検索条件を変更するため",
                 }
-            ]
+            ],
+            "impact_graph": {
+                "nodes": [
+                    {
+                        "path": "src/ExpenseService.java",
+                        "role": "production",
+                        "language": "java",
+                        "directly_impacted": True,
+                        "recommended_action": "modify",
+                        "rationale": "状態検索条件を変更するため",
+                        "symbols": ["search"],
+                        "related_tests": ["test/ExpenseServiceTest.java"],
+                    },
+                    {
+                        "path": "src/ExpenseRepository.java",
+                        "role": "production",
+                        "language": "java",
+                        "directly_impacted": False,
+                        "rationale": "Code Graph の calls 関係で変更対象に接続しています。",
+                        "symbols": ["findByStatus"],
+                        "related_tests": [],
+                    },
+                    {
+                        "path": "test/ExpenseServiceTest.java",
+                        "role": "test",
+                        "language": "java",
+                        "directly_impacted": False,
+                        "rationale": "関連テストとして影響範囲に含まれています。",
+                        "symbols": ["searchReturned"],
+                        "related_tests": [],
+                    },
+                ],
+                "edges": [
+                    {
+                        "from_path": "src/ExpenseService.java",
+                        "to_path": "src/ExpenseRepository.java",
+                        "relation": "calls",
+                        "evidence_source": "code_graph",
+                    },
+                    {
+                        "from_path": "src/ExpenseService.java",
+                        "to_path": "test/ExpenseServiceTest.java",
+                        "relation": "related_test",
+                        "evidence_source": "impact_report",
+                    },
+                ],
+                "total_file_count": 3,
+                "visible_file_count": 3,
+                "relation_count": 2,
+                "truncated": False,
+            },
         }
         stages[3]["details"] = {
             "copilot_task_state": "in_progress",
@@ -181,7 +231,11 @@ def test_main_change_flow_is_the_only_web_workspace_on_desktop_and_mobile() -> N
             page = browser.new_page(viewport={"width": 1440, "height": 900})
             page.on(
                 "console",
-                lambda message: errors.append(message.text) if message.type == "error" else None,
+                lambda message: errors.append(
+                    f"{message.text} ({message.location.get('url', 'unknown')})"
+                )
+                if message.type == "error"
+                else None,
             )
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(f"http://127.0.0.1:{port}", wait_until="networkidle")
@@ -190,10 +244,25 @@ def test_main_change_flow_is_the_only_web_workspace_on_desktop_and_mobile() -> N
             expect(page.locator(".stage-step")).to_have_count(6)
             expect(page.locator(".stage-card")).to_have_count(6)
             expect(page.get_by_text("VS Code GitHub Copilot", exact=True)).to_have_count(2)
-            expect(page.get_by_text("src/ExpenseService.java", exact=True)).to_be_visible()
+            expect(page.get_by_text("src/ExpenseService.java", exact=True).first).to_be_visible()
+            expect(page.locator(".impact-node")).to_have_count(3)
+            page.locator('[data-impact-node-index="1"]').click()
+            expect(page.locator("[data-impact-node-details]")).to_contain_text(
+                "src/ExpenseRepository.java"
+            )
+            expect(page.locator("[data-impact-node-details]")).to_contain_text(
+                "findByStatus"
+            )
+            page.wait_for_timeout(3200)
+            expect(page.locator("[data-impact-node-details]")).to_contain_text(
+                "src/ExpenseRepository.java"
+            )
             expect(page.get_by_text("targeted-unit", exact=True)).to_be_visible()
             expect(page.get_by_text("差戻し状態で検索する", exact=True)).to_be_visible()
-            expect(page.get_by_text("expense_id", exact=True)).to_be_visible()
+            page.get_by_role("button", name="自然言語で修正").click()
+            expect(page.get_by_role("heading", name="テストケース修正")).to_be_visible()
+            page.get_by_role("button", name="閉じる").last.click()
+            expect(page.get_by_text("出力変数: expense_id", exact=True)).to_be_visible()
             expect(page.get_by_text("作成した申請を削除する", exact=True)).to_be_visible()
             expect(page.get_by_text("copilot_task_id", exact=True)).to_have_count(0)
             expect(page.get_by_text("自動編成作業の管理", exact=True)).to_have_count(0)

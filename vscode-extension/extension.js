@@ -87,6 +87,7 @@ async function activate(context) {
     await context.globalState.update("operamind.bridge.consumerId", consumerId);
   }
   const notified = new Set();
+  let currentConfirmation;
   const diagnosticOutput = vscode.window.createOutputChannel("OperaMind ローカル環境診断");
   const dashboard = new DashboardTreeProvider({workspaceRoot: workspaceRoot()});
   const dashboardView = vscode.window.createTreeView("operamind.controlPanel", {
@@ -221,6 +222,60 @@ async function activate(context) {
     await vscode.commands.executeCommand("workbench.action.chat.open", {query: prompt});
   }
 
+  async function decideCurrentConfirmation(decision) {
+    const root = workspaceRoot();
+    if (!root || !currentConfirmation) {
+      void vscode.window.showInformationMessage("現在、確認待ちの工程はありません。");
+      return;
+    }
+    const token = await tokenFor(true);
+    if (!token) return;
+    let note;
+    if (decision === "rejected") {
+      note = await vscode.window.showInputBox({
+        title: "OperaMind 工程を差戻し",
+        prompt: "監査履歴に残す差戻し理由を入力してください",
+        ignoreFocusOut: true,
+        validateInput: (value) => (value.trim() ? undefined : "差戻し理由は必須です"),
+      });
+      if (!note) return;
+    }
+    const selected = currentConfirmation;
+    try {
+      const {client, acceptedBy} = clientConfiguration(token, refreshRuntime());
+      await client.decideConfirmation(
+        selected.change_request_id,
+        selected.checkpoint,
+        decision,
+        acceptedBy,
+        [consumerId, selected.subject_digest, decision].join(":"),
+        note && note.trim(),
+      );
+      currentConfirmation = undefined;
+      dashboard.update({confirmation: undefined});
+      void vscode.window.showInformationMessage(
+        decision === "confirmed"
+          ? "工程を確認しました。確定処理を自動で継続します。"
+          : "工程を差し戻しました。OperaMind Web と状態を共有しました。",
+      );
+      await checkForTasks();
+    } catch (error) {
+      void vscode.window.showErrorMessage(`工程の確認を保存できません: ${error.message}`);
+    }
+  }
+
+  async function presentConfirmation(confirmation) {
+    const action = await vscode.window.showInformationMessage(
+      `OperaMind: ${confirmation.stage_label}`,
+      {modal: true, detail: confirmation.message},
+      "確認して進む",
+      "差し戻す",
+      "後で",
+    );
+    if (action === "確認して進む") await decideCurrentConfirmation("confirmed");
+    if (action === "差し戻す") await decideCurrentConfirmation("rejected");
+  }
+
   async function checkForTasks({interactive = false} = {}) {
     const root = workspaceRoot();
     if (!root) {
@@ -265,6 +320,17 @@ async function activate(context) {
     });
     try {
       const {client, acceptedBy} = clientConfiguration(token, refreshRuntime());
+      const confirmationResponse = await client.nextConfirmation(root);
+      currentConfirmation = confirmationResponse.confirmation || undefined;
+      dashboard.update({confirmation: currentConfirmation});
+      if (currentConfirmation) {
+        dashboard.update({
+          connectionStatus: "connected",
+          connectionDetail: "Web と共通の人工確認を待っています。",
+        });
+        if (interactive) await presentConfirmation(currentConfirmation);
+        return;
+      }
       const active = context.workspaceState.get(ACTIVE_TASK_KEY);
       if (active && active.workspaceRoot === root) {
         const resumed = await client.resumeTask(active.codingTaskId, root, consumerId);
@@ -452,6 +518,12 @@ async function activate(context) {
       checkForTasks({interactive: true}),
     ),
     vscode.commands.registerCommand("operamind.cancelCurrentTask", cancelCurrentTask),
+    vscode.commands.registerCommand("operamind.confirmCurrentCheckpoint", () =>
+      decideCurrentConfirmation("confirmed"),
+    ),
+    vscode.commands.registerCommand("operamind.rejectCurrentCheckpoint", () =>
+      decideCurrentConfirmation("rejected"),
+    ),
     vscode.commands.registerCommand("operamind.configureBridgeToken", async () => {
       if (await configureToken(context)) {
         dashboard.update({

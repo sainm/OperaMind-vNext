@@ -1,8 +1,11 @@
 {
   "profile_type": "CodeFrameworkProfile",
   "profile_id": "springboot15-thymeleaf-gradle",
-  "profile_version": "1.0.1",
+  "profile_version": "1.0.4",
   "languages": [
+    "css",
+    "gradle",
+    "python",
     "java",
     "javascript",
     "xml",
@@ -17,10 +20,13 @@
     "apply plugin: 'org.springframework.boot'"
   ],
   "default_scan_roots": [
+    ".",
     "src/main",
     "src/test"
   ],
   "excluded_globs": [
+    ".git/**",
+    ".gradle/**",
     "**/build/**",
     "**/target/**",
     "**/generated/**",
@@ -30,6 +36,7 @@
     "java_symbol",
     "java_field_access",
     "javascript_symbol",
+    "python_symbol",
     "spring_endpoint",
     "spring_config_binding",
     "spring_data_access",

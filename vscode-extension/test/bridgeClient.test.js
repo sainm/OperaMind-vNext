@@ -66,6 +66,14 @@ test("Bridge client builds authenticated calls without a handoff file", async ()
   const client = new BridgeClient("http://127.0.0.1:8765", "secret-token", transport);
 
   await client.nextTask("/workspace", "vscode-1");
+  await client.nextConfirmation("/workspace");
+  await client.decideConfirmation(
+    "change-1",
+    "requirement",
+    "confirmed",
+    "developer",
+    "decision-1",
+  );
   await client.acceptTask("task-1", "/workspace", "vscode-1", "developer");
   await client.resumeTask("task-1", "/workspace", "vscode-1");
   await client.cancelTask(
@@ -77,26 +85,32 @@ test("Bridge client builds authenticated calls without a handoff file", async ()
   );
   await client.reportDiagnostics({consumer_id: "vscode-1"});
 
-  assert.equal(requests.length, 5);
+  assert.equal(requests.length, 7);
   assert.deepEqual(requests[0].slice(0, 3), [
     "http://127.0.0.1:8765/",
     "secret-token",
     "GET",
   ]);
   assert.match(requests[0][3], /workspace_root=%2Fworkspace/);
-  assert.deepEqual(requests[1][4], {
+  assert.match(requests[1][3], /confirmations\/next/);
+  assert.deepEqual(requests[2][4], {
+    decision: "confirmed",
+    actor: "developer",
+    idempotency_key: "decision-1",
+  });
+  assert.deepEqual(requests[3][4], {
     workspace_root: "/workspace",
     consumer_id: "vscode-1",
     accepted_by: "developer",
   });
-  assert.match(requests[2][3], /tasks\/task-1\/resume/);
-  assert.deepEqual(requests[3][4], {
+  assert.match(requests[4][3], /tasks\/task-1\/resume/);
+  assert.deepEqual(requests[5][4], {
     workspace_root: "/workspace",
     consumer_id: "vscode-1",
     cancelled_by: "developer",
     reason: "範囲を再確認する",
   });
-  assert.deepEqual(requests[4].slice(2), [
+  assert.deepEqual(requests[6].slice(2), [
     "POST",
     "api/v1/local-bridge/diagnostics",
     {consumer_id: "vscode-1"},

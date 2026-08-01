@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -74,6 +75,18 @@ class ChangeRequestCreate(StrictModel):
     change_request_id: str = Field(min_length=1, max_length=160)
     project_id: str = Field(min_length=1, max_length=160)
     requirement_text: str = Field(min_length=1, max_length=50_000)
+
+
+class ChangeCheckpointDecisionInput(StrictModel):
+    """One human decision accepted identically from Web or VS Code."""
+
+    decision: Literal["confirmed", "rejected"]
+    note: str | None = Field(default=None, min_length=1, max_length=2_000)
+
+
+class BridgeChangeCheckpointDecision(ChangeCheckpointDecisionInput):
+    actor: str = Field(min_length=1, max_length=200)
+    idempotency_key: str = Field(min_length=1, max_length=300)
 
 
 class TestCaseRevisionProposalCreate(StrictModel):

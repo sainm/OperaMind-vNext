@@ -42,6 +42,26 @@ def test_workspace_scanner_is_bounded_deterministic_and_profile_filtered(
     assert files[0].content == b"class App {}\n"
 
 
+def test_workspace_scanner_supports_lexical_css_and_gradle_files(tmp_path: Path) -> None:
+    (tmp_path / "src/main/resources/static/css").mkdir(parents=True)
+    (tmp_path / "build.gradle").write_text("plugins {}\n", encoding="utf-8")
+    (tmp_path / "src/main/resources/static/css/app.css").write_text(
+        "body { overflow: hidden; }\n", encoding="utf-8"
+    )
+
+    files = WorkspaceScanner().discover(
+        workspace_root=tmp_path,
+        scan_roots=(".",),
+        excluded_globs=(".git/**",),
+        languages=("css", "gradle"),
+    )
+
+    assert [(file.path, file.language) for file in files] == [
+        ("build.gradle", "gradle"),
+        ("src/main/resources/static/css/app.css", "css"),
+    ]
+
+
 def test_workspace_scanner_skips_optional_scan_roots_that_do_not_exist(
     tmp_path: Path,
 ) -> None:

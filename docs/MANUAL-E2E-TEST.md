@@ -397,9 +397,10 @@ Windows 配布版では次を追加確認する。
 期待結果:
 
 - 六工程が表示される。
-- `変更要件` が完了する。
-- `設計書差分` が進行中または待機中になる。
-- VS Code Bridge が同一 Change Task を検出する。
+- `変更要件` に人工確認が表示される。
+- Web の `確認して進む`、または VS Code の `現在の工程を確認` で要件を確認する。
+- 要件確認後、RAG が選んだ完全な対象設計書と根拠箇所を同じ方法で確認する。
+- RAG 対象設計書の確認後だけ、VS Code Bridge が同一 Change Task を実行可能にする。
 
 ### Step 2: VS Code で Change Task を確認する
 
@@ -409,7 +410,7 @@ Windows 配布版では次を追加確認する。
 OperaMind: 変更タスクを確認
 ```
 
-通知で `確認して Copilot を開く` を押す。取消または保留を選択しない。
+人工確認が表示された場合は `現在の工程を確認` を押す。RAG 対象設計書まで確認した後、通知で `確認して Copilot を開く` を押す。取消または保留を選択しない。
 
 Copilot Chat に Prompt が未送信で残っている場合だけ `Enter` を押す。MCP の限定 Tool 実行確認は本セッションに対して許可する。任意 Shell、範囲外 Directory、追加 Credential は許可しない。
 
@@ -435,6 +436,8 @@ Web の `設計書差分` で次を確認する。
 
 この時点で RAG Scope 外の設計書が変更されていた場合は失敗とする。
 
+差分内容が正しい場合は `確認して進む` を押す。確認前に Copilot が `code_scope` を取得できた場合は Stage 越境として失敗とする。
+
 ### Step 4: コード影響範囲を確認する
 
 Copilot が次を行うことを確認する。
@@ -451,8 +454,13 @@ Web の `コード影響範囲` で次を確認する。
 - UI 影響
 - 影響解析状態
 - Scope 外候補がないこと
+- `影響ファイルグラフ` に変更対象、依存ファイル、関連テストが表示されること
+- Graph Node を選択すると Path、Language／Role、対象 Symbol、影響理由、関連テストが切り替わること
+- 画面の自動更新後も選択中 Node が維持されること
 
 この時点でもう一度 Workspace 差分を画面で確認する。Git 管理の場合は `git status --short` も使用できる。設計書以外のコード変更があれば、Copilot が Stage を飛ばしたため失敗とする。
+
+コード範囲が正しい場合は `確認して進む` を押す。この確認後だけ Edit Packet と実行範囲が内部生成されることを確認する。
 
 ### Step 5: コードとテストの変更を確認する
 
@@ -500,11 +508,13 @@ TestDataPlan には次を含める。
 
 複数画面のデータを別々の手動ファイルに分けない。一つの TestDataPlan Flow の変数、依存関係、Assertion、Cleanup として表現する。
 
+Web または VS Code で TestPlan／TestDataPlan／Coverage の確認を行い、`確認して進む` を押す。内容を変更した場合は Evidence Digest が変わり、再確認が必要になることを確認する。
+
 ### Step 7: 自然言語テストケース修正を確認する
 
 Test Case が Web に表示された後、必要に応じて次を実行する。
 
-1. `修正を提案` を押す。
+1. 表示された自然言語 Step の直下にある `自然言語で修正` を押す。
 2. Case 名、現在の文言、変更後の文言を含む自然言語を入力する。
 3. `差分を確認` を押す。
 4. 変更前／変更後と、曖昧な場合の選択肢を確認する。
@@ -543,7 +553,7 @@ Git 管理の場合は最新 commit が今回の結果で worktree が clean で
 
 ### Step 9: TestData と UI 自動実行を確認する
 
-Copilot の最終結果記録後は、内部 Coordinator が自動で後続処理を行う。利用者は内部 Task、Queue、Worker を操作しない。
+Copilot の最終結果記録後、Web または VS Code に UI 実行確認が表示される。TestDataPlan の生成手順、UI Step、UI Assertion、Cleanup を確認して `確認して進む` を押す。この確認後だけ内部 Coordinator が TestData と実ブラウザ UI を自動実行する。利用者は内部 Task、Queue、Worker を操作しない。
 
 Web の `UI 検証` で次を確認する。
 
@@ -582,7 +592,7 @@ Web の `最終レポート` で次を確認する。
 - unresolved item がない
 - Requirement、Document Diff、Impact、Code Diff、TestPlan、TestDataPlan、Command Evidence、UI Evidence が同一 Project／Case／Revision に結び付く
 
-全体 Status が `完了` になれば正常系 E2E は合格とする。
+最後に Web または VS Code の最終レポート確認で `確認して進む` を押す。この確認後に全体 Status が `完了` になれば正常系 E2E は合格とする。
 
 ## 9. 再開操作
 

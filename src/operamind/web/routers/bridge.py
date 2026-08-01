@@ -7,7 +7,11 @@ from fastapi import APIRouter, Depends, Query
 
 from operamind.application.web_control_plane import WebControlPlaneService
 from operamind.web.dependencies import get_service, local_bridge_auth
-from operamind.web.models import BridgeTaskAccept, BridgeTaskCancel
+from operamind.web.models import (
+    BridgeChangeCheckpointDecision,
+    BridgeTaskAccept,
+    BridgeTaskCancel,
+)
 
 router = APIRouter(
     prefix="/api/v1/local-bridge",
@@ -15,6 +19,32 @@ router = APIRouter(
     dependencies=[Depends(local_bridge_auth)],
 )
 Service = Annotated[WebControlPlaneService, Depends(get_service)]
+
+
+@router.get("/confirmations/next")
+def next_confirmation(
+    workspace_root: Annotated[str, Query(min_length=1, max_length=4000)],
+    service: Service,
+) -> dict[str, object]:
+    return service.next_change_confirmation(workspace_root=Path(workspace_root))
+
+
+@router.post("/change-requests/{request_id}/confirmations/{checkpoint}")
+def decide_confirmation(
+    request_id: str,
+    checkpoint: str,
+    body: BridgeChangeCheckpointDecision,
+    service: Service,
+) -> dict[str, object]:
+    return service.decide_change_checkpoint(
+        request_id=request_id,
+        checkpoint=checkpoint,
+        decision=body.decision,
+        surface="vscode_copilot",
+        actor=body.actor,
+        idempotency_key=body.idempotency_key,
+        note=body.note,
+    )
 
 
 @router.get("/tasks/next")

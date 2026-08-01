@@ -201,7 +201,7 @@ def test_bootstrap_upgrades_only_an_older_binding_of_the_same_builtin_profile(
         for binding in result.active_bindings
         if binding.binding_key == "code-framework:repository-1"
     )
-    assert code_binding.profile["profile_version"] == "1.0.1"
+    assert code_binding.profile["profile_version"] == "1.0.4"
     assert "javascript_symbol" in code_binding.profile["anchor_extractors"]
     assert result.activated_binding_keys == (
         "code-framework:repository-1",

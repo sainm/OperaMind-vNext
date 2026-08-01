@@ -40,6 +40,9 @@ from operamind.infrastructure.postgres.canonical_repository import (
     CanonicalDocumentSlice,
     CanonicalRepository,
 )
+from operamind.infrastructure.postgres.change_automation_repository import (
+    ChangeAutomationRepository,
+)
 from operamind.infrastructure.postgres.copilot_coding_task_repository import (
     CopilotCodingTaskRepository,
 )
@@ -368,6 +371,12 @@ class CopilotCodingTaskService:
     def latest_for_request(self, change_request_id: str) -> dict[str, object] | None:
         return self._tasks.latest_for_request(change_request_id)
 
+    def document_discovery_for_request(
+        self, change_request_id: str
+    ) -> dict[str, object]:
+        """Expose the same bounded RAG document set to Web and Copilot."""
+        return _public_document_discovery(self._document_discovery(change_request_id))
+
     def bind_execution_scope(
         self,
         *,
@@ -404,6 +413,21 @@ class CopilotCodingTaskService:
         return self._tasks.view(coding_task_id)
 
     def get_mcp_context(self, *, coding_task_id: str, workspace_root: Path) -> dict[str, object]:
+        pending_task = self._tasks.get(coding_task_id)
+        automation = ChangeAutomationRepository(self._connection).latest_for_request(
+            pending_task.change_request_id
+        )
+        allowed_automation_stages = {
+            "document_change": {"document_generation", "document_revision"},
+            "code_scope": {"impact_analysis"},
+        }
+        if pending_task.approval_grant_id is None and automation is not None:
+            allowed = allowed_automation_stages.get(pending_task.current_stage, set())
+            if automation.get("current_stage") not in allowed:
+                raise ValueError(
+                    "現在の人工確認が完了するまで Copilot Task を実行できません: "
+                    f"{automation.get('current_stage')}"
+                )
         task = self._tasks.begin_mcp(
             coding_task_id=coding_task_id,
             workspace_root=workspace_root,

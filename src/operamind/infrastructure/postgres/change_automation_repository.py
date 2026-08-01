@@ -191,6 +191,154 @@ class ChangeAutomationRepository:
             row = cursor.fetchone()
         return self.view(str(row[0])) if row is not None else None
 
+    def latest_confirmation_for_project(self, project_id: str) -> dict[str, object] | None:
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT automation_run_id
+                FROM change_automation_runs
+                WHERE project_id = %s
+                  AND status = 'waiting'
+                  AND next_action LIKE 'confirm_%%'
+                ORDER BY updated_at DESC, automation_run_id DESC
+                LIMIT 1
+                """,
+                (project_id,),
+            )
+            row = cursor.fetchone()
+        return self.view(str(row[0])) if row is not None else None
+
+    def record_confirmation(
+        self,
+        *,
+        confirmation_id: str,
+        run_id: str,
+        checkpoint: str,
+        subject_digest: str,
+        decision: str,
+        surface: str,
+        actor: str,
+        note: str | None,
+    ) -> dict[str, object]:
+        """Append one subject-bound decision shared by Web and VS Code."""
+        if decision not in {"confirmed", "rejected"}:
+            raise ValueError("Change checkpoint decision is invalid")
+        if surface not in {"web", "vscode_copilot"}:
+            raise ValueError("Change checkpoint surface is invalid")
+        if len(subject_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in subject_digest
+        ):
+            raise ValueError("Change checkpoint subject_digest must be SHA-256")
+        normalized_note = note.strip() if isinstance(note, str) and note.strip() else None
+        with self._connection.transaction(), self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT project_id FROM change_automation_runs
+                WHERE automation_run_id = %s FOR SHARE
+                """,
+                (run_id,),
+            )
+            run = cursor.fetchone()
+            if run is None:
+                raise ValueError("Change Automation Run does not exist")
+            project_id = str(run[0])
+            cursor.execute(
+                """
+                INSERT INTO change_checkpoint_confirmations (
+                    confirmation_id, automation_run_id, project_id, checkpoint,
+                    subject_digest, decision, surface, actor, note
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (
+                    confirmation_id,
+                    run_id,
+                    project_id,
+                    checkpoint,
+                    subject_digest,
+                    decision,
+                    surface,
+                    actor,
+                    normalized_note,
+                ),
+            )
+            created = cursor.rowcount == 1
+            cursor.execute(
+                """
+                SELECT automation_run_id, project_id, checkpoint, subject_digest,
+                       decision, surface, actor, note, created_at
+                FROM change_checkpoint_confirmations
+                WHERE confirmation_id = %s
+                """,
+                (confirmation_id,),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError("Change checkpoint confirmation disappeared")
+        actual = (
+            *(str(row[index]) for index in range(7)),
+            str(row[7]) if row[7] is not None else None,
+        )
+        expected = (
+            run_id,
+            project_id,
+            checkpoint,
+            subject_digest,
+            decision,
+            surface,
+            actor,
+            normalized_note,
+        )
+        if actual != expected:
+            raise PersistenceConflictError(
+                "Change checkpoint confirmation identity has different content"
+            )
+        return {
+            "confirmation_id": confirmation_id,
+            "checkpoint": checkpoint,
+            "subject_digest": subject_digest,
+            "decision": decision,
+            "surface": surface,
+            "actor": actor,
+            "note": normalized_note,
+            "created_at": _time(row[8]),
+            "created": created,
+        }
+
+    def current_confirmations(
+        self, *, run_id: str, subject_digests: dict[str, str]
+    ) -> dict[str, dict[str, object]]:
+        """Return only latest decisions that still match current evidence."""
+        if not subject_digests:
+            return {}
+        with self._connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                SELECT DISTINCT ON (checkpoint)
+                       confirmation_id, checkpoint, subject_digest, decision,
+                       surface, actor, note, created_at, sequence
+                FROM change_checkpoint_confirmations
+                WHERE automation_run_id = %s
+                ORDER BY checkpoint, sequence DESC
+                """,
+                (run_id,),
+            )
+            rows = cursor.fetchall()
+        return {
+            str(row["checkpoint"]): {
+                "confirmation_id": str(row["confirmation_id"]),
+                "checkpoint": str(row["checkpoint"]),
+                "subject_digest": str(row["subject_digest"]),
+                "decision": str(row["decision"]),
+                "surface": str(row["surface"]),
+                "actor": str(row["actor"]),
+                "note": row["note"],
+                "created_at": _time(row["created_at"]),
+            }
+            for row in rows
+            if subject_digests.get(str(row["checkpoint"])) == str(row["subject_digest"])
+        }
+
     def get(self, run_id: str, *, created: bool = False) -> ChangeAutomationRunRecord:
         with self._connection.cursor() as cursor:
             cursor.execute(

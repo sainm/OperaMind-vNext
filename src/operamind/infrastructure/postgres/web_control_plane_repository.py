@@ -465,6 +465,20 @@ class WebControlPlaneRepository:
             row = cursor.fetchone()
         return str(row[0]) if row is not None else None
 
+    def project_id_for_workspace(self, workspace_root: str) -> str | None:
+        if not workspace_root.strip():
+            raise ValueError("Workspace root must not be blank")
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT project_id FROM project_workspaces
+                WHERE workspace_root = %s
+                """,
+                (workspace_root,),
+            )
+            row = cursor.fetchone()
+        return str(row[0]) if row is not None else None
+
     def list_change_requests(
         self, *, project_id: str, limit: int = 50
     ) -> tuple[dict[str, object], ...]:

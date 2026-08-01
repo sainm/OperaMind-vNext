@@ -12,6 +12,7 @@ from operamind.application.web_control_plane import (
 )
 from operamind.web.dependencies import command_actor, get_service, idempotency_key
 from operamind.web.models import (
+    ChangeCheckpointDecisionInput,
     ChangeRequestCreate,
     TestCaseRevisionConfirm,
     TestCaseRevisionProposalCreate,
@@ -88,6 +89,32 @@ def create_request(
 @router.get("/{request_id}/flow")
 def get_main_change_flow(request_id: str, service: Service) -> dict[str, object]:
     return service.main_change_flow(request_id)
+
+
+@router.post("/{request_id}/confirmations/{checkpoint}")
+def decide_change_checkpoint(
+    request_id: str,
+    checkpoint: str,
+    body: ChangeCheckpointDecisionInput,
+    service: Service,
+    actor: Actor,
+    key: IdempotencyKey,
+) -> dict[str, object]:
+    return service.execute_web_command(
+        command_scope=f"change-confirmation:{request_id}:{checkpoint}",
+        idempotency_key=key,
+        actor=actor,
+        payload=body.model_dump(mode="json"),
+        operation=lambda: service.decide_change_checkpoint(
+            request_id=request_id,
+            checkpoint=checkpoint,
+            decision=body.decision,
+            surface="web",
+            actor=actor,
+            idempotency_key=key,
+            note=body.note,
+        ),
+    )
 
 
 @router.post("/{request_id}/test-case-revisions")

@@ -22,6 +22,7 @@ test("dashboard displays Bridge, Workspace, Coding Task, and Japanese execution 
       workspaceRoot: "/workspace/VisionDemo",
       task: {codingTaskId: "task-42", summary: "経費状態検索を変更する"},
       taskState: "in_progress",
+      confirmation: {stage_label: "変更要件の確認", message: "内容を確認してください。"},
     }),
   );
 
@@ -31,20 +32,23 @@ test("dashboard displays Bridge, Workspace, Coding Task, and Japanese execution 
     [
       ["Bridge", "接続済み"],
       ["Workspace", "VisionDemo"],
+      ["人工確認", "変更要件の確認"],
       ["Coding Task", "task-42"],
       ["実行状態", "実行中"],
     ],
   );
-  assert.match(status.children[2].tooltip, /経費状態検索/);
+  assert.match(status.children[3].tooltip, /経費状態検索/);
 });
 
-test("dashboard always exposes all seven visual operations", () => {
+test("dashboard exposes shared confirmations and task operations", () => {
   const {actions} = sections(dashboardState({connectionStatus: "token_missing"}));
 
   assert.equal(actions.expanded, true);
   assert.deepEqual(
     actions.children.map((item) => item.command.command),
     [
+      "operamind.confirmCurrentCheckpoint",
+      "operamind.rejectCurrentCheckpoint",
       "operamind.openCurrentTask",
       "operamind.resumeCurrentTask",
       "operamind.cancelCurrentTask",
@@ -57,6 +61,8 @@ test("dashboard always exposes all seven visual operations", () => {
   assert.deepEqual(
     actions.children.map((item) => item.label),
     [
+      "現在の工程を確認",
+      "現在の工程を差戻し",
       "確認して Copilot を開く",
       "現在のタスクを再開",
       "現在のタスクを取消",

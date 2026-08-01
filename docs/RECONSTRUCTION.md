@@ -67,11 +67,13 @@ Web API と画面は、次の六つだけを公開する。
 - [x] 自然言語 Requirement から current/ready Canonical Index を検索する文書候補 RAG
 - [x] RAG の Section 候補を `document_id` で完全な Canonical 文書へ戻し、論理名と実文書参照を限定 Copilot Context に渡す
 - [x] 登録済み Repository と現在 Git Revision による Analysis Case の自動作成
-- [x] 高信頼・未知項目なしの文書差分と Impact を自動確認
+- [x] 要件、RAG 対象文書、文書差分、コード範囲、テスト計画、UI 実行、最終レポートを Web／VS Code 共通の Evidence Digest 付き人工確認へ統一
+- [x] 人工確認後の RAG、実行範囲生成、テストデータ／UI 実行、Closure 評価を自動継続
 - [x] Edit Packet、実行範囲、テスト実行許可の内部生成を自動化
 - [x] TestDataPlan のデータ生成後に UI Step / Assertion / Screenshot を実行し、UI Result を自動生成
 - [x] TestPlan、TestDataPlan の手順／変数／断言／cleanup と Closure 結果を六工程へ統合表示
 - [x] 生成済み Test Case の自然言語修正を六工程内の「提案 → 差分／選択肢 → 一括確認」に限定し、確認後だけ TestPlan／TestDataPlan と下流実行を再生成
+- [x] `コード影響範囲` に現在 Code Graph 由来の変更対象／依存／関連テストを SVG で表示し、Node 選択から Symbol、影響理由、関連テストを確認可能にする
 - [x] Web 公開 API を Project、Change Request、六工程、六工程内 Test Case 修正、Screenshot、Local Bridge に限定
 - [x] Web の Project／Change Request 一覧と作成応答から Case、Review、Copilot Task、Automation Run を除外
 - [x] 旧 Draft / Checkpoint CLI と未使用 Application / Schema / テストを削除

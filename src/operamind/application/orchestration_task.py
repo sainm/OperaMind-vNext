@@ -130,6 +130,13 @@ ACTION_POLICIES: dict[str, _ActionPolicy] = {
         ("必须引用可审计的人工确认记录; 领取者身份本身不构成批准。",),
         1800,
     ),
+    "confirm_rag_documents": _ActionPolicy(
+        "judgment",
+        ("document_review",),
+        ("RagDocumentConfirmation",),
+        ("RAG 候補、完全な対象設計書、根拠箇所を人が確認している。",),
+        1800,
+    ),
     "prepare_document_with_copilot": _ActionPolicy(
         "external_execution",
         ("document_generation",),
@@ -165,6 +172,13 @@ ACTION_POLICIES: dict[str, _ActionPolicy] = {
         ("每个影响项都有可审计的人工批准或拒绝结果。",),
         1800,
     ),
+    "confirm_code_scope": _ActionPolicy(
+        "judgment",
+        ("impact_review",),
+        ("CodeScopeConfirmation",),
+        ("変更対象コード、シンボル、テスト範囲を人が確認している。",),
+        1800,
+    ),
     "generate_orchestration": _ActionPolicy(
         "deterministic_action",
         ("change_planning",),
@@ -176,6 +190,13 @@ ACTION_POLICIES: dict[str, _ActionPolicy] = {
             "ChangeOrchestrationPlan",
         ),
         ("生成物可追溯到已确认的需求、设计差分和影响项。",),
+    ),
+    "confirm_test_plan": _ActionPolicy(
+        "judgment",
+        ("test_plan_review",),
+        ("TestPlanConfirmation",),
+        ("TestPlan、TestDataPlan、業務カバレッジを人が確認している。",),
+        1800,
     ),
     "provision_execution_scope": _ActionPolicy(
         "deterministic_action",
@@ -216,6 +237,20 @@ ACTION_POLICIES: dict[str, _ActionPolicy] = {
         ("UiVerificationResult",),
         ("UI 场景、截图、断言和业务覆盖率均已记录。",),
         900,
+    ),
+    "confirm_ui_test": _ActionPolicy(
+        "judgment",
+        ("ui_test_review",),
+        ("UiTestConfirmation",),
+        ("テストデータ生成手順と UI シナリオを人が確認している。",),
+        1800,
+    ),
+    "confirm_final_report": _ActionPolicy(
+        "judgment",
+        ("final_report_review",),
+        ("FinalReportConfirmation",),
+        ("最終結果、証跡、阻断理由の有無を人が確認している。",),
+        1800,
     ),
     "resolve_blocker": _DEFAULT_POLICY,
 }

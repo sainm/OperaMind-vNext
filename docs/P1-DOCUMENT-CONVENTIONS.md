@@ -122,9 +122,9 @@ P1 导入／Diff 命令本身不建立 Embedding Index，因此它生成的首�
 
 ## StructuredChange の確認境界
 
-主変更フローでは、高信頼かつ unknown のない設計差分を OperaMind が内部で自動確認します。低信頼、競合、出典不足、または判断が必要な差分は `document_change` 工程を blocked にし、業務上理解できる理由だけを Web に表示します。
+主変更フローでは、信頼度にかかわらず設計書差分を Web または VS Code で利用者が確認します。確認は現在の差分 Digest に結び付け、差分が変わった場合は再確認を要求します。低信頼、競合、出典不足、または判断が必要な差分は、その理由も同じ確認工程に表示します。
 
-手動 Review CLI や独立した承認画面は公開しません。修正された設計書と差分は同じ VS Code GitHub Copilot Change Task から記録し、再分析が必要な場合は新しい Change Task と不変 Review Event を作成します。Repository は行ロック、前イベント整合性、同一 ID の冪等性、および Project／Change の複合外部キーを引き続き強制します。
+手動 Review CLI や独立した管理画面は公開しません。六工程の Web と VS Code コントロールパネルが同じ確認記録を使用します。修正された設計書と差分は同じ VS Code GitHub Copilot Change Task から記録し、再分析が必要な場合は新しい Change Task と不変 Review Event を作成します。Repository は行ロック、前イベント整合性、同一 ID の冪等性、および Project／Change の複合外部キーを引き続き強制します。
 
 ## P1 PostgreSQL 持久化
 
