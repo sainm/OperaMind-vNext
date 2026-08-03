@@ -37,18 +37,25 @@ class _Service:
             ]
         }
 
-    def resume_pending_change_automation(
-        self, *, request_id: str, actor: str
-    ) -> dict[str, object]:
+    def resume_pending_change_automation(self, *, request_id: str, actor: str) -> dict[str, object]:
         self._calls.append(("resume", {"request_id": request_id, "actor": actor}))
         count = self._resume_counts.get(request_id, 0)
         self._resume_counts[request_id] = count + 1
         if request_id == "ready-request" and count == 0:
             return {
-                "status": "waiting",
-                "next_action": "start_test_data_execution",
+                "created": False,
+                "run": {
+                    "status": "waiting",
+                    "next_action": "start_test_data_execution",
+                },
             }
-        return {"status": "waiting", "next_action": "apply_code_change_with_copilot"}
+        return {
+            "created": False,
+            "run": {
+                "status": "waiting",
+                "next_action": "apply_code_change_with_copilot",
+            },
+        }
 
     def start_test_data_run(self, **values: object) -> dict[str, object]:
         self._calls.append(("reserve", values))
@@ -105,6 +112,64 @@ def test_coordinator_advances_and_executes_without_a_web_request(
         "idempotency_key": "automatic-main-flow",
         "actor": "automation:operamind",
     }
+
+
+def test_coordinator_retries_missing_downstream_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class Service:
+        def list_projects(self) -> dict[str, object]:
+            return {"projects": [{"project_id": "project-1"}]}
+
+        def list_change_requests(self, *, project_id: str) -> dict[str, object]:
+            assert project_id == "project-1"
+            return {"change_requests": [{"change_request_id": "request-1"}]}
+
+        def resume_pending_change_automation(self, **values: object) -> dict[str, object]:
+            calls.append(("resume", values))
+            return {
+                "run": {
+                    "status": "waiting",
+                    "next_action": "run_ui_verification",
+                }
+            }
+
+        def execution_management(self, request_id: str) -> dict[str, object]:
+            assert request_id == "request-1"
+            return {
+                "test_data_execution": {"run_id": "run-1", "status": "passed"},
+                "change_closure": None,
+            }
+
+    monkeypatch.setattr(
+        coordinator_module.psycopg,
+        "connect",
+        lambda *_args, **_kwargs: _ConnectionContext(),
+    )
+    monkeypatch.setattr(
+        coordinator_module,
+        "WebControlPlaneService",
+        lambda **_kwargs: Service(),
+    )
+    monkeypatch.setattr(
+        coordinator_module,
+        "execute_reserved_test_data_run",
+        lambda **values: calls.append(("execute", values)),
+    )
+
+    result = MainFlowCoordinator(
+        database_url="postgresql:///unused",
+        repository_root=tmp_path,
+        executor_factory=lambda _root: {},
+        scheduling_policy=OrchestrationSchedulingPolicy(),
+    ).run_once()
+
+    assert result.reserved_runs == 0
+    assert result.executed_runs == 1
+    assert [name for name, _value in calls] == ["resume", "execute", "resume"]
 
 
 def test_coordinator_rejects_an_invalid_poll_interval(tmp_path: Path) -> None:

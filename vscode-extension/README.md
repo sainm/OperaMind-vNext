@@ -20,15 +20,17 @@ npm run package:vsix
 4. 「確認して Copilot を開く」から変更タスクを確認する。
 5. 確認 Dialog から GitHub Copilot Chat を開く。
 
+OperaMind Web の「VS Code で開く」からも、選択中プロジェクトのコード Workspace を直接開けます。すでに同じ Workspace を開いている場合は、画面を切り替えずに最新の人工確認または Coding Task を取得します。URI には Workspace と変更番号だけを含め、Bridge Token は含めません。macOS／Linux の絶対 Path と Windows の Drive／UNC Path に対応します。
+
 Extension は Workspace 内の `.vscode/mcp.json` や Python を参照しません。OperaMind Launcher がユーザー領域へ保存した `runtime.json` を読み、同じ配布版を MCP stdio Server として起動します。Bridge Token もユーザー領域の専用 File から SecretStorage へ自動同期します。「Bridge Token を設定」は復旧用としてだけ残します。
 
 ## Activity Bar コントロール
 
-日文コントロール画面は、Bridge 接続状態、現在の Workspace、Coding Task ID、実行状態を自動更新します。「確認して Copilot を開く」「現在のタスクを再開」「現在のタスクを取消」「最新状態に更新」「ローカル環境を診断」「OperaMind Web を開く」を画面から実行できます。Token の手動設定は自動同期に失敗した場合の復旧用です。
+日文コントロール画面は VS Code の Theme に追従する Webview です。Bridge 接続、Workspace、Coding Task、実行状態をカードで表示します。変更要件、工程確認、差戻し理由、TestPlan の自然言語修正は OperaMind Web だけで入力します。VS Code 側は確定済み Task の内容を読み取り専用で受け取り、「確認して Copilot を開く」「現在のタスクを再開」「最新状態に更新」「ローカル環境を診断」「OperaMind Web を開く」だけを提供します。Token の手動設定は自動同期に失敗した場合のフロー外復旧用です。
 
 画面上部の更新 Icon でも最新状態を取得でき、Web Icon は設定済みの loopback OperaMind Web を既定 Browser で開きます。従来の Command Palette 入口も互換のため残します。専用 Shortcut は不要です。
 
-拡張は Task ID を Workspace State に保持します。VS Code 再起動後も `OperaMind: 現在のタスクを再開` から同じ変更へ戻れます。取消は理由付きで記録し、再試行は新しい Task ID を使用します。
+拡張は Task ID を Workspace State に保持します。VS Code 再起動後も `OperaMind: 現在のタスクを再開` から同じ変更へ戻れます。Task の差戻しと取消は OperaMind Web で監査理由を記録します。
 
 ## ローカル環境診断
 
@@ -36,14 +38,16 @@ Extension は Workspace 内の `.vscode/mcp.json` や Python を参照しませ�
 
 ## Change Task v2
 
-拡張は `copilot_change_task` を受け取り、要求、設計書変更、コード範囲、コンパイル／テスト、UI 検証、最終レポートの順序と、設計差分、コード差分、TestPlan、TestDataPlan の必須成果物を Copilot Chat に渡します。
+拡張は `copilot_change_task` または `ui_test_plan_revision` を受け取り、要求、設計書変更、コード範囲、コンパイル／テスト、UI 検証、最終レポートの順序と、設計差分、コード差分、実ブラウザ用 UiTestPlan、TestDataPlan の必須成果物を Copilot Chat に渡します。
 
 `copilot_record_change_outputs` は同じ会話で三段階に使用します。
 
 1. `output_stage=document_change`: RAG 対象文書の実差分を記録
 2. `output_stage=code_scope`: Code Graph で検証する Path / Symbol / Test Binding を記録
-3. `output_stage=test_planning`: コード差分検証後の TestPlan / TestDataPlan を記録
+3. `copilot_record_task_result`: 同一 Diff の必須コマンド、Coverage report、commit を記録
+4. `output_stage=test_planning`: committed EditResult と変更行 Coverage 成功後の UiTestPlan / TestDataPlan を記録
+5. `output_stage=ui_test_revision`: Web で確認された自然言語修正から完全な UiTestPlan / TestDataPlan を再生成
 
-各 Tool は次へ進める場合だけ `next_context` を返します。UI Case は TestDataPlan の有限 UI Step / Assertion として表現し、OperaMind がデータ生成後に実行して Screenshot Evidence を保存します。旧ファイル handoff は使用しません。詳細は [主変更閉ループ再構成](../docs/RECONSTRUCTION.md) を参照してください。
+状態を変更する Tool は次へ進める場合だけ `next_context` を返します。`copilot_get_coding_task` の返却自体が現在の authoritative context であり、この Tool に `next_context` がないことは停止理由ではありません。UI Case は TestDataPlan の有限 UI Step / Assertion として表現し、OperaMind がデータ生成後に実行して Screenshot Evidence を保存します。旧ファイル handoff は使用しません。詳細は [主変更閉ループ再構成](../docs/RECONSTRUCTION.md) を参照してください。
 
 Copilot が使用する公開 Tool は `copilot_get_coding_task`、`copilot_record_change_outputs`、`copilot_run_task_command`、`copilot_validate_task_diff`、`copilot_record_task_result` の五つです。旧 Case／Impact／Approval／Packet／UI 個別 Tool は公開しません。

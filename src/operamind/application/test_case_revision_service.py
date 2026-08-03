@@ -13,6 +13,7 @@ from operamind.application.test_case_revision import (
     build_undo_proposal,
     resolve_ambiguities,
 )
+from operamind.application.test_data_flow import validate_test_data_plan_artifact
 from operamind.contracts import ContractCatalog
 from operamind.infrastructure.postgres.change_orchestration_repository import (
     ChangeOrchestrationRepository,
@@ -82,6 +83,145 @@ class TestCaseRevisionService:
             selections=selections,
             actor=actor,
             proposal_created=False,
+        )
+
+    def prepare_ai_regeneration(
+        self,
+        *,
+        change_request_id: str,
+        proposal_id: str,
+        selections: dict[str, str],
+    ) -> dict[str, Any]:
+        """Validate the reviewed proposal without mutating the active UI plan."""
+
+        proposal = self._revisions.get_proposal(proposal_id)
+        if proposal is None or proposal["change_request_id"] != change_request_id:
+            raise ValueError("Test Case change proposal does not exist")
+        status = str(proposal["analysis_status"])
+        if status not in {"deterministic", "needs_confirmation"}:
+            raise ValueError("Test Case change proposal cannot be confirmed")
+        if status == "deterministic" and selections:
+            raise ValueError("Deterministic Test Case proposal has no ambiguity selections")
+        operations = (
+            resolve_ambiguities(proposal, selections)
+            if status == "needs_confirmation"
+            else cast(list[dict[str, Any]], proposal["operations"])
+        )
+        if not operations:
+            raise ValueError("Confirmed UI TestPlan change has no operations")
+        source_bundle = self._orchestrations.bundle(
+            str(proposal["source_orchestration_id"])
+        )
+        return {
+            "proposal": proposal,
+            "operations": operations,
+            "selections": dict(sorted(selections.items())),
+            "bundle": source_bundle,
+        }
+
+    def prepare_copilot_regeneration(
+        self,
+        *,
+        change_request_id: str,
+        proposal_id: str,
+        selections: dict[str, str],
+    ) -> dict[str, Any]:
+        """Backward-compatible Copilot preparation entry point."""
+
+        return self.prepare_ai_regeneration(
+            change_request_id=change_request_id,
+            proposal_id=proposal_id,
+            selections=selections,
+        )
+
+    def apply_ai_regeneration(
+        self,
+        *,
+        change_request_id: str,
+        proposal_id: str,
+        source_orchestration_id: str,
+        test_plan: dict[str, Any],
+        test_data_plan: dict[str, Any],
+        operations: list[dict[str, Any]],
+        selections: dict[str, str],
+        actor: str,
+    ) -> dict[str, Any]:
+        """Persist complete attributed AI output and invalidate older downstream results."""
+
+        if not actor.strip():
+            raise ValueError("AI Test Case revision source must not be blank")
+        blockers = validate_test_data_plan_artifact(test_data_plan)
+        if blockers:
+            raise ValueError(
+                "Regenerated TestDataPlan is not executable: " + "; ".join(blockers)
+            )
+
+        prepared = self.prepare_ai_regeneration(
+            change_request_id=change_request_id,
+            proposal_id=proposal_id,
+            selections=selections,
+        )
+        proposal = cast(dict[str, Any], prepared["proposal"])
+        if proposal["source_orchestration_id"] != source_orchestration_id:
+            raise ValueError("UI TestPlan revision Task source differs from its proposal")
+        if operations != prepared["operations"]:
+            raise ValueError("UI TestPlan revision confirmed operations differ")
+        source_bundle = cast(dict[str, Any], prepared["bundle"])
+        self._planner.validate_regenerated_operation_effects(
+            source_bundle=source_bundle,
+            operations=operations,
+            test_plan=test_plan,
+            test_data_plan=test_data_plan,
+        )
+        stale = self._revisions.stale_scope(
+            source_orchestration_id=source_orchestration_id,
+            source_bundle=source_bundle,
+        )
+        plan = self._planner.plan_regenerated(
+            source_bundle=source_bundle,
+            proposal=proposal,
+            operations=operations,
+            test_plan=test_plan,
+            test_data_plan=test_data_plan,
+            applied_by=actor,
+            selections=selections,
+            stale_run_ids=list(stale.run_ids),
+            stale_artifact_refs=list(stale.artifact_refs),
+            stale_evidence_refs=list(stale.evidence_refs),
+            stale_closure_result_ids=list(stale.closure_result_ids),
+        )
+        record = self._revisions.persist_revision(plan=plan)
+        return {
+            "created": record.created,
+            "state": "applied",
+            "proposal": proposal,
+            "revision": plan.revision,
+            "bundle": self._orchestrations.bundle(record.target_orchestration_id),
+        }
+
+    def apply_copilot_regeneration(
+        self,
+        *,
+        change_request_id: str,
+        proposal_id: str,
+        source_orchestration_id: str,
+        test_plan: dict[str, Any],
+        test_data_plan: dict[str, Any],
+        operations: list[dict[str, Any]],
+        selections: dict[str, str],
+        actor: str,
+    ) -> dict[str, Any]:
+        """Backward-compatible Copilot entry point with explicit actor attribution."""
+
+        return self.apply_ai_regeneration(
+            change_request_id=change_request_id,
+            proposal_id=proposal_id,
+            source_orchestration_id=source_orchestration_id,
+            test_plan=test_plan,
+            test_data_plan=test_data_plan,
+            operations=operations,
+            selections=selections,
+            actor=actor,
         )
 
     def undo(

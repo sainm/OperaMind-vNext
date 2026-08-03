@@ -652,9 +652,14 @@ def _json(value: object) -> str:
 def _validate_grant_semantics(*, artifact: dict[str, Any], source: ApprovalGrantSource) -> None:
     if artifact.get("change_session_id") != source.analysis_case_id:
         raise ValueError("Approval Grant change session differs from the Case scope")
-    expected_actions = ["read", "modify", "record_result"]
+    expected_actions = ["read"]
+    if source.editable_files:
+        expected_actions.append("modify")
+    expected_actions.append("record_result")
     if source.test_files:
-        expected_actions.extend(("add_test", "run_test"))
+        if source.editable_files:
+            expected_actions.append("add_test")
+        expected_actions.append("run_test")
     if source.required_ui_scenario_refs:
         expected_actions.extend(("execute_ui", "record_evidence"))
     if artifact["allowed_actions"] != expected_actions:

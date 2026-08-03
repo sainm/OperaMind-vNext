@@ -14,6 +14,13 @@
       "business_rule_id": "rule-empty-status-all",
       "test_case_refs": ["expense-empty-status-api"],
       "criterion_refs": ["criterion-empty-status-count"],
+      "verification_sources": [
+        {
+          "source_kind": "code_test",
+          "source_refs": ["ExpenseServiceTest.java", "springboot15-test"],
+          "assertion": "空の状態条件で全件を返すコードテストが成功する"
+        }
+      ],
       "status": "covered"
     }
   ],

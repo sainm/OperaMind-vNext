@@ -20,7 +20,7 @@
   ],
   "properties": {
     "artifact_type": {"const": "CopilotImpactContext"},
-    "schema_version": {"const": "v1"},
+    "schema_version": {"enum": ["v1", "v2"]},
     "context_id": {"type": "string", "minLength": 1},
     "coding_task_id": {"type": "string", "minLength": 1},
     "project_id": {"type": "string", "minLength": 1},
@@ -36,11 +36,38 @@
     },
     "code_scope": {
       "type": "array",
-      "minItems": 1,
-      "items": {
+      "minItems": 1
+    },
+    "generated_by": {"type": "string", "minLength": 1},
+    "generator_provider": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "code_scope_v1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_path", "target_symbols", "recommended_action", "test_file_refs", "rationale", "ui_impact"],
+      "properties": {
+        "target_path": {"type": "string", "minLength": 1},
+        "target_symbols": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "recommended_action": {"enum": ["modify", "add", "delete", "review_only"]},
+        "test_file_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "rationale": {"type": "string", "minLength": 1},
+        "ui_impact": {"type": "boolean"}
+      }
+    },
+    "code_scope_v2": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["target_path", "target_symbols", "recommended_action", "test_file_refs", "rationale", "ui_impact"],
+        "required": ["target_path", "target_symbols", "recommended_action", "test_file_refs", "rationale", "ui_impact", "related_code_paths", "graph_path_refs"],
         "properties": {
           "target_path": {"type": "string", "minLength": 1},
           "target_symbols": {
@@ -55,10 +82,42 @@
             "items": {"type": "string", "minLength": 1}
           },
           "rationale": {"type": "string", "minLength": 1},
-          "ui_impact": {"type": "boolean"}
+          "ui_impact": {"type": "boolean"},
+          "related_code_paths": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "graph_path_refs": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1}
+          }
+        }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"schema_version": {"const": "v1"}},
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "code_scope": {"items": {"$ref": "#/$defs/code_scope_v1"}}
         }
       }
     },
-    "created_at": {"type": "string", "format": "date-time"}
-  }
+    {
+      "if": {
+        "properties": {"schema_version": {"const": "v2"}},
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "code_scope": {"items": {"$ref": "#/$defs/code_scope_v2"}}
+        }
+      }
+    }
+  ]
 }

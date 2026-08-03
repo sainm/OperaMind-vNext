@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from operamind.application.test_case_revision import (
     TestCaseChangeAnalyzer as ChangeAnalyzer,
@@ -12,6 +15,9 @@ from operamind.application.test_case_revision import (
 from operamind.application.test_case_revision import (
     build_undo_proposal,
     resolve_ambiguities,
+)
+from operamind.application.test_case_revision_service import (
+    TestCaseRevisionService as RevisionService,
 )
 
 ROOT = Path(__file__).parents[2]
@@ -76,6 +82,132 @@ def test_deterministic_natural_language_change_regenerates_dependent_artifacts()
     assert planned.revision["stale_run_ids"] == ["run-v1"]
     assert planned.revision["stale_evidence_refs"] == ["evidence-v1"]
     assert planned.revision["stale_closure_result_ids"] == ["closure-v1"]
+
+
+def test_copilot_regeneration_must_apply_every_confirmed_operation() -> None:
+    bundle = _bundle()
+    proposal = (
+        ChangeAnalyzer(repository_root=ROOT)
+        .analyze(
+            bundle=bundle,
+            instruction=(
+                "ケース「経費一覧を確認」のステップ「一覧を開く」を"
+                "「経費一覧画面を開く」に変更"
+            ),
+        )
+        .proposal
+    )
+    planner = RevisionPlanner(repository_root=ROOT)
+
+    with pytest.raises(ValueError, match="did not apply confirmed operation"):
+        planner.validate_regenerated_operation_effects(
+            source_bundle=bundle,
+            operations=proposal["operations"],
+            test_plan=bundle["test_plan"],
+            test_data_plan=bundle["test_data_plan"],
+        )
+
+    deterministic = planner.plan(
+        source_bundle=bundle,
+        proposal=proposal,
+        operations=proposal["operations"],
+        applied_by="qa-user",
+    )
+    planner.validate_regenerated_operation_effects(
+        source_bundle=bundle,
+        operations=proposal["operations"],
+        test_plan=deterministic.orchestration.test_plan,
+        test_data_plan=deterministic.orchestration.test_data_plan,
+    )
+
+
+def test_ai_regeneration_rejects_an_unexecutable_test_data_plan_before_persistence() -> None:
+    bundle = _bundle()
+    invalid_plan = copy.deepcopy(bundle["test_data_plan"])
+    invalid_plan["generation_flows"][0]["steps"][0]["postconditions"] = []
+    service = object.__new__(RevisionService)
+
+    with pytest.raises(ValueError, match="postconditions are required"):
+        service.apply_ai_regeneration(
+            change_request_id="change-request-1",
+            proposal_id="proposal-1",
+            source_orchestration_id="orchestration-v1",
+            test_plan=copy.deepcopy(bundle["test_plan"]),
+            test_data_plan=invalid_plan,
+            operations=[{"field": "plan_structure"}],
+            selections={},
+            actor="codex:fallback",
+        )
+
+
+def test_free_form_structural_instruction_queues_auditable_whole_plan_regeneration() -> None:
+    bundle = _bundle()
+    instruction = (
+        "既存データを前提にせず、HTTP で申請中と差戻しを作成してください。"
+        "保存した ID で cleanup を実行し、検索確認は Playwright で行ってください。"
+    )
+
+    proposal = ChangeAnalyzer(repository_root=ROOT).analyze(
+        bundle=bundle,
+        instruction=instruction,
+    ).proposal
+
+    assert proposal["analysis_status"] == "deterministic"
+    assert proposal["blocking_reasons"] == []
+    assert proposal["operations"] == [
+        {
+            "operation_id": proposal["operations"][0]["operation_id"],
+            "test_case_id": "whole-ui-test-plan",
+            "case_title": "UI TestPlan / TestDataPlan 全体",
+            "field": "plan_structure",
+            "action": "regenerate",
+            "before": {
+                "test_case_count": 1,
+                "test_case_titles": ["経費一覧を確認"],
+            },
+            "after": instruction,
+            "summary_before": "現在の計画: 1 Test Case",
+            "summary_after": f"自然言語要求: {instruction}",
+        }
+    ]
+
+    repeated = ChangeAnalyzer(repository_root=ROOT).analyze(
+        bundle=bundle,
+        instruction=instruction,
+    ).proposal
+    assert repeated["proposal_id"] == proposal["proposal_id"]
+
+
+def test_whole_plan_regeneration_rejects_id_only_output_and_accepts_content_change() -> None:
+    bundle = _bundle()
+    proposal = ChangeAnalyzer(repository_root=ROOT).analyze(
+        bundle=bundle,
+        instruction="HTTP でテストデータを作成し、終了時に削除してください。",
+    ).proposal
+    planner = RevisionPlanner(repository_root=ROOT)
+
+    unchanged_plan = copy.deepcopy(bundle["test_plan"])
+    unchanged_plan["test_plan_id"] = "test-plan-id-only-change"
+    unchanged_data = copy.deepcopy(bundle["test_data_plan"])
+    unchanged_data["test_data_plan_id"] = "test-data-plan-id-only-change"
+    with pytest.raises(ValueError, match="did not change planning content"):
+        planner.validate_regenerated_operation_effects(
+            source_bundle=bundle,
+            operations=proposal["operations"],
+            test_plan=unchanged_plan,
+            test_data_plan=unchanged_data,
+        )
+
+    changed_data = copy.deepcopy(bundle["test_data_plan"])
+    changed_data["generation_flows"][0]["steps"][0]["business_action"] = (
+        "HTTP でテストデータを作成する"
+    )
+    planner.validate_regenerated_operation_effects(
+        source_bundle=bundle,
+        operations=proposal["operations"],
+        test_plan=bundle["test_plan"],
+        test_data_plan=changed_data,
+    )
 
 
 def test_expected_result_alone_regenerates_assertion_data_cleanup_and_coverage() -> None:
@@ -159,6 +291,68 @@ def test_japanese_ordinal_can_modify_a_business_visible_step() -> None:
         applied_by="qa-user",
     )
     assert planned.orchestration.test_plan["test_cases"][0]["steps"][0] == ("経費一覧画面を開く")
+
+
+def test_natural_language_can_target_generation_variable_and_cleanup_process() -> None:
+    bundle = _bundle()
+    flow = bundle["test_data_plan"]["generation_flows"][0]
+    flow["steps"][0]["output_bindings"] = [
+        {
+            "variable": "expense_id",
+            "source": "fixture",
+            "path": "result.id",
+            "required": True,
+        }
+    ]
+    flow["cleanup_steps"] = [
+        {
+            "step_id": "cleanup-expense",
+            "sequence": 1,
+            "channel": "fixture",
+            "business_action": "作成データを残す",
+            "target": "visiondemo.default-seed",
+            "inputs": {"expense_id": "${expense_id}"},
+            "depends_on": ["setup-expense-data"],
+            "output_bindings": [],
+            "postconditions": [],
+        }
+    ]
+    instruction = "\n".join(
+        (
+            "ケース「経費一覧を確認」の生成ステップ「既定データを準備する」を"
+            "「差戻し経費を準備する」に変更",
+            "ケース「経費一覧を確認」の変数「expense_id」の取得元を"
+            "「response.body.id」に変更",
+            "ケース「経費一覧を確認」のクリーンアップステップ「作成データを残す」を"
+            "「作成した経費を削除する」に変更",
+        )
+    )
+
+    proposal = ChangeAnalyzer(repository_root=ROOT).analyze(
+        bundle=bundle,
+        instruction=instruction,
+    ).proposal
+
+    assert proposal["analysis_status"] == "deterministic"
+    assert [operation["field"] for operation in proposal["operations"]] == [
+        "generation_steps",
+        "variable_bindings",
+        "cleanup_steps",
+    ]
+    planned = RevisionPlanner(repository_root=ROOT).plan(
+        source_bundle=bundle,
+        proposal=proposal,
+        operations=proposal["operations"],
+        applied_by="qa-user",
+    ).orchestration
+    regenerated_flow = planned.test_data_plan["generation_flows"][0]
+    assert regenerated_flow["steps"][0]["business_action"] == "差戻し経費を準備する"
+    assert regenerated_flow["steps"][0]["output_bindings"][0]["path"] == (
+        "response.body.id"
+    )
+    assert regenerated_flow["cleanup_steps"][0]["business_action"] == (
+        "作成した経費を削除する"
+    )
 
 
 def test_ambiguous_case_target_requires_one_explicit_option() -> None:

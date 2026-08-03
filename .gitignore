@@ -12,5 +12,6 @@ __pycache__/
 .coverage
 coverage.json
 coverage.xml
+readiness/evidence/test-data/
 *.egg-info/
 *.pyc

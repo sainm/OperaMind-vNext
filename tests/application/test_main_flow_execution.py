@@ -77,6 +77,13 @@ def _patch_common(
         "TestDataExecutionRepository",
         lambda *_args, **_kwargs: repository,
     )
+    monkeypatch.setattr(
+        execution_module,
+        "WebControlPlaneRepository",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            project_test_base_url=lambda _project_id: "http://127.0.0.1:8080"
+        ),
+    )
 
 
 def test_reserved_run_publishes_progress_ui_and_closure(
@@ -88,10 +95,6 @@ def test_reserved_run_publishes_progress_ui_and_closure(
     ui_publications: list[dict[str, object]] = []
     closure_calls: list[dict[str, object]] = []
     _patch_common(monkeypatch, repository)
-    monkeypatch.setenv(
-        "OPERAMIND_TEST_TARGET_BASE_URL",
-        "http://127.0.0.1:8080",
-    )
 
     class ExecutionService:
         def __init__(self, **values: Any) -> None:
@@ -156,6 +159,77 @@ def test_reserved_run_publishes_progress_ui_and_closure(
         "step_passed",
         "closure_generated",
     ]
+
+
+def test_execution_transaction_finishes_before_ui_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repository = _Repository(_record())
+    connection_exits = 0
+    publication_exit_counts: list[int] = []
+
+    class ConnectionContext:
+        def __enter__(self) -> object:
+            return object()
+
+        def __exit__(self, *_args: object) -> None:
+            nonlocal connection_exits
+            connection_exits += 1
+
+    monkeypatch.setattr(
+        execution_module.psycopg,
+        "connect",
+        lambda *_args, **_kwargs: ConnectionContext(),
+    )
+    monkeypatch.setattr(execution_module.ContractCatalog, "load", lambda _path: object())
+    monkeypatch.setattr(
+        execution_module,
+        "TestDataExecutionRepository",
+        lambda *_args, **_kwargs: repository,
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "WebControlPlaneRepository",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            project_test_base_url=lambda _project_id: "http://127.0.0.1:8080"
+        ),
+    )
+
+    class ExecutionService:
+        def __init__(self, **_values: Any) -> None:
+            pass
+
+        def execute_reserved(self, _request: object) -> object:
+            return SimpleNamespace(artifact={"status": "passed"})
+
+    class UiService:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def publish(self, **_values: object) -> None:
+            publication_exit_counts.append(connection_exits)
+
+    class ClosureService:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def close(self, **_values: object) -> object:
+            return SimpleNamespace(record=SimpleNamespace(closure_result_id="closure-1"))
+
+    monkeypatch.setattr(execution_module, "TestDataExecutionService", ExecutionService)
+    monkeypatch.setattr(execution_module, "TestDataUiVerificationService", UiService)
+    monkeypatch.setattr(execution_module, "ChangeClosureService", ClosureService)
+
+    execute_reserved_test_data_run(
+        database_url="postgresql:///unused",
+        repository_root=tmp_path,
+        run_id="run-1",
+        executor_factory=lambda _root: {},
+    )
+
+    assert publication_exit_counts == [1]
+    assert connection_exits == 2
 
 
 def test_outer_execution_failure_is_forwarded_to_failure_publisher(
@@ -225,7 +299,27 @@ def test_failure_publisher_marks_running_reservation_and_generates_closure(
     ]
 
 
+def test_failure_publisher_marks_terminal_run_for_downstream_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repository = _Repository(_record(status="passed"))
+    _patch_common(monkeypatch, repository)
+
+    _publish_background_failure(
+        database_url="postgresql:///unused",
+        repository_root=tmp_path,
+        run_id="run-1",
+        error=RuntimeError("publication failed"),
+    )
+
+    assert [event.event_type for event in repository.events] == [
+        "downstream_publication_failed"
+    ]
+    assert repository.events[0].status == "passed"
+
+
 def test_default_factory_uses_only_restricted_unbound_adapters(tmp_path: Path) -> None:
     executors = default_test_data_executor_factory(tmp_path)
 
-    assert set(executors) == {"http", "fixture", "sql", "ui"}
+    assert set(executors) == {"http", "ui"}

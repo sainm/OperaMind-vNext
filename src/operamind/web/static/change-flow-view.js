@@ -22,7 +22,17 @@
   const executorLabels = {
     user: "利用者",
     vscode_github_copilot: "VS Code GitHub Copilot",
+    codex_fallback: "Codex fallback",
     operamind: "OperaMind"
+  };
+
+  const stageShortLabels = {
+    requirement: "要件",
+    document_change: "設計書",
+    code_scope: "影響範囲",
+    compile_test: "コード・テスト",
+    ui_validation: "UI 検証",
+    final_report: "レポート"
   };
 
   const publicStageIds = new Set([
@@ -38,6 +48,7 @@
     requirement_text: "変更要件",
     business_rules: "業務ルール",
     change_count: "差分件数",
+    ai_source: "AI 実行元",
     changes: "設計書差分",
     rag_documents: "RAG 対象設計書",
     base_revision: "基準リビジョン",
@@ -49,6 +60,8 @@
     edit_status: "コード変更状態",
     test_plan_status: "テスト計画",
     test_cases: "テストケース",
+    ui_test_cases: "UI テストケース",
+    ui_test_plan_status: "UI TestPlan",
     result_revision: "結果リビジョン",
     command_evidence_status: "コンパイル・テスト",
     commands: "実行結果",
@@ -56,10 +69,13 @@
     test_data_status: "テストデータ",
     ui_status: "UI 検証",
     cleanup_status: "クリーンアップ",
+    execution_actions: "再実行",
     generation_flows: "データ生成・UI 手順",
     screenshots: "スクリーンショット",
     closure_status: "完了判定",
+    business_coverage_status: "業務カバレッジ状態",
     business_coverage_percent: "業務カバレッジ",
+    business_coverage_items: "業務ルール別カバレッジ",
     changed_line_coverage_percent: "変更行カバレッジ",
     modified_paths: "変更ファイル",
     test_results: "テスト結果",
@@ -80,18 +96,23 @@
       <button class="stage-step ${escapeHtml(stage.status)} ${stage.stage_id === currentStage ? "current" : ""}"
         type="button" data-stage-target="${escapeHtml(stage.stage_id)}">
         <span class="stage-index">${index + 1}</span>
-        <span><strong>${escapeHtml(stage.label)}</strong><small>${escapeHtml(statusLabels[stage.status] || stage.status)}</small></span>
+        <span><strong>${escapeHtml(stageShortLabels[stage.stage_id] || stage.label)}</strong><small>${escapeHtml(statusLabels[stage.status] || stage.status)}</small></span>
       </button>`).join("");
   }
 
-  function stageDetails(stages) {
-    return stages.filter(stage => publicStageIds.has(stage.stage_id)).map((stage, index) => {
+  function stageDetails(stages, currentStage) {
+    const publicStages = stages.filter(stage => publicStageIds.has(stage.stage_id));
+    const selectedIndex = publicStages.findIndex(stage => stage.stage_id === currentStage);
+    const currentIndex = selectedIndex >= 0 ? selectedIndex : publicStages.length - 1;
+    return publicStages.map((stage, index) => {
       const blockers = (stage.blocking_reasons || []).map(
         reason => `<li>${escapeHtml(reason)}</li>`
       ).join("");
+      const isFuture = index > currentIndex;
+      const expanded = index === currentIndex || stage.status === "blocked";
       return `
-        <article id="stage-${escapeHtml(stage.stage_id)}" class="stage-card ${escapeHtml(stage.status)}">
-          <header>
+        <details id="stage-${escapeHtml(stage.stage_id)}" class="stage-card ${escapeHtml(stage.status)} ${isFuture ? "future" : ""}" ${expanded ? "open" : ""}>
+          <summary>
             <span class="stage-card-number">${String(index + 1).padStart(2, "0")}</span>
             <div>
               <div class="stage-title-line">
@@ -101,24 +122,56 @@
               <p>${escapeHtml(stage.summary)}</p>
             </div>
             <span class="executor">${escapeHtml(executorLabels[stage.executor] || stage.executor)}</span>
-          </header>
-          ${blockers ? `<div class="blocker-box"><strong>停止理由</strong><ul>${blockers}</ul></div>` : ""}
-          ${renderConfirmation(stage.details && stage.details.confirmation)}
-          <div class="detail-grid">${renderDetails(stage.details || {})}</div>
-        </article>`;
+          </summary>
+          <div class="stage-card-body">
+            ${blockers ? `<div class="blocker-box"><strong>停止理由</strong><ul>${blockers}</ul></div>` : ""}
+            ${isFuture
+              ? '<p class="future-stage-message">前の工程が完了すると、この工程の内容と成果物を表示します。</p>'
+              : `<div class="detail-grid">${renderDetails(stage.details || {})}</div>`}
+          </div>
+        </details>`;
     }).join("");
   }
 
-  function renderConfirmation(confirmation) {
-    if (!confirmation || !confirmation.checkpoint) return "";
-    return `<section class="confirmation-panel" data-confirmation-panel>
-      <div><strong>${escapeHtml(confirmation.stage_label || "人工確認")}</strong>
-      <p>${escapeHtml(confirmation.message || "内容を確認してください。")}</p></div>
-      <div class="confirmation-actions">
+  function nextAction(flow) {
+    const stage = (flow.stages || []).find(item => item.stage_id === flow.current_stage)
+      || (flow.stages || [])[0];
+    if (!stage) return "";
+    const confirmation = stage.details && stage.details.confirmation;
+    const blockers = Array.isArray(stage.blocking_reasons) ? stage.blocking_reasons : [];
+    const tone = confirmation ? "confirmation" : stage.status;
+    const title = confirmation
+      ? confirmation.stage_label || `${stage.label}の確認`
+      : stage.status === "blocked"
+        ? "対応が必要です"
+        : stage.status === "running"
+          ? `${stage.label}を実行しています`
+          : stage.status === "completed"
+            ? "変更フローが完了しました"
+            : `${stage.label}を開始します`;
+    const message = confirmation
+      ? confirmation.message || "内容を確認してください。"
+      : blockers[0] || stage.summary || "次の処理を準備しています。";
+    return `<section class="next-action-panel ${escapeHtml(tone)}" aria-label="現在のアクション">
+      <div class="next-action-icon" aria-hidden="true">${confirmation ? "✓" : stage.status === "blocked" ? "!" : stage.status === "completed" ? "✓" : "→"}</div>
+      <div class="next-action-copy">
+        <span class="eyebrow">NOW · ${escapeHtml(executorLabels[stage.executor] || stage.executor)}</span>
+        <h2>${escapeHtml(title)}</h2>
+        <p>${escapeHtml(message)}</p>
+        ${blockers.length > 1 ? `<ul>${blockers.slice(1).map(reason => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>` : ""}
+      </div>
+      ${confirmation ? `<div class="confirmation-actions">
         <button type="button" class="primary" data-confirm-checkpoint="${escapeHtml(confirmation.checkpoint)}" data-subject-digest="${escapeHtml(confirmation.subject_digest)}">確認して進む</button>
         <button type="button" class="secondary" data-reject-checkpoint="${escapeHtml(confirmation.checkpoint)}" data-subject-digest="${escapeHtml(confirmation.subject_digest)}">差し戻す</button>
-      </div>
+      </div>` : ""}
     </section>`;
+  }
+
+  function requirementTitle(value) {
+    const text = String(value || "").trim();
+    if (!text) return "変更フロー";
+    const firstSentence = text.split(/[。\n]/, 1)[0].trim();
+    return truncate(firstSentence || text, 64);
   }
 
   function renderDetails(details) {
@@ -165,7 +218,16 @@
     if (key === "commands" && Array.isArray(value)) {
       return `<ul class="value-list command-list">${value.map(item => `<li>${renderCommand(item)}</li>`).join("")}</ul>`;
     }
-    if (key === "test_cases" && Array.isArray(value)) {
+    if (key === "business_coverage_items" && Array.isArray(value)) {
+      return `<ul class="value-list coverage-list">${value.map(item => `<li>
+        <div class="list-heading">
+          <strong>${escapeHtml(item.text || "業務ルール")}</strong>
+          <span class="status-badge ${escapeHtml(item.status || "uncovered")}">${escapeHtml(item.status === "covered" ? "カバー済み" : "未カバー")}</span>
+        </div>
+        <small>テストケース ${escapeHtml(item.test_case_count || 0)} 件 · 検証基準 ${escapeHtml(item.criterion_count || 0)} 件</small>
+      </li>`).join("")}</ul>`;
+    }
+    if ((key === "test_cases" || key === "ui_test_cases") && Array.isArray(value)) {
       return `<div class="plan-list">${value.map(renderTestCase).join("")}</div>
         <div class="test-case-edit-actions">
           <div><strong>生成された手順を変更しますか？</strong><small>自然言語で指定し、適用前に差分を確認できます。</small></div>
@@ -173,7 +235,16 @@
         </div>`;
     }
     if (key === "generation_flows" && Array.isArray(value)) {
-      return `<div class="plan-list">${value.map(renderGenerationFlow).join("")}</div>`;
+      return `<div class="plan-list">${value.map(renderGenerationFlow).join("")}</div>
+        <div class="test-case-edit-actions">
+          <div><strong>生成・変数・断言・クリーンアップを変更しますか？</strong><small>自然言語で指定し、完全な計画を再生成する前に差分を確認できます。</small></div>
+          <button type="button" class="secondary" data-open-test-case-revision>自然言語で修正</button>
+        </div>`;
+    }
+    if (key === "execution_actions" && typeof value === "object" && value !== null) {
+      return value.can_rerun && value.rerun_run_id
+        ? `<button type="button" class="primary" data-rerun-test-data="${escapeHtml(value.rerun_run_id)}">同じ計画で再実行</button>`
+        : '<span class="evidence-chip">再実行できません</span>';
     }
     if (key === "test_results" && Array.isArray(value)) {
       return `<ul class="value-list">${value.map(item => `<li>${renderTestResult(item)}</li>`).join("")}</ul>`;
@@ -370,6 +441,8 @@
     const status = item.status || "pending";
     const inputs = Array.isArray(item.input_variables) ? item.input_variables : [];
     const outputs = Array.isArray(item.output_variables) ? item.output_variables : [];
+    const mappedCount = Number(item.mapped_test_step_count || 0);
+    const fallback = item.computer_use_fallback;
     return `<article class="flow-step">
       <div class="flow-step-heading">
         <span class="step-sequence">${escapeHtml(item.sequence || "–")}</span>
@@ -378,6 +451,8 @@
       </div>
       ${inputs.length ? `<p><b>入力変数:</b> ${inputs.map(escapeHtml).join(", ")}</p>` : ""}
       ${outputs.length ? `<p><b>出力変数:</b> ${outputs.map(escapeHtml).join(", ")}</p>` : ""}
+      ${mappedCount ? `<p><b>自然言語手順との対応:</b> ${escapeHtml(mappedCount)} 件</p>` : ""}
+      ${fallback ? `<div class="blocker-box"><strong>AI 画面操作フォールバック</strong><p>${escapeHtml(fallback.objective || "")}</p><small>${escapeHtml(fallback.reason || "")} · 最大 ${escapeHtml(fallback.max_actions || 0)} 操作</small></div>` : ""}
       ${renderAssertions("事後断言", item.assertions)}
       ${item.failure_reason ? `<p class="step-failure">${escapeHtml(item.failure_reason)}</p>` : ""}
     </article>`;
@@ -413,5 +488,14 @@
     return escapeHtml(value);
   }
 
-  return {escapeHtml, stageRail, stageDetails, impactNodeDetails, statusLabels, executorLabels};
+  return {
+    escapeHtml,
+    stageRail,
+    stageDetails,
+    nextAction,
+    requirementTitle,
+    impactNodeDetails,
+    statusLabels,
+    executorLabels
+  };
 });

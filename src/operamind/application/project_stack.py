@@ -38,6 +38,14 @@ _THYMELEAF_PATTERNS = (
     re.compile(r"spring-boot-starter-thymeleaf"),
     re.compile(r"(?:org\.)?thymeleaf"),
 )
+_JACOCO_PLUGIN_PATTERNS = (
+    re.compile(r"apply\s+plugin:\s*['\"]jacoco['\"]"),
+    re.compile(r"id\s*(?:\(\s*)?['\"]jacoco['\"](?:\s*\))?"),
+)
+_JACOCO_XML_PATTERNS = (
+    re.compile(r"xml\.enabled\s*(?:=\s*)?true"),
+    re.compile(r"xml\.required(?:\.set)?\s*\(?\s*true\s*\)?"),
+)
 _PROFILE_FILES = {
     "CodeFrameworkProfile": (
         "springboot15-thymeleaf-gradle-code-framework-profile.example.json",
@@ -59,6 +67,8 @@ class ProjectStackDetection:
     evidence: tuple[str, ...]
     missing_signals: tuple[str, ...]
     gradle_wrapper_command: str | None = None
+    quality_evidence: tuple[str, ...] = ()
+    quality_missing_signals: tuple[str, ...] = ()
 
     @property
     def supported(self) -> bool:
@@ -92,6 +102,18 @@ class ProjectStackDetection:
             "compile_command": [wrapper, "classes", "testClasses", "--no-daemon"],
             "test_command": [wrapper, "test", "--no-daemon"],
             "build_command": [wrapper, "build", "--no-daemon"],
+            "coverage_command": [
+                wrapper,
+                "test",
+                "jacocoTestReport",
+                "--no-daemon",
+            ],
+            "coverage_report": "build/reports/jacoco/test/jacocoTestReport.xml",
+            "quality_readiness": (
+                "ready" if not self.quality_missing_signals else "blocked"
+            ),
+            "quality_evidence": list(self.quality_evidence),
+            "quality_missing_signals": list(self.quality_missing_signals),
             "evidence": list(self.evidence),
             "missing_signals": [],
         }
@@ -175,13 +197,39 @@ def detect_project_stack(workspace_root: Path) -> ProjectStackDetection:
         )
     if gradle_wrapper is None:
         raise AssertionError("Supported stack requires a Gradle wrapper")
+    quality_evidence, quality_missing = _coverage_readiness(root, build_text)
     return ProjectStackDetection(
         stack_id=SPRINGBOOT15_THYMELEAF_GRADLE,
         status="supported",
         evidence=unique_evidence,
         missing_signals=(),
         gradle_wrapper_command=f"./{gradle_wrapper.name}",
+        quality_evidence=quality_evidence,
+        quality_missing_signals=quality_missing,
     )
+
+
+def _coverage_readiness(root: Path, build_text: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    evidence: list[str] = []
+    missing: list[str] = []
+    if any(pattern.search(build_text) for pattern in _JACOCO_PLUGIN_PATTERNS):
+        evidence.append("build.gradle:JaCoCo plugin")
+    else:
+        missing.append("build.gradle の JaCoCo plugin")
+    if any(pattern.search(build_text) for pattern in _JACOCO_XML_PATTERNS):
+        evidence.append("build.gradle:JaCoCo XML report")
+    else:
+        missing.append("build.gradle の JaCoCo XML report 設定")
+    test_sources = tuple(
+        path
+        for path in (root / "src" / "test").rglob("*")
+        if path.is_file() and path.suffix.lower() in {".java", ".kt", ".groovy"}
+    ) if (root / "src" / "test").is_dir() else ()
+    if test_sources:
+        evidence.extend(_relative(root, path) for path in test_sources[:5])
+    else:
+        missing.append("src/test のテストソース")
+    return tuple(dict.fromkeys(evidence)), tuple(missing)
 
 
 def _gradle_wrapper(root: Path, *, platform_name: str | None = None) -> Path | None:
@@ -217,6 +265,11 @@ class ProjectProfileBootstrapper:
         detection = detect_project_stack(workspace_root)
         if not detection.supported:
             return ProjectProfileBootstrapResult(detection, (), ())
+        if detection.quality_missing_signals:
+            raise ValueError(
+                "対象工程のコードカバレッジ前提が不足しています: "
+                + "、".join(detection.quality_missing_signals)
+            )
 
         active: list[ActiveProfileBinding] = []
         activated: list[str] = []

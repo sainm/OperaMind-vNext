@@ -108,6 +108,72 @@ def test_git_diff_inspector_covers_untracked_and_committed_rename(tmp_path: Path
     assert changed_lines["src/main/java/example/RenamedApp.java"] == (1,)
 
 
+def test_git_diff_inspector_resumes_from_clean_descendant_commit(tmp_path: Path) -> None:
+    repository, base_sha = initialized_repository(tmp_path)
+    source = repository / "src/main/java/example/App.java"
+    source.write_text("class App { int value; }\n", encoding="utf-8")
+    git(repository, "add", "-A")
+    git(
+        repository,
+        "-c",
+        "user.name=OperaMind Test",
+        "-c",
+        "user.email=operamind@example.invalid",
+        "commit",
+        "-q",
+        "-m",
+        "edit",
+    )
+
+    evidence = GitWorktreeDiffInspector().inspect_current(
+        repository,
+        base_sha=base_sha,
+    )
+
+    assert evidence.result_sha == git(repository, "rev-parse", "HEAD")
+    assert evidence.changed_paths == ("src/main/java/example/App.java",)
+
+
+def test_git_diff_inspector_allows_clean_unchanged_verification_result(
+    tmp_path: Path,
+) -> None:
+    repository, base_sha = initialized_repository(tmp_path)
+    inspector = GitWorktreeDiffInspector()
+
+    with pytest.raises(ValueError, match="requires a new HEAD"):
+        inspector.inspect_committed(repository, base_sha=base_sha)
+
+    evidence = inspector.inspect_committed(
+        repository,
+        base_sha=base_sha,
+        allow_unchanged_head=True,
+    )
+
+    assert evidence.result_sha == base_sha
+    assert evidence.changed_paths == ()
+    assert evidence.changes == ()
+    assert evidence.changed_lines == ()
+    assert evidence.content_digest
+
+
+def test_git_diff_content_digest_includes_executable_mode(tmp_path: Path) -> None:
+    repository, base_sha = initialized_repository(tmp_path)
+    script = repository / "run.sh"
+    script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    script.chmod(0o644)
+    regular = GitWorktreeDiffInspector().inspect_worktree(
+        repository, base_sha=base_sha
+    )
+
+    script.chmod(0o755)
+    executable = GitWorktreeDiffInspector().inspect_worktree(
+        repository, base_sha=base_sha
+    )
+
+    assert regular.changed_paths == executable.changed_paths == ("run.sh",)
+    assert regular.content_digest != executable.content_digest
+
+
 def test_git_common_repository_dir_accepts_only_shared_linked_worktrees(
     tmp_path: Path,
 ) -> None:

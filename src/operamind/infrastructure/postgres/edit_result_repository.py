@@ -110,7 +110,10 @@ class EditResultRepository:
             remote_url=str(row[2]),
             workspace_root=str(row[3]),
             packet_status=str(row[4]),
-            writable_files=tuple(sorted({*editable, *tests})),
+            # An empty production edit scope is an explicit verification-only
+            # grant.  Existing tests remain executable evidence, not writable
+            # paths, so any file mutation still fails closed as out of scope.
+            writable_files=(tuple(sorted({*editable, *tests})) if editable else ()),
             required_command_refs=tuple(sorted(grant.allowed_test_command_refs)),
             required_ui_scenario_refs=tuple(str(value) for value in cast(list[object], row[7])),
         )
@@ -217,7 +220,7 @@ class EditResultRepository:
                     reason="Edit Result detected files outside the approved Packet",
                 )
             elif write.validation_mode == "committed":
-                successful = write.status == "in_scope" and bool(write.tests_passed)
+                successful = _successful_result(scope, write)
                 event_type = (
                     "edit_completed"
                     if successful and scope.required_ui_scenario_refs
@@ -355,12 +358,23 @@ def _next_case_status(scope: EditResultPacketScope, write: EditResultWrite) -> s
     if write.validation_mode == "working":
         return "editing"
     if (
-        write.status == "no_changes"
+        (write.status == "no_changes" and bool(scope.writable_files))
         or not write.tests_passed
         or write.changed_line_coverage["status"] in {"failed", "missing"}
     ):
         return "failed"
     return "verifying_ui" if scope.required_ui_scenario_refs else "passed"
+
+
+def _successful_result(scope: EditResultPacketScope, write: EditResultWrite) -> bool:
+    status_ok = write.status == "in_scope" or (
+        write.status == "no_changes" and not scope.writable_files
+    )
+    return bool(
+        status_ok
+        and write.tests_passed
+        and write.changed_line_coverage["status"] in {"passed", "not_required"}
+    )
 
 
 def _command_evidence_status(write: EditResultWrite) -> str:

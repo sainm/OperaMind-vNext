@@ -26,8 +26,8 @@ STAGE_LABELS = {
     "execution_approval": "実行範囲の自動準備",
     "code_change": "VS Code GitHub Copilot によるコード変更",
     "planning": "コード・テスト編成",
-    "test_plan_confirmation": "テスト計画の確認",
-    "ui_test_confirmation": "UI テスト実行の確認",
+    "test_plan_confirmation": "UI テスト計画と実行範囲の確認",
+    "ui_test_confirmation": "旧 UI テスト実行確認",
     "test_data_execution": "テストデータ生成・検証",
     "ui_verification": "UI テスト・結果検証",
     "closure": "変更クローズ判定",
@@ -60,8 +60,7 @@ def decide_change_automation(
     discovery = rag_discovery or {}
     if discovery.get("status") != "ready":
         reason = str(
-            discovery.get("blocking_reason")
-            or "Canonical RAG から対象設計書を取得できません。"
+            discovery.get("blocking_reason") or "Canonical RAG から対象設計書を取得できません。"
         )
         return _blocked("rag_document_confirmation", reason)
     rag_documents = _confirmation_decision(
@@ -89,11 +88,13 @@ def decide_change_automation(
         )
     review = _dict(request.get("document_review"))
     if review.get("status") == "revision_requested":
-        return _waiting(
-            "document_revision",
-            "revise_document_with_copilot",
-            "指摘内容に従って設計書を修正し、差分を再生成してください。",
-        )
+        revision_task = _dict((workspace or {}).get("copilot_task"))
+        if revision_task.get("current_stage") == "document_change":
+            return _waiting(
+                "document_revision",
+                "revise_document_with_copilot",
+                "指摘内容に従って設計書を修正し、差分を再生成してください。",
+            )
     if review.get("status") != "confirmed":
         document_diff = _confirmation_decision(
             confirmations,
@@ -119,6 +120,17 @@ def decide_change_automation(
             "prepare_canonical_analysis",
             "Canonical RAG・Code Graph・Impact Report を生成してください。",
         )
+    copilot_task = _dict(workspace.get("copilot_task"))
+    if _has_identified_copilot_task(copilot_task) and not _task_recorded_impact(
+        copilot_task,
+        impact_report_id=str(impact["id"]),
+    ):
+        return _waiting(
+            "impact_analysis",
+            "analyze_code_scope_with_copilot",
+            "現在の設計書差分から VS Code GitHub Copilot がコード影響範囲を"
+            "再解析してください。以前の Task の Impact Report は再利用しません。",
+        )
     confirmation = _dict(workspace.get("confirmation"))
     if confirmation.get("id") is None or impact.get("status") != "confirmed":
         code_scope = _confirmation_decision(
@@ -139,6 +151,23 @@ def decide_change_automation(
             blocking_reason=None,
             message="確認済み影響範囲からコード変更とテストの実行範囲を自動準備します。",
         )
+    execution_scope = _dict(copilot_task.get("execution_scope"))
+    edit_packet = _dict(workspace.get("edit_packet"))
+    current_grant = _dict(workspace.get("approval_grant"))
+    scoped_packet_id = execution_scope.get("edit_packet_id")
+    scoped_grant_id = execution_scope.get("approval_grant_id")
+    if (
+        execution_scope.get("bound") is not True
+        or (scoped_packet_id is not None and scoped_packet_id != edit_packet.get("id"))
+        or (scoped_grant_id is not None and scoped_grant_id != current_grant.get("id"))
+    ):
+        return ChangeAutomationDecision(
+            stage="execution_approval",
+            status="running",
+            next_action="provision_execution_scope",
+            blocking_reason=None,
+            message="現在の VS Code Change Task に確認済み実行範囲を再バインドします。",
+        )
     edit_result = _dict(workspace.get("edit_result"))
     if edit_result.get("id") is None:
         return _waiting(
@@ -147,9 +176,14 @@ def decide_change_automation(
             "生成されたコード範囲を VS Code 上の GitHub Copilot で変更し、"
             "結果を取り込んでください。",
         )
+    verification_only = not bool(edit_packet.get("editable_files", ["pending"]))
+    edit_status = edit_result.get("status")
+    accepted_edit_status = edit_status == "in_scope" or (
+        verification_only and edit_status == "no_changes"
+    )
     validation_mode = edit_result.get("validation_mode")
     if validation_mode == "working":
-        if edit_result.get("status") == "in_scope":
+        if accepted_edit_status:
             return _waiting(
                 "code_change",
                 "apply_code_change_with_copilot",
@@ -159,11 +193,25 @@ def decide_change_automation(
         return _blocked("code_change", "作業中のコード差分が実行範囲外です。")
     if (
         validation_mode != "committed"
-        or edit_result.get("status") != "in_scope"
+        or not accepted_edit_status
         or edit_result.get("tests_passed") is not True
         or edit_result.get("command_evidence_status") != "verified"
+        or edit_result.get("changed_line_coverage_status") not in {"passed", "not_required"}
     ):
-        return _blocked("code_change", "コード変更結果が成功状態ではありません。")
+        return _blocked(
+            "code_change",
+            "コード変更、テスト、または変更行カバレッジが成功状態ではありません。",
+        )
+    if (
+        copilot_task.get("state") != "completed"
+        or copilot_task.get("current_stage") != "ui_validation"
+    ):
+        return _waiting(
+            "code_change",
+            "generate_ui_test_plan",
+            "コード結果は確定しました。VS Code 上の GitHub Copilot で、"
+            "確定済み設計とコードから UI TestPlan / TestDataPlan を生成してください。",
+        )
     if not has_orchestration:
         return ChangeAutomationDecision(
             stage="planning",
@@ -176,24 +224,28 @@ def decide_change_automation(
             ),
         )
     management = execution or {}
+    business_coverage = _dict(management.get("business_coverage"))
+    if (
+        business_coverage.get("status") != "passed"
+        or business_coverage.get("coverage_percent") != 100
+    ):
+        return _blocked(
+            "planning",
+            "業務要件カバレッジが 100% ではありません。未カバー要件を VS Code "
+            "GitHub Copilot に自動返却し、UI TestPlan と TestDataPlan を再生成してください。",
+        )
     test_plan = _confirmation_decision(
         confirmations,
         checkpoint="test_plan",
         stage="test_plan_confirmation",
         action="confirm_test_plan",
-        message="生成された TestPlan、TestDataPlan、業務カバレッジを確認してください。",
+        message=(
+            "生成された UI TestPlan、TestDataPlan、Playwright 実行手順、"
+            "業務カバレッジを確認し、実ブラウザ実行を許可してください。"
+        ),
     )
     if test_plan is not None:
         return test_plan
-    ui_test = _confirmation_decision(
-        confirmations,
-        checkpoint="ui_test",
-        stage="ui_test_confirmation",
-        action="confirm_ui_test",
-        message="テストデータ生成手順と UI シナリオを確認し、実ブラウザ実行を許可してください。",
-    )
-    if ui_test is not None:
-        return ui_test
     data_result = _dict(management.get("test_data_execution"))
     if not data_result:
         return _waiting(
@@ -256,3 +308,25 @@ def _confirmation_decision(
 
 def _dict(value: object) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _has_identified_copilot_task(task_view: dict[str, Any]) -> bool:
+    task = _dict(task_view.get("task"))
+    task_id = task.get("coding_task_id")
+    return isinstance(task_id, str) and bool(task_id.strip())
+
+
+def _task_recorded_impact(task_view: dict[str, Any], *, impact_report_id: str) -> bool:
+    events = task_view.get("events")
+    if not isinstance(events, list):
+        return False
+    for event_value in events:
+        event = _dict(event_value)
+        payload = _dict(event.get("payload"))
+        if (
+            event.get("event_type") == "outputs_recorded"
+            and payload.get("output_stage") == "code_scope"
+            and payload.get("impact_report_id") == impact_report_id
+        ):
+            return True
+    return False

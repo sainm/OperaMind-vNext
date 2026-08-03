@@ -3,19 +3,26 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 import shutil
 import signal
 import subprocess
+import tempfile
+import threading
+import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, cast
 
 from psycopg import Connection
 
+from operamind.application.coverage_report import coverage_report_digest
 from operamind.contracts import ContractCatalog
 from operamind.domain import SafeCommandTemplate
 from operamind.infrastructure.code_graph import GitWorktreeDiffInspector
@@ -33,6 +40,11 @@ from operamind.platform_runtime import (
     terminate_windows_process_tree,
 )
 from operamind.profiles import ProfileCatalog
+
+_WORKSPACE_COMMAND_LOCKS_GUARD = threading.Lock()
+_WORKSPACE_COMMAND_LOCKS: dict[str, threading.Lock] = {}
+_PROCESS_GROUP_GRACE_SECONDS = 0.5
+_PROCESS_GROUP_POLL_SECONDS = 0.05
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +76,8 @@ class ApprovedCommandResult:
     command_profile_version_id: str
     command_ref: str
     template_digest: str
+    tested_content_digest: str
+    coverage_report: dict[str, str] | None = None
 
     def to_dict(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -74,6 +88,7 @@ class ApprovedCommandResult:
             "command_profile_version_id": self.command_profile_version_id,
             "command_ref": self.command_ref,
             "template_digest": self.template_digest,
+            "tested_content_digest": self.tested_content_digest,
             "executable_path": self.record.executable_path,
             "working_directory": self.record.working_directory,
             "stdout_digest": self.record.stdout_digest,
@@ -95,6 +110,8 @@ class ApprovedCommandResult:
                     else None
                 ),
             }
+        if self.coverage_report is not None:
+            payload["coverage_report"] = dict(self.coverage_report)
         return payload
 
 
@@ -168,56 +185,123 @@ class ApprovedCommandService:
             raise ValueError(
                 "Approved command Workspace is not linked to the registered Repository"
             )
-        evidence = self._git.inspect_worktree(
-            requested_root,
-            base_sha=scope.base_repository_revision,
-        )
-        if evidence.remote_url != scope.remote_url:
-            raise ValueError(
-                "Approved command Workspace origin does not match Repository registration"
-            )
-
         profile = self._profiles.get_version(scope.command_profile_version_id)
         if profile is None:
             raise RuntimeError("Approval Grant Command Profile Version no longer exists")
         template = SafeCommandTemplate.from_profile(profile, command_ref=scope.command_ref)
-        request_digest = _request_digest(
-            command_execution_id=request.command_execution_id,
-            scope=scope,
-            template_digest=template.digest,
-        )
-        reservation = self._repository.reserve(
-            CommandExecutionRequestWrite(
+        with _workspace_command_lock(requested_root):
+            evidence = self._git.inspect_worktree(
+                requested_root,
+                base_sha=scope.base_repository_revision,
+            )
+            if evidence.remote_url != scope.remote_url:
+                raise ValueError(
+                    "Approved command Workspace origin does not match Repository registration"
+                )
+            request_digest = _request_digest(
                 command_execution_id=request.command_execution_id,
                 scope=scope,
                 template_digest=template.digest,
-                request_digest=request_digest,
+                tested_content_digest=evidence.content_digest,
             )
-        )
-        if reservation.result is not None:
-            return ApprovedCommandResult(
-                reservation.result,
-                scope.command_profile_version_id,
-                scope.command_ref,
-                template.digest,
+            reservation = self._repository.reserve(
+                CommandExecutionRequestWrite(
+                    command_execution_id=request.command_execution_id,
+                    scope=scope,
+                    template_digest=template.digest,
+                    request_digest=request_digest,
+                )
             )
-        if reservation.incomplete:
-            raise RuntimeError(
-                "Command execution was previously reserved without a result; "
-                "operator review is required before using a new execution ID"
-            )
+            if reservation.result is not None:
+                return ApprovedCommandResult(
+                    reservation.result,
+                    scope.command_profile_version_id,
+                    scope.command_ref,
+                    template.digest,
+                    evidence.content_digest,
+                    _recorded_coverage_report(reservation.result),
+                )
+            if reservation.incomplete:
+                raise RuntimeError(
+                    "Command execution was previously reserved without a result; "
+                    "operator review is required before using a new execution ID"
+                )
 
-        write = _execute(template=template, workspace_root=requested_root)
-        return ApprovedCommandResult(
-            self._repository.record(
+            write = _execute(template=template, workspace_root=requested_root)
+            current = self._git.inspect_worktree(
+                requested_root,
+                base_sha=scope.base_repository_revision,
+            )
+            if (
+                current.remote_url != evidence.remote_url
+                or current.content_digest != evidence.content_digest
+            ):
+                write = replace(write, status="failed")
+            try:
+                coverage_report = _coverage_report_result(
+                    template=template,
+                    workspace_root=requested_root,
+                    command_passed=write.status == "passed",
+                )
+            except (OSError, RuntimeError, ValueError):
+                # The command reservation must always receive a terminal result.
+                # A missing or unsafe report is a failed quality gate, not an
+                # incomplete execution that requires manual recovery.
+                coverage_report = None
+                write = replace(write, status="failed")
+            if coverage_report is not None:
+                write = replace(
+                    write,
+                    coverage_report_format=coverage_report["format"],
+                    coverage_report_path=coverage_report["path"],
+                    coverage_report_digest=coverage_report["digest"],
+                )
+            record = self._repository.record(
                 command_execution_id=request.command_execution_id,
                 project_id=request.project_id,
                 write=write,
-            ),
-            scope.command_profile_version_id,
-            scope.command_ref,
-            template.digest,
-        )
+            )
+            return ApprovedCommandResult(
+                record,
+                scope.command_profile_version_id,
+                scope.command_ref,
+                template.digest,
+                evidence.content_digest,
+                _recorded_coverage_report(record),
+            )
+
+
+def _coverage_report_result(
+    *, template: SafeCommandTemplate, workspace_root: Path, command_passed: bool
+) -> dict[str, str] | None:
+    if template.purpose != "coverage":
+        return None
+    if not command_passed:
+        return None
+    if template.coverage_report_format is None or template.coverage_report_path is None:
+        raise RuntimeError("Coverage command has no validated report binding")
+    return {
+        "format": template.coverage_report_format,
+        "path": template.coverage_report_path,
+        "digest": coverage_report_digest(workspace_root, template.coverage_report_path),
+    }
+
+
+def _recorded_coverage_report(record: CommandExecutionRecord) -> dict[str, str] | None:
+    values = (
+        record.coverage_report_format,
+        record.coverage_report_path,
+        record.coverage_report_digest,
+    )
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        raise RuntimeError("Stored Coverage report binding is incomplete")
+    return {
+        "format": str(record.coverage_report_format),
+        "path": str(record.coverage_report_path),
+        "digest": str(record.coverage_report_digest),
+    }
 
 
 def _execute(*, template: SafeCommandTemplate, workspace_root: Path) -> CommandExecutionResultWrite:
@@ -298,6 +382,69 @@ def _execute(*, template: SafeCommandTemplate, workspace_root: Path) -> CommandE
     )
 
 
+def _execute_serialized(
+    *, template: SafeCommandTemplate, workspace_root: Path
+) -> CommandExecutionResultWrite:
+    """Prevent fixed commands from competing inside one target Workspace."""
+
+    with _workspace_command_lock(workspace_root):
+        return _execute(template=template, workspace_root=workspace_root)
+
+
+@contextmanager
+def _workspace_command_lock(workspace_root: Path) -> Iterator[None]:
+    """Serialize commands for one Workspace across threads and local processes."""
+
+    key = os.path.normcase(str(workspace_root.resolve(strict=True)))
+    with _WORKSPACE_COMMAND_LOCKS_GUARD:
+        thread_lock = _WORKSPACE_COMMAND_LOCKS.setdefault(key, threading.Lock())
+    lock_root = Path(tempfile.gettempdir()) / "operamind-command-locks"
+    lock_path = lock_root / f"{hashlib.sha256(key.encode('utf-8')).hexdigest()}.lock"
+    with thread_lock:
+        lock_root.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+b") as stream:
+            _acquire_process_file_lock(stream)
+            try:
+                yield
+            finally:
+                _release_process_file_lock(stream)
+
+
+def _acquire_process_file_lock(stream: IO[bytes]) -> None:
+    if os.name != "nt":
+        import fcntl
+
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        return
+
+    msvcrt = cast(Any, importlib.import_module("msvcrt"))
+
+    stream.seek(0, os.SEEK_END)
+    if stream.tell() == 0:
+        stream.write(b"\0")
+        stream.flush()
+    while True:
+        try:
+            stream.seek(0)
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            return
+        except OSError:
+            time.sleep(_PROCESS_GROUP_POLL_SECONDS)
+
+
+def _release_process_file_lock(stream: IO[bytes]) -> None:
+    if os.name != "nt":
+        import fcntl
+
+        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        return
+
+    msvcrt = cast(Any, importlib.import_module("msvcrt"))
+
+    stream.seek(0)
+    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 def _resolve_workspace_path(workspace_root: Path, value: str, *, kind: str) -> Path:
     candidate = (workspace_root / value).resolve(strict=True)
     if not candidate.is_relative_to(workspace_root):
@@ -376,24 +523,41 @@ def _terminate_process_tree(process: subprocess.Popen[bytes]) -> bool:
 
     if os.name != "posix":
         return terminate_windows_process_tree(process)
-    try:
-        os.killpg(process.pid, 0)
-    except ProcessLookupError:
-        return False
+    attempts = max(1, int(_PROCESS_GROUP_GRACE_SECONDS / _PROCESS_GROUP_POLL_SECONDS))
+    for attempt in range(attempts):
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            # The leader has already been waited and reaped.  On macOS its now-free
+            # process-group id can be reused before this probe; EPERM then refers to
+            # an unrelated group, not to a command launch failure.  Never signal it.
+            return False
+        if attempt + 1 < attempts:
+            time.sleep(_PROCESS_GROUP_POLL_SECONDS)
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
+        return False
+    except PermissionError:
+        # The group disappeared or was reused between the probe and kill.
         return False
     return True
 
 
 def _request_digest(
-    *, command_execution_id: str, scope: CommandExecutionScope, template_digest: str
+    *,
+    command_execution_id: str,
+    scope: CommandExecutionScope,
+    template_digest: str,
+    tested_content_digest: str,
 ) -> str:
     payload = {
         "command_execution_id": command_execution_id,
         "scope": asdict(scope),
         "template_digest": template_digest,
+        "tested_content_digest": tested_content_digest,
     }
     canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(canonical.encode()).hexdigest()

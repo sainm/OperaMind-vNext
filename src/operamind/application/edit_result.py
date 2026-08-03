@@ -123,6 +123,7 @@ class EditResultService:
             else self._git.inspect_committed(
                 requested_root,
                 base_sha=scope.base_repository_revision,
+                allow_unchanged_head=not scope.writable_files,
             )
         )
         if evidence.remote_url != scope.remote_url:

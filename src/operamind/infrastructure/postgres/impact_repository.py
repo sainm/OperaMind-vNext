@@ -404,7 +404,7 @@ class ImpactRepository:
                 for item_id, action in items.items()
                 if action in {"modify", "add", "delete"}
             }
-            if not set(approved) & actionable:
+            if actionable and not set(approved) & actionable:
                 raise ValueError("Impact confirmation must approve at least one actionable item")
             self._artifacts.store(
                 artifact_id=confirmation_id,
@@ -694,7 +694,7 @@ class ImpactRepository:
         if (
             approved & rejected
             or approved | rejected != item_ids
-            or not approved & actionable
+            or (bool(actionable) and not approved & actionable)
             or state.confirmed_at != confirmed_at
             or state.status not in {"confirmed", "superseded"}
         ):

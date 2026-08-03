@@ -247,7 +247,7 @@ def test_natural_language_revision_supersedes_case_and_stales_old_evidence() -> 
         executed = DataExecutionService(
             connection=connection,
             contracts=contracts,
-            executors={"fixture": FixtureExecutor()},
+            executors={"http": FixtureExecutor()},
         ).execute(
             DataExecutionServiceRequest(
                 execution_result_id="execution-result-v2",
@@ -356,6 +356,182 @@ def test_natural_language_revision_supersedes_case_and_stales_old_evidence() -> 
 
 
 @pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
+def test_copilot_ui_plan_regeneration_persists_v2_plans_before_new_execution() -> None:
+    assert DATABASE_URL is not None
+    schema_name = f"test_copilot_ui_revision_{uuid4().hex}"
+    with psycopg.connect(DATABASE_URL) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema_name)))
+            cursor.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(schema_name)))
+        MigrationRunner(connection, MigrationCatalog.load(ROOT / "migrations")).apply()
+        contracts = ContractCatalog.load(ROOT / "contracts")
+        bundle = _source_bundle()
+        _seed_scope(connection, contracts, bundle)
+        service = RevisionService(connection=connection, repository_root=ROOT)
+        preview = service.propose(
+            change_request_id="change-request-1",
+            instruction=(
+                "ケース「経費一覧を確認」のステップ「一覧を開く」を「経費一覧画面を開く」に変更"
+            ),
+            actor="qa-user",
+        )
+        proposal = preview["proposal"]
+        generated_test_plan = {
+            "artifact_type": "TestPlan",
+            "schema_version": "v2",
+            "plan_kind": "ui",
+            "test_plan_id": "copilot-ui-plan-v2",
+            "change_request_id": "change-request-1",
+            "project_id": "visiondemo",
+            "status": "ready",
+            "test_cases": [
+                {
+                    "test_case_id": "expense-case",
+                    "title": "経費一覧を確認",
+                    "level": "ui",
+                    "execution_mode": "browser",
+                    "business_rule_refs": ["rule-list"],
+                    "acceptance_criteria_refs": ["expense-criterion"],
+                    "preconditions": ["ログイン済み"],
+                    "steps": ["経費一覧画面を開く", "ステータスを確認する"],
+                    "expected_results": ["4 件を表示する"],
+                    "test_data_refs": ["expense-data"],
+                }
+            ],
+            "blocking_reasons": [],
+        }
+        generated_test_data_plan = {
+            "artifact_type": "TestDataPlan",
+            "schema_version": "v2",
+            "test_data_plan_id": "copilot-ui-data-v2",
+            "test_plan_id": "copilot-ui-plan-v2",
+            "project_id": "visiondemo",
+            "status": "ready",
+            "data_sets": [
+                {
+                    "test_data_id": "expense-data",
+                    "test_case_refs": ["expense-case"],
+                    "setup_actions": [],
+                    "cleanup_policy": "isolated_environment",
+                }
+            ],
+            "generation_flows": [
+                {
+                    "flow_id": "expense-ui-flow-v2",
+                    "title": "経費一覧を画面で確認する",
+                    "test_data_refs": ["expense-data"],
+                    "test_case_refs": ["expense-case"],
+                    "steps": [
+                        {
+                            "step_id": "create-expense-data-v2",
+                            "sequence": 1,
+                            "channel": "http",
+                            "business_action": "UI 検証用の経費を登録する",
+                            "data_effect": "creates",
+                            "test_step_refs": [],
+                            "target": "POST /expense/api/save",
+                            "inputs": {
+                                "method": "POST",
+                                "path": "/expense/api/save",
+                                "json": {"description": "UI 検証用"},
+                            },
+                            "depends_on": [],
+                            "output_bindings": [
+                                {
+                                    "variable": "expense_id",
+                                    "source": "response",
+                                    "path": "id",
+                                    "required": True,
+                                }
+                            ],
+                            "postconditions": [
+                                {
+                                    "assertion_id": "expense-create-status-v2",
+                                    "observe_via": "api",
+                                    "subject": "status_code",
+                                    "operator": "equals",
+                                    "expected": 201,
+                                },
+                                {
+                                    "assertion_id": "expense-description-v2",
+                                    "observe_via": "response",
+                                    "subject": "description",
+                                    "operator": "equals",
+                                    "expected": "UI 検証用",
+                                },
+                            ],
+                        },
+                        {
+                            "step_id": "open-list-v2",
+                            "sequence": 2,
+                            "channel": "ui",
+                            "business_action": "経費一覧画面を開く",
+                            "screen_ref": "expense-list",
+                            "ui_action_ref": "open",
+                            "playwright": {
+                                "action": "goto",
+                                "path": "/expense",
+                                "mask_locators": [],
+                                "observations": [{"key": "page_title", "kind": "title"}],
+                            },
+                            "inputs": {},
+                            "depends_on": ["create-expense-data-v2"],
+                            "output_bindings": [],
+                            "postconditions": [
+                                {
+                                    "assertion_id": "list-title-v2",
+                                    "observe_via": "ui",
+                                    "subject": "page_title",
+                                    "operator": "contains",
+                                    "expected": "経費",
+                                }
+                            ],
+                        },
+                    ],
+                    "final_assertions": [
+                        {
+                            "assertion_id": "expense-result-v2",
+                            "observe_via": "test",
+                            "subject": "expense-case",
+                            "operator": "satisfies",
+                            "expected": "4 件を表示する",
+                        }
+                    ],
+                    "cleanup_policy": "isolated_environment",
+                    "cleanup_steps": [],
+                }
+            ],
+            "blocking_reasons": [],
+        }
+        applied = service.apply_ai_regeneration(
+            change_request_id="change-request-1",
+            proposal_id=str(proposal["proposal_id"]),
+            source_orchestration_id="orchestration-v1",
+            test_plan=generated_test_plan,
+            test_data_plan=generated_test_data_plan,
+            operations=proposal["operations"],
+            selections={},
+            actor="codex:fallback",
+        )
+        target_id = str(applied["revision"]["target_orchestration_id"])
+        assert applied["revision"]["applied_by"] == "codex:fallback"
+        assert applied["bundle"]["test_plan"]["schema_version"] == "v2"
+        assert applied["bundle"]["test_data_plan"]["schema_version"] == "v2"
+        persisted_steps = applied["bundle"]["test_data_plan"]["generation_flows"][0]["steps"]
+        open_step = next(step for step in persisted_steps if step["step_id"] == "open-list-v2")
+        assert open_step["playwright"]["action"] == "goto"
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT status, superseded_by_orchestration_id FROM change_orchestrations "
+                "WHERE orchestration_id = 'orchestration-v1'"
+            )
+            assert cursor.fetchone() == ("superseded", target_id)
+            cursor.execute("SET search_path TO public")
+            cursor.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema_name)))
+        connection.commit()
+
+
+@pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
 def test_unchanged_execution_scope_reuses_completed_grant_for_new_run() -> None:
     assert DATABASE_URL is not None
     schema_name = f"test_case_scope_reuse_{uuid4().hex}"
@@ -407,7 +583,7 @@ def test_unchanged_execution_scope_reuses_completed_grant_for_new_run() -> None:
         executed = DataExecutionService(
             connection=connection,
             contracts=contracts,
-            executors={"fixture": FixtureExecutor()},
+            executors={"http": FixtureExecutor()},
         ).execute(
             DataExecutionServiceRequest(
                 execution_result_id="execution-result-reused",
@@ -1032,9 +1208,9 @@ def _source_bundle(*, ui: bool = True) -> dict[str, Any]:
                         {
                             "step_id": "setup-expense-data",
                             "sequence": 1,
-                            "channel": "fixture",
+                            "channel": "http",
                             "business_action": "既定データを準備する",
-                            "target": "visiondemo.default-seed",
+                            "target": "POST /test-data/expenses",
                             "inputs": {},
                             "depends_on": [],
                             "output_bindings": [],

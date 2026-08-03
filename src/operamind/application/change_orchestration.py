@@ -9,6 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from operamind.application.planned_business_coverage import (
+    assess_planned_business_coverage,
+    uncovered_business_rules,
+)
 from operamind.contracts import ContractCatalog
 
 
@@ -28,6 +32,9 @@ class ChangeOrchestrationInput:
     copilot_coding_task_id: str | None = None
     generated_test_plan: dict[str, Any] | None = None
     generated_test_data_plan: dict[str, Any] | None = None
+    scoped_test_files: frozenset[str] = frozenset()
+    passed_command_refs: frozenset[str] = frozenset()
+    canonical_artifact_refs: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,11 +134,41 @@ class ChangeOrchestrationPlanner:
         data_blockers = list(cast(list[str], test_data.get("blocking_reasons", [])))
         if test_plan.get("status") != "ready":
             data_blockers.append("Copilot TestPlan is blocked")
+        try:
+            coverage_assessment = assess_planned_business_coverage(
+                request=request,
+                test_plan=test_plan,
+                test_data_plan=test_data,
+                scoped_test_files=value.scoped_test_files,
+                passed_command_refs=value.passed_command_refs,
+                canonical_artifact_refs=value.canonical_artifact_refs,
+                required_ui_scenario_refs=tuple(
+                    str(item)
+                    for item in cast(
+                        list[object], report.get("required_ui_scenario_refs", [])
+                    )
+                ),
+            )
+        except ValueError as exc:
+            raise ChangeOrchestrationBlockedError(str(exc)) from exc
+        if (
+            coverage_assessment["status"] != "passed"
+            or coverage_assessment["coverage_percent"] != 100
+        ):
+            uncovered = uncovered_business_rules(
+                request=request,
+                assessment=coverage_assessment,
+            )
+            raise ChangeOrchestrationBlockedError(
+                "Business coverage must be 100 before orchestration: "
+                f"uncovered={json.dumps(uncovered, ensure_ascii=False, sort_keys=True)}"
+            )
         coverage = _coverage(
             request=request,
             acceptance=acceptance,
             test_plan=test_plan,
             coverage_id=coverage_id,
+            assessment=coverage_assessment,
         )
         ui_scenarios = [
             {
@@ -221,9 +258,11 @@ def _copilot_planning_outputs(
         for test in tests
         for rule_ref in cast(list[object], test.get("business_rule_refs", []))
     }
-    if referenced_rules != request_rules:
+    unknown_rules = referenced_rules - request_rules
+    if unknown_rules:
         raise ChangeOrchestrationBlockedError(
-            "Copilot TestPlan does not cover exactly the Change Request business rules"
+            "Copilot TestPlan references unknown Change Request business rules: "
+            f"{sorted(unknown_rules)}"
         )
     criterion_ids = {
         str(criterion_ref)
@@ -294,31 +333,8 @@ def _coverage(
     acceptance: dict[str, Any],
     test_plan: dict[str, Any],
     coverage_id: str,
+    assessment: dict[str, Any],
 ) -> dict[str, Any]:
-    criteria = cast(list[dict[str, Any]], acceptance["criteria"])
-    tests = cast(list[dict[str, Any]], test_plan["test_cases"])
-    items: list[dict[str, Any]] = []
-    for rule in cast(list[dict[str, Any]], request["business_rules"]):
-        rule_id = str(rule["business_rule_id"])
-        test_refs = sorted(
-            str(test["test_case_id"])
-            for test in tests
-            if rule_id in cast(list[str], test["business_rule_refs"])
-        )
-        criterion_refs = sorted(
-            str(criterion["criterion_id"])
-            for criterion in criteria
-            if rule_id in cast(list[str], criterion["business_rule_refs"])
-        )
-        items.append(
-            {
-                "business_rule_id": rule_id,
-                "test_case_refs": test_refs,
-                "criterion_refs": criterion_refs,
-                "status": "covered" if test_refs and criterion_refs else "uncovered",
-            }
-        )
-    covered = sum(item["status"] == "covered" for item in items)
     return {
         "artifact_type": "BusinessCoverageReport",
         "schema_version": "v1",
@@ -327,11 +343,11 @@ def _coverage(
         "test_plan_id": test_plan["test_plan_id"],
         "acceptance_criteria_id": acceptance["acceptance_criteria_id"],
         "project_id": request["project_id"],
-        "business_rule_count": len(items),
-        "covered_rule_count": covered,
-        "coverage_percent": covered * 100 / len(items),
-        "items": items,
-        "status": "passed" if covered == len(items) else "failed",
+        "business_rule_count": assessment["business_rule_count"],
+        "covered_rule_count": assessment["covered_rule_count"],
+        "coverage_percent": assessment["coverage_percent"],
+        "items": copy.deepcopy(assessment["items"]),
+        "status": assessment["status"],
     }
 
 

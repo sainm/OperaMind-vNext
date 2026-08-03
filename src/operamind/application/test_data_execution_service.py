@@ -101,9 +101,10 @@ class TestDataExecutionService:
     ) -> None:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._repository = TestDataExecutionRepository(connection, contracts)
+        self._executors = dict(executors)
         self._engine = TestDataExecutionEngine(
             contracts=contracts,
-            executors=executors,
+            executors=self._executors,
             clock=self._clock,
             progress_sink=progress_sink,
         )
@@ -178,16 +179,22 @@ class TestDataExecutionService:
         )
         if plan["test_data_plan_id"] != request.test_data_plan_id:
             raise RuntimeError("Reserved TestDataPlan changed before execution")
-        artifact = self._engine.execute(
-            plan=plan,
-            request=TestDataExecutionRequest(
-                execution_result_id=request.execution_result_id,
-                run_id=request.run_id,
-                project_id=request.project_id,
-                base_url=request.base_url,
-                started_at=record.started_at,
-            ),
-        )
+        try:
+            artifact = self._engine.execute(
+                plan=plan,
+                request=TestDataExecutionRequest(
+                    execution_result_id=request.execution_result_id,
+                    run_id=request.run_id,
+                    project_id=request.project_id,
+                    base_url=request.base_url,
+                    started_at=record.started_at,
+                ),
+            )
+        finally:
+            for executor in {id(value): value for value in self._executors.values()}.values():
+                close = getattr(executor, "close", None)
+                if callable(close):
+                    close()
         record = self._repository.complete(artifact)
         return TestDataExecutionServiceResult(
             created=True,

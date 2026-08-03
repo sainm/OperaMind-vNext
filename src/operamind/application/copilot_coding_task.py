@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +27,7 @@ from operamind.application.copilot_task_context import (
     CopilotTaskContextRequest,
     CopilotTaskContextService,
 )
+from operamind.application.coverage_report import load_coverage_report
 from operamind.application.edit_result import (
     EditResultRequest,
     EditResultService,
@@ -32,8 +37,18 @@ from operamind.application.hybrid_search import (
     RequirementDocumentDiscoveryRequest,
     RequirementDocumentDiscoveryService,
 )
+from operamind.application.planned_business_coverage import (
+    assess_planned_business_coverage,
+    canonical_artifact_refs_from_output,
+    uncovered_business_rules,
+)
 from operamind.application.project_stack import detect_project_stack
+from operamind.application.test_data_flow import (
+    test_data_plan_channels,
+    validate_test_data_plan_artifact,
+)
 from operamind.contracts import ContractCatalog
+from operamind.infrastructure.code_graph import GitWorktreeDiffInspector
 from operamind.infrastructure.embeddings import OpenAICompatibleEmbeddingProvider
 from operamind.infrastructure.postgres.artifact_repository import ArtifactRepository
 from operamind.infrastructure.postgres.canonical_repository import (
@@ -42,6 +57,9 @@ from operamind.infrastructure.postgres.canonical_repository import (
 )
 from operamind.infrastructure.postgres.change_automation_repository import (
     ChangeAutomationRepository,
+)
+from operamind.infrastructure.postgres.change_orchestration_repository import (
+    ChangeOrchestrationRepository,
 )
 from operamind.infrastructure.postgres.copilot_coding_task_repository import (
     CopilotCodingTaskRepository,
@@ -110,6 +128,10 @@ class CopilotCodingTaskPublishRequest:
     approval_grant_id: str | None = None
     retry_of_coding_task_id: str | None = None
     attempt_number: int = 1
+    task_kind: str = "change_delivery"
+    initial_stage: str = "document_change"
+    plan_revision_context: dict[str, object] | None = None
+    execution_basis: dict[str, object] | None = None
 
     def __post_init__(self) -> None:
         values = (
@@ -119,6 +141,8 @@ class CopilotCodingTaskPublishRequest:
             self.task_summary,
             self.actor,
             self.idempotency_key,
+            self.task_kind,
+            self.initial_stage,
         )
         if any(not value.strip() for value in values):
             raise ValueError("Copilot Coding Task publish fields must not be blank")
@@ -134,6 +158,61 @@ class CopilotCodingTaskPublishRequest:
             raise ValueError("retry_of_coding_task_id must not be blank")
         if self.attempt_number < 1:
             raise ValueError("Copilot Coding Task attempt_number must be positive")
+        if self.task_kind not in {
+            "change_delivery",
+            "change_execution",
+            "ui_test_plan_revision",
+        }:
+            raise ValueError("Unsupported Copilot Coding Task kind")
+        if self.task_kind == "ui_test_plan_revision":
+            if self.initial_stage != "ui_test_revision" or self.plan_revision_context is None:
+                raise ValueError("UI TestPlan revision Task requires revision context")
+            required_context = {
+                "proposal_id",
+                "source_orchestration_id",
+                "source_test_plan_id",
+                "instruction",
+                "confirmed_operations_json",
+                "selections_json",
+            }
+            if set(self.plan_revision_context) != required_context or any(
+                not isinstance(value, str) or not value.strip()
+                for value in self.plan_revision_context.values()
+            ):
+                raise ValueError("UI TestPlan revision context is incomplete")
+            if self.edit_packet_id is not None or self.approval_grant_id is not None:
+                raise ValueError("UI TestPlan revision Task must not receive code edit scope")
+            if self.execution_basis is not None:
+                raise ValueError("UI TestPlan revision Task must not receive execution basis")
+        elif self.task_kind == "change_execution":
+            if (
+                self.initial_stage != "compile_test"
+                or self.edit_packet_id is None
+                or self.approval_grant_id is None
+                or self.execution_basis is None
+            ):
+                raise ValueError(
+                    "Change execution Task requires confirmed scope, execution basis, "
+                    "and compile_test initial stage"
+                )
+            if self.plan_revision_context is not None:
+                raise ValueError("Change execution Task must not receive revision-only fields")
+            impact_id = self.execution_basis.get("impact_report_id")
+            change_refs = self.execution_basis.get("document_change_refs")
+            if (
+                not isinstance(impact_id, str)
+                or not impact_id.strip()
+                or not isinstance(change_refs, list)
+                or not change_refs
+                or any(not isinstance(value, str) or not value.strip() for value in change_refs)
+            ):
+                raise ValueError("Change execution Task has incomplete execution basis")
+        elif (
+            self.initial_stage != "document_change"
+            or self.plan_revision_context is not None
+            or self.execution_basis is not None
+        ):
+            raise ValueError("Change delivery Task has invalid revision-only fields")
 
 
 class CopilotCodingTaskService:
@@ -172,6 +251,10 @@ class CopilotCodingTaskService:
                 request.actor,
                 request.retry_of_coding_task_id,
                 request.attempt_number,
+                request.task_kind,
+                request.initial_stage,
+                request.plan_revision_context,
+                request.execution_basis,
             )
             actual = (
                 existing_record.change_request_id,
@@ -183,6 +266,10 @@ class CopilotCodingTaskService:
                 task.get("created_by"),
                 existing_record.retry_of_coding_task_id,
                 existing_record.attempt_number,
+                task.get("task_kind", "change_delivery"),
+                task.get("initial_stage", "document_change"),
+                task.get("plan_revision_context"),
+                task.get("execution_basis"),
             )
             if actual != expected:
                 raise ValueError("Copilot Coding Task replay payload differs")
@@ -233,8 +320,9 @@ class CopilotCodingTaskService:
                 packet["base_repository_revision"] if packet is not None else None
             ),
             "attempt_number": request.attempt_number,
+            "task_kind": request.task_kind,
             "execution_mode": "copilot_change_task",
-            "initial_stage": "document_change",
+            "initial_stage": request.initial_stage,
             "provider_contract": provider_contract,
             "task_summary": request.task_summary,
             "change_context": {
@@ -265,6 +353,10 @@ class CopilotCodingTaskService:
         }
         if request.retry_of_coding_task_id is not None:
             artifact["retry_of_coding_task_id"] = request.retry_of_coding_task_id
+        if request.plan_revision_context is not None:
+            artifact["plan_revision_context"] = request.plan_revision_context
+        if request.execution_basis is not None:
+            artifact["execution_basis"] = request.execution_basis
         record = self._tasks.publish(
             artifact=artifact,
             workspace_root=request.workspace_root,
@@ -273,10 +365,20 @@ class CopilotCodingTaskService:
         view = self._tasks.view(record.coding_task_id)
         return {"created": record.created, **view}
 
-    def claim_next(self, *, workspace_root: Path, consumer_id: str) -> dict[str, object] | None:
+    def claim_next(
+        self,
+        *,
+        workspace_root: Path,
+        consumer_id: str,
+        change_request_id: str | None = None,
+    ) -> dict[str, object] | None:
         if not consumer_id.strip():
             raise ValueError("Bridge consumer_id must not be blank")
-        return self._tasks.claim_next(workspace_root=workspace_root, consumer_id=consumer_id)
+        return self._tasks.claim_next(
+            workspace_root=workspace_root,
+            consumer_id=consumer_id,
+            change_request_id=change_request_id,
+        )
 
     def accept(
         self,
@@ -368,14 +470,71 @@ class CopilotCodingTaskService:
     def view(self, coding_task_id: str) -> dict[str, object]:
         return self._tasks.view(coding_task_id)
 
-    def latest_for_request(self, change_request_id: str) -> dict[str, object] | None:
-        return self._tasks.latest_for_request(change_request_id)
+    def latest_for_request(
+        self,
+        change_request_id: str,
+        *,
+        task_kind: str | None = None,
+    ) -> dict[str, object] | None:
+        return self._tasks.latest_for_request(change_request_id, task_kind=task_kind)
 
-    def document_discovery_for_request(
-        self, change_request_id: str
-    ) -> dict[str, object]:
+    def rollback_document_change(self, coding_task_id: str) -> dict[str, object]:
+        """Rollback the exact document draft recorded by a rejected task."""
+
+        task = self._tasks.get(coding_task_id)
+        output = self._recorded_output(coding_task_id, "document_change")
+        document_ids = tuple(str(value) for value in cast(list[object], output["document_ids"]))
+        paths = CopilotDocumentChangeService(
+            connection=self._connection,
+            repository_root=self._root,
+        ).rollback_materialized(
+            project_id=task.project_id,
+            source_snapshot_id=str(output["source_document_snapshot_id"]),
+            target_snapshot_id=str(output["target_document_snapshot_id"]),
+            document_ids=document_ids,
+        )
+        return {
+            "coding_task_id": coding_task_id,
+            "document_ids": list(document_ids),
+            "restored_paths": [str(path) for path in paths],
+        }
+
+    def document_discovery_for_request(self, change_request_id: str) -> dict[str, object]:
         """Expose the same bounded RAG document set to Web and Copilot."""
-        return _public_document_discovery(self._document_discovery(change_request_id))
+        return _public_document_discovery(
+            self.canonical_document_discovery_for_request(change_request_id)
+        )
+
+    def canonical_document_discovery_for_request(self, change_request_id: str) -> dict[str, object]:
+        """Return discovery evidence that can be bound to an approved Change Task."""
+
+        return self._document_discovery(change_request_id)
+
+    def bind_document_discovery(
+        self,
+        *,
+        coding_task_id: str,
+        automation_run_id: str,
+        subject_digest: str,
+        discovery: dict[str, object],
+        actor: str,
+    ) -> None:
+        task = self._tasks.get(coding_task_id)
+        automation = ChangeAutomationRepository(self._connection).get(automation_run_id)
+        if (
+            automation.change_request_id != task.change_request_id
+            or automation.project_id != task.project_id
+        ):
+            raise ValueError("RAG discovery Automation Run is outside Coding Task scope")
+        if subject_digest != _payload_digest(discovery):
+            raise ValueError("RAG discovery subject digest differs from its content")
+        self._tasks.bind_document_discovery(
+            coding_task_id=coding_task_id,
+            automation_run_id=automation_run_id,
+            subject_digest=subject_digest,
+            discovery=discovery,
+            actor=actor,
+        )
 
     def bind_execution_scope(
         self,
@@ -412,18 +571,92 @@ class CopilotCodingTaskService:
         )
         return self._tasks.view(coding_task_id)
 
-    def get_mcp_context(self, *, coding_task_id: str, workspace_root: Path) -> dict[str, object]:
+    def get_mcp_context(
+        self,
+        *,
+        coding_task_id: str,
+        workspace_root: Path,
+        actor: str = "mcp:github-copilot",
+    ) -> dict[str, object]:
+        if not actor.strip():
+            raise ValueError("Coding Task context actor must not be blank")
         pending_task = self._tasks.get(coding_task_id)
-        automation = ChangeAutomationRepository(self._connection).latest_for_request(
-            pending_task.change_request_id
-        )
+        immutable_task = cast(dict[str, object], self._tasks.view(coding_task_id)["task"])
+        if immutable_task.get("task_kind") == "ui_test_plan_revision":
+            task = self._tasks.begin_mcp(
+                coding_task_id=coding_task_id,
+                workspace_root=workspace_root,
+                actor=actor,
+            )
+            context = cast(dict[str, object], immutable_task["plan_revision_context"])
+            bundle = ChangeOrchestrationRepository(self._connection, self._contracts).bundle(
+                str(context["source_orchestration_id"])
+            )
+            return {
+                "coding_task": _public_task_artifact(immutable_task),
+                "current_stage": task.current_stage,
+                "execution_scope": {"bound": False, "read_only": True},
+                "workspace": {"root": task.workspace_root},
+                "source_ui_test_plan": bundle["test_plan"],
+                "source_test_data_plan": bundle["test_data_plan"],
+                "revision_instruction": context["instruction"],
+                "confirmed_change_summary": json.loads(str(context["confirmed_operations_json"])),
+                "change_plan": {
+                    "mode": "ui_test_plan_revision",
+                    "stage": "ui_test_revision",
+                    "steps": [
+                        (
+                            "Apply every confirmed operation to the complete natural-language UI "
+                            "TestPlan, including generation steps, variables, assertions, and "
+                            "cleanup."
+                        ),
+                        (
+                            "Regenerate the complete TestDataPlan, including cross-screen data, "
+                            "Playwright actions, UI assertions, screenshots, and cleanup."
+                        ),
+                        (
+                            "Keep one stable step_id beside every TestPlan step and map every one "
+                            "to at least one executable Playwright UI step through test_step_refs."
+                        ),
+                        (
+                            "Preserve Playwright as the primary driver. Add computer_use_fallback "
+                            "only when the confirmed change requires a non-DOM or visual operation."
+                        ),
+                        "Do not modify code or design documents.",
+                        (
+                            "Call copilot_record_change_outputs with "
+                            "output_stage=ui_test_revision, test_plan, and test_data_plan."
+                        ),
+                    ],
+                },
+            }
+        automation_repository = ChangeAutomationRepository(self._connection)
+        automation = automation_repository.latest_for_request(pending_task.change_request_id)
+        review_feedback: dict[str, object] | None = None
+        if (
+            pending_task.current_stage == "code_scope"
+            and automation is not None
+            and automation.get("current_stage") == "impact_confirmation"
+        ):
+            confirmation = automation_repository.latest_confirmation(
+                run_id=str(automation["automation_run_id"]),
+                checkpoint="code_scope",
+            )
+            if _is_rejected_code_scope_revision(automation, confirmation):
+                assert confirmation is not None
+                review_feedback = {
+                    "checkpoint": "code_scope",
+                    "decision": "rejected",
+                    "note": confirmation.get("note"),
+                    "created_at": confirmation.get("created_at"),
+                }
         allowed_automation_stages = {
             "document_change": {"document_generation", "document_revision"},
             "code_scope": {"impact_analysis"},
         }
         if pending_task.approval_grant_id is None and automation is not None:
             allowed = allowed_automation_stages.get(pending_task.current_stage, set())
-            if automation.get("current_stage") not in allowed:
+            if automation.get("current_stage") not in allowed and review_feedback is None:
                 raise ValueError(
                     "現在の人工確認が完了するまで Copilot Task を実行できません: "
                     f"{automation.get('current_stage')}"
@@ -431,12 +664,14 @@ class CopilotCodingTaskService:
         task = self._tasks.begin_mcp(
             coding_task_id=coding_task_id,
             workspace_root=workspace_root,
-            actor="mcp:github-copilot",
+            actor=actor,
         )
         task_view = self._tasks.view(coding_task_id)
         if task.approval_grant_id is None:
             if task.current_stage == "document_change":
-                document_discovery = self._document_discovery(task.change_request_id)
+                document_discovery = self._document_discovery_for_task(
+                    coding_task_id, task.change_request_id
+                )
                 discovery_ready = document_discovery["status"] == "ready"
                 steps = [
                     "Read the requirement and business rules.",
@@ -456,7 +691,9 @@ class CopilotCodingTaskService:
                     ),
                 ]
             elif task.current_stage == "code_scope":
-                document_discovery = self._document_discovery(task.change_request_id)
+                document_discovery = self._document_discovery_for_task(
+                    coding_task_id, task.change_request_id
+                )
                 steps = [
                     "Read the recorded design-document diff returned by OperaMind.",
                     "Inspect the code Workspace without modifying it.",
@@ -476,14 +713,13 @@ class CopilotCodingTaskService:
                     f"{task.current_stage}"
                 )
             return {
-                "coding_task": _public_task_artifact(
-                    cast(dict[str, object], task_view["task"])
-                ),
+                "coding_task": _public_task_artifact(cast(dict[str, object], task_view["task"])),
                 "current_stage": task.current_stage,
                 "execution_scope": {"bound": False},
                 "workspace": {"root": task.workspace_root},
                 "context_package_available": False,
                 "document_discovery": _public_document_discovery(document_discovery),
+                "review_feedback": review_feedback,
                 "change_plan": {
                     "mode": "copilot_change_task",
                     "stage": task.current_stage,
@@ -503,40 +739,148 @@ class CopilotCodingTaskService:
                 edit_packet_id=edit_packet_id,
                 approval_grant_id=approval_grant_id,
                 workspace_root=workspace_root,
+                require_active_grant=task.current_stage != "test_planning",
             )
         )
         packet = cast(dict[str, object], context["edit_packet"])
         approval = cast(dict[str, object], context["approval"])
         task_workspace = cast(dict[str, object], context["workspace"])
+        verification_only = not bool(packet.get("editable_files"))
+        planning_contract = (
+            _planning_contract_examples(
+                contracts_root=self._contracts.root,
+                project_id=task.project_id,
+                change_request_id=task.change_request_id,
+            )
+            if task.current_stage == "test_planning"
+            else None
+        )
+        if planning_contract is not None:
+            request_record = self._requests.get_change_request(task.change_request_id)
+            request_artifact = cast(dict[str, Any], request_record["artifact"])
+            code_refs = self._code_scope_output(coding_task_id)
+            passed_command_refs = sorted(
+                str(command["command_ref"])
+                for command in cast(list[dict[str, Any]], task_view["commands"])
+                if command.get("status") == "passed" and command.get("exit_code") == 0
+            )
+            planning_contract["business_coverage_contract"] = {
+                "required_coverage_percent": 100,
+                "business_requirements": copy.deepcopy(request_artifact.get("business_rules", [])),
+                "allowed_evidence": {
+                    "code_test_files": sorted(
+                        str(value) for value in cast(list[object], approval.get("test_files", []))
+                    ),
+                    "passed_command_refs": passed_command_refs,
+                    "canonical_artifact_refs": sorted(
+                        canonical_artifact_refs_from_output(code_refs)
+                    ),
+                    "plan_component_refs": [
+                        "ui_test_plan",
+                        "test_data_plan",
+                        "generation_flows",
+                        "cleanup",
+                        "playwright_observations",
+                    ],
+                },
+                "rules": [
+                    (
+                        "Cover every business_rule_id with its own executable UI case. Typed "
+                        "requirement_evidence is supplemental audit context and never replaces "
+                        "an executable UI case."
+                    ),
+                    (
+                        "A UI case counts only when all natural-language step_ids map to "
+                        "executable TestDataPlan Playwright steps."
+                    ),
+                    "Use only the listed current-scope Evidence refs; never invent or infer refs.",
+                    (
+                        "Use code_test only with an approved test file and passed command. Use "
+                        "command_evidence, canonical_evidence, or plan_evidence only as "
+                        "supplemental audit context; none of these raises business coverage."
+                    ),
+                    (
+                        "If OperaMind reports uncovered rules, regenerate both complete plans and "
+                        "resubmit them without asking the user to find omissions."
+                    ),
+                    (
+                        "Human confirmation and UI execution are unavailable until calculated "
+                        "coverage is exactly 100 percent."
+                    ),
+                ],
+            }
+            impact = self._artifacts.get(str(code_refs["impact_report_id"]))
+            if impact is None or impact.get("artifact_type") != "ImpactReport":
+                raise RuntimeError("Copilot Change Task Impact Report Artifact is missing")
+            planning_contract["required_ui_scenario_ids"] = copy.deepcopy(
+                impact.get("required_ui_scenario_refs", [])
+            )
+        execution_steps = (
+            [
+                "Do not modify any file; this is a verification-only execution scope.",
+                "Call copilot_validate_task_diff and require the returned status to be no_changes.",
+            ]
+            if verification_only
+            else [
+                "Use only the editable and test paths in the validated execution scope.",
+                "Modify the code and tests required by the recorded design diff.",
+                "Call copilot_validate_task_diff before running project commands.",
+            ]
+        )
         return {
-            "coding_task": _public_task_artifact(
-                cast(dict[str, object], task_view["task"])
-            ),
+            "coding_task": _public_task_artifact(cast(dict[str, object], task_view["task"])),
             "current_stage": task.current_stage,
             "execution_scope": _public_execution_scope(packet, approval),
             "workspace": _public_workspace(task_workspace),
             "context_package_available": False,
+            "planning_contract": planning_contract,
             "change_plan": {
                 "mode": "copilot_change_task",
                 "stage": task.current_stage,
                 "steps": [
-                    "Use only the editable and test paths in the validated execution scope.",
-                    "Modify the code and tests required by the recorded design diff.",
-                    "Call copilot_validate_task_diff before generating the final test plans.",
+                    *execution_steps,
                     (
-                        "Generate natural-language TestPlan and executable TestDataPlan from "
-                        "the requirement, recorded design diff, and validated code diff."
+                        "Keep the returned committed_edit_result_id; use that distinct ID when "
+                        "calling copilot_record_task_result after the commit."
+                    ),
+                    (
+                        "Run every required compile/test/coverage command with "
+                        "copilot_run_task_command."
+                    ),
+                    (
+                        "After every required command passes, preserve the exact validated "
+                        "revision and call copilot_record_task_result with all command Evidence."
+                    ),
+                    (
+                        "Continue only after next_context enters test_planning. Then generate a "
+                        "natural-language UI TestPlan and executable Playwright TestDataPlan from "
+                        "the requirement, recorded design diff, and committed code diff."
+                    ),
+                    (
+                        "Give every natural-language UI TestPlan step a stable parallel step_id; "
+                        "reference it from at least one TestDataPlan UI step through "
+                        "test_step_refs, with a concrete Playwright action."
+                    ),
+                    (
+                        "Describe data generation and cleanup in business language, bind outputs "
+                        "to named variables for later screens, and include UI assertions and "
+                        "screenshot-ready observations."
+                    ),
+                    (
+                        "Use the bounded Playwright action set first. Declare "
+                        "computer_use_fallback "
+                        "only for a known DOM capability gap, with a reviewed reason, objective, "
+                        "observation set, and small max_actions limit."
                     ),
                     (
                         "Call copilot_record_change_outputs with "
                         "output_stage=test_planning, test_plan, and test_data_plan."
                     ),
-                    "Run every required compile/test command with copilot_run_task_command.",
                     (
-                        "Describe UI cases with TestDataPlan UI steps and UI assertions; "
-                        "OperaMind executes them after test-data generation."
+                        "OperaMind calculates business coverage from executable UI mappings and "
+                        "current-scope Evidence. If coverage is below 100%, use the returned "
+                        "uncovered business rules to regenerate and resubmit both complete plans."
                     ),
-                    "Commit the validated changes, then call copilot_record_task_result.",
                 ],
                 "stage_order": list(CHANGE_TASK_STAGE_ORDER),
                 "required_outputs": list(CHANGE_TASK_REQUIRED_OUTPUTS),
@@ -635,9 +979,7 @@ class CopilotCodingTaskService:
             candidates = self._bind_real_documents(
                 project_id=str(request["project_id"]),
                 snapshot_id=discovery.document_snapshot_id,
-                candidates=[
-                    candidate.to_dict() for candidate in discovery.candidates
-                ],
+                candidates=[candidate.to_dict() for candidate in discovery.candidates],
             )
             return {
                 "status": "ready",
@@ -649,9 +991,7 @@ class CopilotCodingTaskService:
                 "context_package_id": None,
                 "document_snapshot_id": discovery.document_snapshot_id,
                 "search_index_build_id": discovery.search_index_build_id,
-                "embedding_profile_binding_key": (
-                    discovery.embedding_profile_binding_key
-                ),
+                "embedding_profile_binding_key": (discovery.embedding_profile_binding_key),
                 "explicit_document_refs": list(explicit_refs),
                 "candidates": candidates,
                 "blocking_reason": None,
@@ -665,10 +1005,40 @@ class CopilotCodingTaskService:
             "explicit_document_refs": list(explicit_refs),
             "candidates": [],
             "blocking_reason": (
-                "Canonical requirement document discovery is unavailable: "
-                f"{discovery_error}"
+                f"Canonical requirement document discovery is unavailable: {discovery_error}"
             ),
         }
+
+    def _document_discovery_for_task(
+        self, coding_task_id: str, change_request_id: str
+    ) -> dict[str, object]:
+        automation = ChangeAutomationRepository(self._connection).latest_for_request(
+            change_request_id
+        )
+        bound = next(
+            (
+                cast(dict[str, object], event["payload"])
+                for event in reversed(
+                    cast(list[dict[str, object]], self._tasks.view(coding_task_id)["events"])
+                )
+                if event.get("event_type") == "document_discovery_bound"
+            ),
+            None,
+        )
+        if bound is None:
+            if automation is not None:
+                raise ValueError("Copilot Coding Task has no user-confirmed RAG discovery binding")
+            return self._document_discovery(change_request_id)
+        if automation is not None and bound.get("automation_run_id") != automation.get(
+            "automation_run_id"
+        ):
+            raise ValueError("Copilot Coding Task RAG discovery binding is stale")
+        discovery = bound.get("discovery")
+        if not isinstance(discovery, dict):
+            raise RuntimeError("Bound RAG discovery lost its object shape")
+        if bound.get("subject_digest") != _payload_digest(discovery):
+            raise RuntimeError("Bound RAG discovery digest differs from its content")
+        return cast(dict[str, object], discovery)
 
     def _bind_real_documents(
         self,
@@ -714,7 +1084,10 @@ class CopilotCodingTaskService:
         command_execution_id: str,
         command_ref: str,
         workspace_root: Path,
+        actor: str = "mcp:github-copilot",
     ) -> dict[str, object]:
+        if not actor.strip():
+            raise ValueError("Command actor must not be blank")
         task = self._tasks.get(coding_task_id)
         if task.state != "in_progress":
             raise ValueError("Copilot Coding Task context must be loaded before tests")
@@ -741,7 +1114,7 @@ class CopilotCodingTaskService:
         self._tasks.bind_command(
             coding_task_id=coding_task_id,
             command_execution_id=command_execution_id,
-            actor="mcp:github-copilot",
+            actor=actor,
             result=result,
         )
         return {**result, "coding_task_state": self._tasks.get(coding_task_id).state}
@@ -757,7 +1130,10 @@ class CopilotCodingTaskService:
         code_scope: tuple[dict[str, Any], ...] = (),
         test_plan: dict[str, Any] | None = None,
         test_data_plan: dict[str, Any] | None = None,
+        actor: str = "mcp:github-copilot",
     ) -> dict[str, object]:
+        if not actor.strip():
+            raise ValueError("Change output actor must not be blank")
         task = self._tasks.get(coding_task_id)
         if task.state != "in_progress":
             raise ValueError("Copilot Change Task context must be loaded before recording outputs")
@@ -773,6 +1149,7 @@ class CopilotCodingTaskService:
                 workspace_root=workspace_root,
                 document_ids=document_ids,
                 document_edits=document_edits,
+                actor=actor,
             )
         if output_stage == "code_scope":
             if (
@@ -786,6 +1163,7 @@ class CopilotCodingTaskService:
                 coding_task_id=coding_task_id,
                 workspace_root=workspace_root,
                 code_scope=code_scope,
+                actor=actor,
             )
         if output_stage == "test_planning":
             if (
@@ -802,6 +1180,22 @@ class CopilotCodingTaskService:
                 coding_task_id=coding_task_id,
                 test_plan=test_plan,
                 test_data_plan=test_data_plan,
+                actor=actor,
+            )
+        if output_stage == "ui_test_revision":
+            if (
+                document_ids
+                or document_edits
+                or code_scope
+                or test_plan is None
+                or test_data_plan is None
+            ):
+                raise ValueError("UI TestPlan revision requires only test_plan and test_data_plan")
+            return self._record_ui_test_revision_outputs(
+                coding_task_id=coding_task_id,
+                test_plan=test_plan,
+                test_data_plan=test_data_plan,
+                actor=actor,
             )
         raise ValueError(f"Unsupported Copilot Change Task output stage: {output_stage}")
 
@@ -812,6 +1206,7 @@ class CopilotCodingTaskService:
         workspace_root: Path,
         document_ids: tuple[str, ...],
         document_edits: tuple[DocumentFieldEdit, ...],
+        actor: str = "mcp:github-copilot",
     ) -> dict[str, object]:
         task = self._tasks.get(coding_task_id)
         if not document_ids or len(document_ids) != len(set(document_ids)):
@@ -822,7 +1217,7 @@ class CopilotCodingTaskService:
             raise ValueError(
                 "Copilot Change Task outputs require a bound Analysis Case before recording"
             )
-        discovery = self._document_discovery(task.change_request_id)
+        discovery = self._document_discovery_for_task(coding_task_id, task.change_request_id)
         source_snapshot_id = discovery.get("document_snapshot_id")
         candidates = discovery.get("candidates")
         candidate_document_ids = {
@@ -875,7 +1270,7 @@ class CopilotCodingTaskService:
         }
         self._tasks.record_change_outputs(
             coding_task_id=coding_task_id,
-            actor="mcp:github-copilot",
+            actor=actor,
             output_stage="document_change",
             expected_stage="document_change",
             next_stage="code_scope",
@@ -894,19 +1289,52 @@ class CopilotCodingTaskService:
         coding_task_id: str,
         workspace_root: Path,
         code_scope: tuple[dict[str, Any], ...],
+        actor: str = "mcp:github-copilot",
     ) -> dict[str, object]:
         task = self._tasks.get(coding_task_id)
         document_refs = self._recorded_output(coding_task_id, "document_change")
         document_change_refs = tuple(
-            str(value)
-            for value in cast(list[object], document_refs["document_change_refs"])
+            str(value) for value in cast(list[object], document_refs["document_change_refs"])
         )
+        try:
+            recorded_scope = self._recorded_output(coding_task_id, "code_scope")
+        except ValueError:
+            recorded_scope = {}
+        current_task_has_recorded_scope = recorded_scope.get("output_stage") == "code_scope"
         case_id = self._bound_change_request_case(task.change_request_id)
         existing_impact = self._requests.impact_report(
             project_id=task.project_id,
             case_id=case_id,
         )
-        if existing_impact is None:
+        automation_repository = ChangeAutomationRepository(self._connection)
+        automation = automation_repository.latest_for_request(task.change_request_id)
+        confirmation = (
+            automation_repository.latest_confirmation(
+                run_id=str(automation["automation_run_id"]),
+                checkpoint="code_scope",
+            )
+            if automation is not None
+            else None
+        )
+        revising_rejected_scope = _is_rejected_code_scope_revision(automation, confirmation)
+        existing_impact_artifact: dict[str, Any] | None = None
+        existing_impact_context: dict[str, Any] | None = None
+        replacing_previous_task_impact = False
+        if existing_impact is not None and not revising_rejected_scope:
+            existing_impact_artifact = self._artifacts.get(str(existing_impact["impact_report_id"]))
+            if existing_impact_artifact is None:
+                raise RuntimeError("Existing Impact Report Artifact is missing")
+            context_id = existing_impact_artifact.get("context_package_id")
+            if not isinstance(context_id, str):
+                raise RuntimeError("Existing Impact Report has no Context Package")
+            existing_impact_context = self._artifacts.get(context_id)
+            if existing_impact_context is None:
+                raise RuntimeError("Existing Impact Context Artifact is missing")
+            replacing_previous_task_impact = (
+                not current_task_has_recorded_scope
+                or existing_impact_context.get("coding_task_id") != coding_task_id
+            )
+        if existing_impact is None or revising_rejected_scope or replacing_previous_task_impact:
             impact = CopilotImpactService(
                 connection=self._connection,
                 repository_root=self._root,
@@ -916,39 +1344,28 @@ class CopilotCodingTaskService:
                 change_request_id=task.change_request_id,
                 coding_task_id=coding_task_id,
                 workspace_root=workspace_root,
-                source_document_snapshot_id=str(
-                    document_refs["source_document_snapshot_id"]
-                ),
-                target_document_snapshot_id=str(
-                    document_refs["target_document_snapshot_id"]
-                ),
+                source_document_snapshot_id=str(document_refs["source_document_snapshot_id"]),
+                target_document_snapshot_id=str(document_refs["target_document_snapshot_id"]),
                 search_index_build_id=str(document_refs["search_index_build_id"]),
                 document_change_refs=document_change_refs,
                 code_scope=code_scope,
+                actor=actor,
+                provider_id=(
+                    "codex_fallback" if actor == "codex:fallback" else "vscode_github_copilot"
+                ),
             )
         else:
-            existing_impact_artifact = self._artifacts.get(
-                str(existing_impact["impact_report_id"])
-            )
-            if existing_impact_artifact is None:
-                raise RuntimeError("Existing Impact Report Artifact is missing")
+            assert existing_impact is not None
+            assert existing_impact_artifact is not None
             impact_change_refs = {
                 str(reference)
-                for item in cast(
-                    list[dict[str, Any]], existing_impact_artifact.get("items", [])
-                )
-                for reference in cast(
-                    list[object], item.get("structured_change_refs", [])
-                )
+                for item in cast(list[dict[str, Any]], existing_impact_artifact.get("items", []))
+                for reference in cast(list[object], item.get("structured_change_refs", []))
             }
-            requested_paths = {
-                str(item.get("target_path") or "") for item in code_scope
-            }
+            requested_paths = {str(item.get("target_path") or "") for item in code_scope}
             impact_paths = {
                 str(item.get("target_path") or "")
-                for item in cast(
-                    list[dict[str, Any]], existing_impact_artifact.get("items", [])
-                )
+                for item in cast(list[dict[str, Any]], existing_impact_artifact.get("items", []))
             }
             if (
                 impact_change_refs != set(document_change_refs)
@@ -969,16 +1386,17 @@ class CopilotCodingTaskService:
             "code_scope": impact["code_scope"],
         }
         output_refs.pop("output_stage", None)
-        next_stage = (
-            "compile_test" if task.approval_grant_id is not None else "code_scope"
-        )
+        next_stage = "compile_test" if task.approval_grant_id is not None else "code_scope"
         self._tasks.record_change_outputs(
             coding_task_id=coding_task_id,
-            actor="mcp:github-copilot",
+            actor=actor,
             output_stage="code_scope",
             expected_stage="code_scope",
             next_stage=next_stage,
             output_refs=output_refs,
+            revision_identity=(
+                str(impact["impact_report_id"]) if revising_rejected_scope else None
+            ),
         )
         return {
             **output_refs,
@@ -993,25 +1411,49 @@ class CopilotCodingTaskService:
         coding_task_id: str,
         test_plan: dict[str, Any],
         test_data_plan: dict[str, Any],
+        actor: str = "mcp:github-copilot",
     ) -> dict[str, object]:
         task = self._tasks.get(coding_task_id)
         case_id, _edit_packet_id, _approval_grant_id = _bound_task_scope(task)
+        if task.base_repository_revision is None:
+            raise ValueError("Copilot Change Task has no bound Base Revision")
+        approval = self._artifacts.get(str(task.approval_grant_id))
+        if approval is None or approval.get("artifact_type") != "ApprovalGrant":
+            raise RuntimeError("Copilot Change Task Approval Grant Artifact is missing")
+        verification_only = not bool(approval.get("editable_files"))
+        committed = GitWorktreeDiffInspector().inspect_committed(
+            Path(task.workspace_root),
+            base_sha=task.base_repository_revision,
+            allow_unchanged_head=verification_only,
+        )
         view = self._tasks.view(coding_task_id)
         if not any(
-            result.get("validation_mode") == "working"
-            and result.get("status") == "in_scope"
-            and bool(result.get("changed_paths"))
+            result.get("validation_mode") == "committed"
+            and (
+                (result.get("status") == "in_scope" and bool(result.get("changed_paths")))
+                or (
+                    verification_only
+                    and result.get("status") == "no_changes"
+                    and not result.get("changed_paths")
+                )
+            )
+            and result.get("tests_passed") is True
+            and result.get("command_evidence_status") == "verified"
+            and result.get("changed_line_coverage_status") in {"passed", "not_required"}
+            and result.get("result_repository_revision") == committed.result_sha
             for result in cast(list[dict[str, Any]], view["edit_results"])
         ):
             raise ValueError(
-                "TestPlan must be generated after copilot_validate_task_diff "
-                "has accepted the current code diff"
+                "TestPlan requires the current clean HEAD to match the committed code, "
+                "compile/test evidence, and changed-line coverage"
             )
         _validate_planning_artifact_scope(
-            artifact_name="TestPlan",
+            artifact_name="UI TestPlan",
             artifact=test_plan,
             expected={
                 "artifact_type": "TestPlan",
+                "schema_version": "v2",
+                "plan_kind": "ui",
                 "project_id": task.project_id,
                 "change_request_id": task.change_request_id,
                 "status": "ready",
@@ -1023,6 +1465,7 @@ class CopilotCodingTaskService:
             artifact=test_data_plan,
             expected={
                 "artifact_type": "TestDataPlan",
+                "schema_version": "v2",
                 "project_id": task.project_id,
                 "test_plan_id": test_plan_id,
                 "status": "ready",
@@ -1031,7 +1474,22 @@ class CopilotCodingTaskService:
         test_data_plan_id = str(test_data_plan.get("test_data_plan_id") or "")
         if not test_plan_id or not test_data_plan_id:
             raise ValueError("Change Task output identities must not be blank")
-        code_refs = self._recorded_output(coding_task_id, "code_scope")
+        required_commands = {
+            str(value)
+            for value in cast(list[object], approval.get("allowed_test_command_refs", []))
+        }
+        passed_commands = {
+            str(command["command_ref"])
+            for command in cast(list[dict[str, Any]], view["commands"])
+            if command.get("status") == "passed" and command.get("exit_code") == 0
+        }
+        if not required_commands or not required_commands.issubset(passed_commands):
+            missing = sorted(required_commands - passed_commands)
+            raise ValueError(
+                "UI TestPlan must be generated only after every required compile/test command "
+                f"passes; missing={missing or ['required command profile']}"
+            )
+        code_refs = self._code_scope_output(coding_task_id)
         impact = self._artifacts.get(str(code_refs["impact_report_id"]))
         if impact is None or impact.get("artifact_type") != "ImpactReport":
             raise RuntimeError("Copilot Change Task Impact Report Artifact is missing")
@@ -1040,6 +1498,44 @@ class CopilotCodingTaskService:
             test_data_plan=test_data_plan,
             ui_impacted=impact.get("ui_impact_status") == "impacted",
         )
+        _validate_required_ui_scenario_scope(test_plan=test_plan, impact=impact)
+        blockers = validate_test_data_plan_artifact(test_data_plan)
+        if test_data_plan_channels(test_data_plan) & {"http", "ui"} and not (
+            self._requests.project_test_base_url(task.project_id)
+        ):
+            blockers.append("Project has no test_base_url for HTTP/UI TestDataPlan execution")
+        if blockers:
+            raise ValueError("TestDataPlan is not executable: " + "; ".join(blockers))
+        request_record = self._requests.get_change_request(task.change_request_id)
+        request_artifact = cast(dict[str, Any], request_record["artifact"])
+        coverage = assess_planned_business_coverage(
+            request=request_artifact,
+            test_plan=test_plan,
+            test_data_plan=test_data_plan,
+            scoped_test_files=frozenset(
+                str(value) for value in cast(list[object], approval.get("test_files", []))
+            ),
+            passed_command_refs=frozenset(passed_commands),
+            canonical_artifact_refs=canonical_artifact_refs_from_output(code_refs),
+            required_ui_scenario_refs=tuple(
+                str(value)
+                for value in cast(
+                    list[object], impact.get("required_ui_scenario_refs", [])
+                )
+            ),
+        )
+        if coverage["status"] != "passed" or coverage["coverage_percent"] != 100:
+            uncovered = uncovered_business_rules(
+                request=request_artifact,
+                assessment=coverage,
+            )
+            raise ValueError(
+                "Business coverage gate failed before human confirmation: "
+                f"coverage_percent={coverage['coverage_percent']}; "
+                "uncovered_business_rules="
+                f"{json.dumps(uncovered, ensure_ascii=False, sort_keys=True)}. "
+                "Regenerate the complete UI TestPlan and TestDataPlan, then resubmit them."
+            )
         self._artifacts.store(
             artifact_id=test_plan_id,
             project_id=task.project_id,
@@ -1060,22 +1556,120 @@ class CopilotCodingTaskService:
         output_refs.pop("output_stage", None)
         self._tasks.record_change_outputs(
             coding_task_id=coding_task_id,
-            actor="mcp:github-copilot",
+            actor=actor,
             output_stage="test_planning",
-            expected_stage="compile_test",
-            next_stage="compile_test",
+            expected_stage="test_planning",
+            next_stage="ui_validation",
             output_refs=output_refs,
+            complete=True,
         )
         return {
             **output_refs,
             "recorded_stage": "test_planning",
-            "next_stage": "compile_test",
+            "next_stage": "ui_validation",
             "coding_task_state": self._tasks.get(coding_task_id).state,
         }
 
-    def _recorded_output(
-        self, coding_task_id: str, output_stage: str
+    def _record_ui_test_revision_outputs(
+        self,
+        *,
+        coding_task_id: str,
+        test_plan: dict[str, Any],
+        test_data_plan: dict[str, Any],
+        actor: str = "mcp:github-copilot",
     ) -> dict[str, object]:
+        from operamind.application.test_case_revision_service import (
+            TestCaseRevisionService,
+        )
+
+        task = self._tasks.get(coding_task_id)
+        immutable_task = cast(dict[str, object], self._tasks.view(coding_task_id)["task"])
+        if immutable_task.get("task_kind") != "ui_test_plan_revision":
+            raise ValueError("Only a UI TestPlan revision Task accepts this output stage")
+        context = cast(dict[str, object], immutable_task["plan_revision_context"])
+        source_bundle = ChangeOrchestrationRepository(self._connection, self._contracts).bundle(
+            str(context["source_orchestration_id"])
+        )
+        source_plan = cast(dict[str, Any], source_bundle["test_plan"])
+        if source_plan.get("test_plan_id") != context["source_test_plan_id"]:
+            raise ValueError("UI TestPlan revision source has changed")
+        _validate_planning_artifact_scope(
+            artifact_name="UI TestPlan",
+            artifact=test_plan,
+            expected={
+                "artifact_type": "TestPlan",
+                "schema_version": "v2",
+                "plan_kind": "ui",
+                "project_id": task.project_id,
+                "change_request_id": task.change_request_id,
+                "status": "ready",
+            },
+        )
+        _validate_planning_artifact_scope(
+            artifact_name="TestDataPlan",
+            artifact=test_data_plan,
+            expected={
+                "artifact_type": "TestDataPlan",
+                "schema_version": "v2",
+                "project_id": task.project_id,
+                "test_plan_id": str(test_plan.get("test_plan_id") or ""),
+                "status": "ready",
+            },
+        )
+        _validate_planning_alignment(
+            test_plan=test_plan,
+            test_data_plan=test_data_plan,
+            ui_impacted=True,
+        )
+        blockers = validate_test_data_plan_artifact(test_data_plan)
+        if test_data_plan_channels(test_data_plan) & {"http", "ui"} and not (
+            self._requests.project_test_base_url(task.project_id)
+        ):
+            blockers.append("Project has no test_base_url for HTTP/UI TestDataPlan execution")
+        if blockers:
+            raise ValueError("Regenerated TestDataPlan is not executable: " + "; ".join(blockers))
+        applied = TestCaseRevisionService(
+            connection=self._connection,
+            repository_root=self._root,
+        ).apply_ai_regeneration(
+            change_request_id=task.change_request_id,
+            proposal_id=str(context["proposal_id"]),
+            source_orchestration_id=str(context["source_orchestration_id"]),
+            test_plan=test_plan,
+            test_data_plan=test_data_plan,
+            operations=cast(
+                list[dict[str, Any]],
+                json.loads(str(context["confirmed_operations_json"])),
+            ),
+            selections=cast(dict[str, str], json.loads(str(context["selections_json"]))),
+            actor=actor,
+        )
+        revision = cast(dict[str, Any], applied["revision"])
+        output_refs: dict[str, object] = {
+            "revision_id": revision["revision_id"],
+            "orchestration_id": revision["target_orchestration_id"],
+            "test_plan_id": revision["target_test_plan_id"],
+            "test_data_plan_id": cast(dict[str, Any], applied["bundle"])["test_data_plan"][
+                "test_data_plan_id"
+            ],
+        }
+        self._tasks.record_change_outputs(
+            coding_task_id=coding_task_id,
+            actor=actor,
+            output_stage="ui_test_revision",
+            expected_stage="ui_test_revision",
+            next_stage="ui_validation",
+            output_refs=output_refs,
+            complete=True,
+        )
+        return {
+            **output_refs,
+            "recorded_stage": "ui_test_revision",
+            "next_stage": "ui_validation",
+            "coding_task_state": self._tasks.get(coding_task_id).state,
+        }
+
+    def _recorded_output(self, coding_task_id: str, output_stage: str) -> dict[str, object]:
         view = self._tasks.view(coding_task_id)
         event = next(
             (
@@ -1088,15 +1682,23 @@ class CopilotCodingTaskService:
             None,
         )
         if event is None:
-            raise ValueError(
-                f"Copilot Change Task has no recorded {output_stage} output"
-            )
+            raise ValueError(f"Copilot Change Task has no recorded {output_stage} output")
         return dict(cast(dict[str, object], event["payload"]))
 
+    def _code_scope_output(self, coding_task_id: str) -> dict[str, object]:
+        """Return Graph scope evidence, including an approved follow-up execution basis."""
+
+        try:
+            return self._recorded_output(coding_task_id, "code_scope")
+        except ValueError:
+            task = cast(dict[str, object], self._tasks.view(coding_task_id)["task"])
+            basis = task.get("execution_basis")
+            if task.get("task_kind") != "change_execution" or not isinstance(basis, dict):
+                raise
+            return dict(cast(dict[str, object], basis))
+
     def _bound_change_request_case(self, change_request_id: str) -> str:
-        case_id = self._requests.get_change_request(change_request_id).get(
-            "analysis_case_id"
-        )
+        case_id = self._requests.get_change_request(change_request_id).get("analysis_case_id")
         if not isinstance(case_id, str):
             raise ValueError("Copilot Change Task requires a bound Analysis Case")
         return case_id
@@ -1104,7 +1706,7 @@ class CopilotCodingTaskService:
     def validate_diff(
         self, *, coding_task_id: str, edit_result_id: str, workspace_root: Path
     ) -> dict[str, object]:
-        return self._record_edit_result(
+        result = self._record_edit_result(
             coding_task_id=coding_task_id,
             edit_result_id=edit_result_id,
             workspace_root=workspace_root,
@@ -1112,6 +1714,10 @@ class CopilotCodingTaskService:
             test_result_refs=(),
             tests_passed=None,
         )
+        return {
+            **result,
+            "committed_edit_result_id": f"{edit_result_id}-committed",
+        }
 
     def record_result(
         self,
@@ -1121,9 +1727,54 @@ class CopilotCodingTaskService:
         workspace_root: Path,
         test_result_refs: tuple[str, ...],
         tests_passed: bool,
-        changed_line_coverage: ChangedLineCoverageEvidence | None = None,
+        coverage_report_command_execution_id: str | None = None,
+        actor: str = "mcp:github-copilot",
     ) -> dict[str, object]:
-        self._recorded_output(coding_task_id, "test_planning")
+        task = self._tasks.get(coding_task_id)
+        if task.base_repository_revision is None:
+            raise ValueError("Copilot Change Task has no bound Base Revision")
+        approval = self._artifacts.get(str(task.approval_grant_id))
+        if approval is None or approval.get("artifact_type") != "ApprovalGrant":
+            raise RuntimeError("Copilot Change Task Approval Grant Artifact is missing")
+        verification_only = not bool(approval.get("editable_files"))
+        committed = GitWorktreeDiffInspector().inspect_committed(
+            workspace_root,
+            base_sha=task.base_repository_revision,
+            allow_unchanged_head=verification_only,
+        )
+        command_events = {
+            str(payload.get("command_execution_id")): payload
+            for event in cast(list[dict[str, Any]], self._tasks.view(coding_task_id)["events"])
+            if event.get("event_type") == "command_recorded"
+            and isinstance((payload := event.get("payload")), dict)
+        }
+        missing = sorted(set(test_result_refs) - set(command_events))
+        stale = sorted(
+            command_id
+            for command_id in test_result_refs
+            if command_id in command_events
+            and command_events[command_id].get("tested_content_digest") != committed.content_digest
+        )
+        if missing or stale:
+            raise ValueError(
+                "Committed result is not bound to command evidence for the exact tested diff: "
+                f"missing={missing}; stale={stale}"
+            )
+        changed_line_coverage: ChangedLineCoverageEvidence | None = None
+        if coverage_report_command_execution_id is not None:
+            if coverage_report_command_execution_id not in test_result_refs:
+                raise ValueError("Coverage report command must be included in test_result_refs")
+            event = command_events.get(coverage_report_command_execution_id)
+            report = event.get("coverage_report") if event is not None else None
+            if not isinstance(report, dict):
+                raise ValueError("Selected command has no approved coverage report evidence")
+            changed_line_coverage = load_coverage_report(
+                workspace_root=workspace_root,
+                report_path=str(report.get("path") or ""),
+                report_format=str(report.get("format") or ""),
+                expected_digest=str(report.get("digest") or ""),
+                evidence_ref=coverage_report_command_execution_id,
+            )
         return self._record_edit_result(
             coding_task_id=coding_task_id,
             edit_result_id=edit_result_id,
@@ -1132,6 +1783,7 @@ class CopilotCodingTaskService:
             test_result_refs=test_result_refs,
             tests_passed=tests_passed,
             changed_line_coverage=changed_line_coverage,
+            actor=actor,
         )
 
     def _record_edit_result(
@@ -1144,6 +1796,7 @@ class CopilotCodingTaskService:
         test_result_refs: tuple[str, ...],
         tests_passed: bool | None,
         changed_line_coverage: ChangedLineCoverageEvidence | None = None,
+        actor: str = "mcp:github-copilot",
     ) -> dict[str, object]:
         task = self._tasks.get(coding_task_id)
         case_id, edit_packet_id, approval_grant_id = _bound_task_scope(task)
@@ -1168,7 +1821,7 @@ class CopilotCodingTaskService:
         self._tasks.bind_edit_result(
             coding_task_id=coding_task_id,
             edit_result_id=edit_result_id,
-            actor="mcp:github-copilot",
+            actor=actor,
             result=result,
             committed=mode is EditValidationMode.COMMITTED,
         )
@@ -1185,47 +1838,108 @@ def _validate_planning_alignment(
     case_ids = [str(case.get("test_case_id") or "") for case in test_cases]
     if not case_ids or any(not value for value in case_ids) or len(case_ids) != len(set(case_ids)):
         raise ValueError("TestPlan test_case_id values must be non-empty and unique")
-    ui_case_ids = {
-        str(case["test_case_id"]) for case in test_cases if case.get("level") == "ui"
-    }
-    if bool(ui_case_ids) != ui_impacted:
-        raise ValueError("TestPlan UI cases do not match the Graph-validated UI impact")
+    ui_case_ids = {str(case["test_case_id"]) for case in test_cases if case.get("level") == "ui"}
+    if ui_case_ids != set(case_ids) or any(
+        case.get("execution_mode") != "browser" for case in test_cases
+    ):
+        raise ValueError("UI TestPlan may contain only browser UI test cases")
+    # The Code Graph flag describes whether the changed files directly touch UI
+    # code.  The product workflow still requires end-to-end browser validation
+    # for backend-only changes, so it must not make a non-empty UI plan
+    # impossible.  Keep the argument for compatibility with existing callers.
+    del ui_impacted
+    case_step_ids: dict[str, set[str]] = {}
+    all_test_step_ids: set[str] = set()
+    for test_case in test_cases:
+        case_id = str(test_case["test_case_id"])
+        natural_steps = cast(list[object], test_case.get("steps", []))
+        step_ids = [str(value) for value in cast(list[object], test_case.get("step_ids", []))]
+        if len(step_ids) != len(natural_steps) or any(not value for value in step_ids):
+            raise ValueError(
+                f"Every TestPlan natural-language step requires one parallel step_id: {case_id}"
+            )
+        if len(step_ids) != len(set(step_ids)) or all_test_step_ids.intersection(step_ids):
+            raise ValueError("TestPlan step_id values must be globally unique")
+        for natural_step in natural_steps:
+            if not _looks_like_natural_language(natural_step):
+                raise ValueError(
+                    "TestPlan steps must be natural-language actions, not opaque identifiers: "
+                    f"{case_id}"
+                )
+        case_step_ids[case_id] = set(step_ids)
+        all_test_step_ids.update(step_ids)
     data_sets = cast(list[dict[str, Any]], test_data_plan.get("data_sets", []))
     data_ids = [str(item.get("test_data_id") or "") for item in data_sets]
     if not data_ids or any(not value for value in data_ids) or len(data_ids) != len(set(data_ids)):
         raise ValueError("TestDataPlan test_data_id values must be non-empty and unique")
     data_id_set = set(data_ids)
     for test_case in test_cases:
-        refs = {
-            str(value)
-            for value in cast(list[object], test_case.get("test_data_refs", []))
-        }
+        refs = {str(value) for value in cast(list[object], test_case.get("test_data_refs", []))}
         if not refs or not refs.issubset(data_id_set):
             raise ValueError(
                 f"Test case has missing TestDataPlan data refs: {test_case['test_case_id']}"
             )
     flows = cast(list[dict[str, Any]], test_data_plan.get("generation_flows", []))
     covered_cases = {
-        str(value)
-        for flow in flows
-        for value in cast(list[object], flow.get("test_case_refs", []))
+        str(value) for flow in flows for value in cast(list[object], flow.get("test_case_refs", []))
     }
     if covered_cases != set(case_ids):
         raise ValueError("TestDataPlan flows must cover exactly every TestPlan case")
+    executable_refs: set[str] = set()
+    for flow in flows:
+        flow_case_ids = {str(value) for value in cast(list[object], flow.get("test_case_refs", []))}
+        allowed_refs = {
+            step_id for case_id in flow_case_ids for step_id in case_step_ids.get(case_id, set())
+        }
+        for step in cast(list[dict[str, Any]], flow.get("steps", [])):
+            if not _looks_like_natural_language(step.get("business_action")):
+                raise ValueError(
+                    "TestDataPlan business_action must describe the executable action in "
+                    f"natural language: {step.get('step_id')}"
+                )
+            refs = {str(value) for value in cast(list[object], step.get("test_step_refs", []))}
+            if not refs.issubset(allowed_refs):
+                raise ValueError(
+                    "TestDataPlan step references a TestPlan step outside its flow: "
+                    f"{step.get('step_id')}"
+                )
+            if step.get("channel") == "ui":
+                if not isinstance(step.get("playwright"), dict):
+                    raise ValueError(
+                        f"Referenced UI step has no Playwright action: {step.get('step_id')}"
+                    )
+                executable_refs.update(refs)
+            elif refs:
+                raise ValueError(
+                    "Only executable Playwright UI steps may reference TestPlan natural-language "
+                    f"steps: {step.get('step_id')}"
+                )
+        for step in cast(list[dict[str, Any]], flow.get("cleanup_steps", [])):
+            if not _looks_like_natural_language(step.get("business_action")):
+                raise ValueError(
+                    "Cleanup business_action must describe the executable action in natural "
+                    f"language: {step.get('step_id')}"
+                )
+    missing_executable_refs = all_test_step_ids - executable_refs
+    if missing_executable_refs:
+        raise ValueError(
+            "Every TestPlan natural-language step requires a corresponding executable "
+            "Playwright UI step; missing refs: " + ", ".join(sorted(missing_executable_refs))
+        )
     for case_id in ui_case_ids:
         matching = [
             flow
             for flow in flows
             if case_id
-            in {
-                str(value)
-                for value in cast(list[object], flow.get("test_case_refs", []))
-            }
+            in {str(value) for value in cast(list[object], flow.get("test_case_refs", []))}
         ]
         if not matching:
             raise ValueError(f"UI test case has no TestDataPlan flow: {case_id}")
         if not any(
-            any(step.get("channel") == "ui" for step in cast(list[dict[str, Any]], flow["steps"]))
+            any(
+                step.get("channel") == "ui" and isinstance(step.get("playwright"), dict)
+                for step in cast(list[dict[str, Any]], flow["steps"])
+            )
             and any(
                 assertion.get("observe_via") == "ui"
                 for assertion in [
@@ -1240,8 +1954,229 @@ def _validate_planning_alignment(
             for flow in matching
         ):
             raise ValueError(
-                f"UI test case requires a bounded UI step and UI assertion: {case_id}"
+                "UI test case requires an executable Playwright UI step and bounded UI "
+                f"assertion: {case_id}"
             )
+
+
+def _validate_required_ui_scenario_scope(
+    *, test_plan: dict[str, Any], impact: dict[str, Any]
+) -> None:
+    expected = {
+        str(value) for value in cast(list[object], impact.get("required_ui_scenario_refs", []))
+    }
+    actual = {
+        str(case["test_case_id"])
+        for case in cast(list[dict[str, Any]], test_plan.get("test_cases", []))
+        if case.get("level") == "ui"
+    }
+    if actual != expected:
+        raise ValueError(
+            "UI TestPlan scenario IDs must exactly match the confirmed Impact scope: "
+            f"missing={sorted(expected - actual)}; unexpected={sorted(actual - expected)}"
+        )
+
+
+def _looks_like_natural_language(value: object) -> bool:
+    """Reject opaque IDs/selectors while accepting concise Japanese, Chinese, or word phrases."""
+
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if len(text) < 2 or any(ord(character) < 32 for character in text):
+        return False
+    if re.search(r"[\u3040-\u30ff\u3400-\u9fff]", text):
+        return True
+    return len(re.findall(r"[A-Za-z]+", text)) >= 2
+
+
+def _payload_digest(value: object) -> str:
+    canonical = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _planning_contract_examples(
+    *,
+    contracts_root: Path,
+    project_id: str,
+    change_request_id: str,
+) -> dict[str, object]:
+    """Return canonical v2 shapes so Copilot never has to guess nested fields."""
+
+    examples_root = contracts_root / "examples"
+    test_plan = json.loads(
+        (examples_root / "test-plan.v2.example.json").read_text(encoding="utf-8")
+    )
+    test_data_plan = json.loads(
+        (examples_root / "test-data-plan.v2.example.json").read_text(encoding="utf-8")
+    )
+    if not isinstance(test_plan, dict) or not isinstance(test_data_plan, dict):
+        raise RuntimeError("Canonical planning examples must be JSON objects")
+    test_plan["project_id"] = project_id
+    test_plan["change_request_id"] = change_request_id
+    test_data_plan["project_id"] = project_id
+    test_data_plan["test_plan_id"] = test_plan["test_plan_id"]
+    return {
+        "instruction": (
+            "Copy these exact object shapes, replace IDs and business content, and do not add "
+            "properties. A generation step permits test_step_refs but not test_data_refs; "
+            "test_data_refs belongs on the generation flow. data_sets.setup_actions is a "
+            "declarative summary and is never executed by itself; every HTTP setup and cleanup "
+            "must also be an ordered generation_flows.steps or cleanup_steps entry. For HTTP "
+            "responses, source=response addresses the decoded response body, so bind a body ID "
+            "with path=id rather than path=body.id. Screenshots are executor Evidence and are "
+            "not a Playwright observation kind. Derive every test-data field, enum value, "
+            "required relation, and request shape from the bounded design/code evidence; never "
+            "invent an endpoint, field, status, or foreign-key ID. A mutating HTTP setup step "
+            "must assert the successful status and the returned business identity/state fields. "
+            "Use DELETE only in cleanup_steps with data_effect=deletes; setup POST/PUT/PATCH "
+            "steps must declare data_effect=creates or updates. Every target-system setup step "
+            "must declare data_effect=creates or updates and "
+            "bind a required identity from an actual response or Playwright observation; action "
+            "wording alone never proves data generation. "
+            "If the mutation response does not return those fields, add a dependent HTTP read-back "
+            "step and assert them before browser execution. If a required master-data reference "
+            "cannot be proved or looked up by an executable step, return a blocking reason instead "
+            "of generating data. Do not assume that unnamed existing target-system rows satisfy a "
+            "precondition: every v2 flow must explicitly create its required business data before "
+            "the mapped UI test steps. Use unique business-visible values, bind every created ID, "
+            "and delete every created row in cleanup_steps unless the Project explicitly provides "
+            "a disposable isolated environment. Every cleanup step must depend_on the setup step "
+            "whose side effect it reverses: a delete depends on the matching create step, and a UI "
+            "reset depends on the first UI navigation/action that establishes that page state. "
+            "This lets execution skip cleanup safely when setup stopped before that resource or "
+            "UI state "
+            "existed. The approved Project test_base_url supplies the "
+            "HTTP origin; put only origin-relative paths in the plan."
+            " Resolve locator strategies and visible labels from the bounded UI source; do not "
+            "copy locator text from the examples unless that exact label or selector exists in "
+            "the target DOM. Use every required_ui_scenario_id exactly once as a TestPlan "
+            "test_case_id; do not invent replacement scenario IDs. Every Playwright action must "
+            "declare mask_locators. Include every reviewed locator that may display credentials "
+            "or private target-system data; an empty array explicitly declares that the captured "
+            "screen has no additional sensitive content beyond the built-in password masks."
+        ),
+        "test_plan_example": test_plan,
+        "test_data_plan_example": test_data_plan,
+        "cleanup_step_example": {
+            "step_id": "reset-expense-status-filter",
+            "sequence": 1,
+            "channel": "ui",
+            "business_action": "状態の検索条件をすべてに戻す",
+            "test_step_refs": [],
+            "screen_ref": "expense-list",
+            "ui_action_ref": "reset-status-filter",
+            "playwright": {
+                "action": "select_option",
+                "locator": {"by": "label", "value": "状態"},
+                "value": "",
+                "mask_locators": [],
+                "observations": [
+                    {
+                        "key": "reset_status",
+                        "kind": "value",
+                        "locator": {"by": "label", "value": "状態"},
+                    }
+                ],
+            },
+            "inputs": {},
+            "depends_on": ["open-expense-list"],
+            "output_bindings": [],
+            "postconditions": [
+                {
+                    "assertion_id": "status-reset",
+                    "observe_via": "ui",
+                    "subject": "reset_status",
+                    "operator": "equals",
+                    "expected": "",
+                }
+            ],
+        },
+        "http_setup_step_example": {
+            "step_id": "create-expense",
+            "sequence": 1,
+            "channel": "http",
+            "business_action": "UI 検証用の経費を作成する",
+            "data_effect": "creates",
+            "test_step_refs": [],
+            "target": "POST /expense/api/save",
+            "inputs": {
+                "method": "POST",
+                "path": "/expense/api/save",
+                "json": {
+                    "expense": {
+                        "applyDate": "2026-08-02",
+                        "description": "UI 検証用",
+                        "totalAmount": 1000,
+                        "status": "申請中",
+                    },
+                    "details": [],
+                },
+            },
+            "depends_on": [],
+            "output_bindings": [
+                {
+                    "variable": "created_expense_id",
+                    "source": "response",
+                    "path": "id",
+                    "required": True,
+                }
+            ],
+            "postconditions": [
+                {
+                    "assertion_id": "expense-created",
+                    "observe_via": "api",
+                    "subject": "status_code",
+                    "operator": "equals",
+                    "expected": 200,
+                },
+                {
+                    "assertion_id": "created-expense-status",
+                    "observe_via": "response",
+                    "subject": "status",
+                    "operator": "equals",
+                    "expected": "申請中",
+                },
+                {
+                    "assertion_id": "created-expense-description",
+                    "observe_via": "response",
+                    "subject": "description",
+                    "operator": "equals",
+                    "expected": "UI 検証用",
+                },
+            ],
+        },
+        "http_cleanup_step_example": {
+            "step_id": "delete-expense",
+            "sequence": 1,
+            "channel": "http",
+            "business_action": "UI 検証用の経費を削除する",
+            "data_effect": "deletes",
+            "test_step_refs": [],
+            "target": "DELETE /expense/api/{{created_expense_id}}",
+            "inputs": {
+                "method": "DELETE",
+                "path": "/expense/api/{{created_expense_id}}",
+            },
+            "depends_on": ["create-expense"],
+            "output_bindings": [],
+            "postconditions": [
+                {
+                    "assertion_id": "expense-deleted",
+                    "observe_via": "api",
+                    "subject": "status_code",
+                    "operator": "equals",
+                    "expected": 200,
+                }
+            ],
+        },
+    }
 
 
 def _validate_planning_artifact_scope(
@@ -1278,6 +2213,8 @@ def _public_task_artifact(task: dict[str, object]) -> dict[str, object]:
             "change_request_id",
             "project_id",
             "execution_mode",
+            "task_kind",
+            "initial_stage",
             "task_summary",
             "change_context",
             "target_project",
@@ -1288,6 +2225,23 @@ def _public_task_artifact(task: dict[str, object]) -> dict[str, object]:
         )
         if key in task
     }
+
+
+def _is_rejected_code_scope_revision(
+    automation: dict[str, object] | None,
+    confirmation: dict[str, object] | None,
+) -> bool:
+    """Allow revision only for the currently blocked, explicitly rejected scope."""
+
+    return bool(
+        automation is not None
+        and automation.get("current_stage") == "impact_confirmation"
+        and automation.get("status") == "blocked"
+        and automation.get("next_action") == "resolve_blocker"
+        and confirmation is not None
+        and confirmation.get("checkpoint") == "code_scope"
+        and confirmation.get("decision") == "rejected"
+    )
 
 
 def build_bridge_task_view(view: dict[str, object]) -> dict[str, object]:
@@ -1344,6 +2298,7 @@ def _public_workspace(workspace: dict[str, object]) -> dict[str, object]:
             "isolated_worktree",
             "head_revision",
             "changed_paths",
+            "result_committed",
         )
         if key in workspace
     }
@@ -1385,16 +2340,37 @@ def _public_document_discovery(discovery: dict[str, object]) -> dict[str, object
 def _public_canonical_document(document: CanonicalDocumentSlice) -> dict[str, object]:
     """Expose complete normalized business content without parser-internal provenance."""
 
-    return {
+    result: dict[str, object] = {
         "document_id": document.document_id,
         "logical_name": document.logical_name,
         "document_ref": document.source_ref,
-        "facts": [
-            {
-                "stable_key": item.fact.stable_key,
-                "fact_type": item.fact.fact_type,
-                "values": dict(item.fact.values),
-            }
-            for item in document.snapshot.facts
-        ],
+        "facts": [_public_canonical_fact(item.fact) for item in document.snapshot.facts],
     }
+    optional = {
+        "document_version_id": getattr(document, "document_version_id", None),
+        "content_digest": getattr(document, "content_digest", None),
+        "extractor_ref": getattr(document, "extractor_ref", None),
+        "canonical_snapshot_id": getattr(document.snapshot, "snapshot_id", None),
+    }
+    result.update({key: value for key, value in optional.items() if value is not None})
+    return result
+
+
+def _public_canonical_fact(fact: Any) -> dict[str, object]:
+    result: dict[str, object] = {
+        "stable_key": fact.stable_key,
+        "fact_type": fact.fact_type,
+        "values": dict(fact.values),
+    }
+    if hasattr(fact, "source_refs"):
+        result["source_refs"] = list(fact.source_refs)
+    if hasattr(fact, "field_evidence"):
+        result["field_evidence"] = [
+            {
+                "canonical_field": evidence.canonical_field,
+                "source_aliases": list(evidence.source_aliases),
+                "source_refs": list(evidence.source_refs),
+            }
+            for evidence in fact.field_evidence
+        ]
+    return result

@@ -13,12 +13,10 @@ import psycopg
 from jsonschema import Draft202012Validator
 from psycopg import Connection
 
-from operamind.application import (
-    ChangedLineCoverageEvidence,
-    CopilotCodingTaskService,
-)
+from operamind.application import CopilotCodingTaskService
 from operamind.application.copilot_document_change import DocumentFieldEdit
 from operamind.contracts import ContractCatalog
+from operamind.contracts.catalog import ArtifactValidationError
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
 SERVER_NAME = "operamind-vnext"
@@ -37,42 +35,6 @@ def _schema(properties: Mapping[str, object], required: tuple[str, ...]) -> dict
         "additionalProperties": False,
         "properties": dict(properties),
         "required": list(required),
-    }
-
-
-def _changed_line_coverage_schema() -> dict[str, object]:
-    line_map = {
-        "type": "object",
-        "additionalProperties": {
-            "type": "array",
-            "items": {"type": "integer", "minimum": 1},
-            "uniqueItems": True,
-        },
-    }
-    return {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "evidence_refs": {
-                "type": "array",
-                "minItems": 1,
-                "uniqueItems": True,
-                "items": _string(),
-            },
-            "executable_lines": line_map,
-            "covered_lines": line_map,
-            "minimum_coverage_percent": {
-                "type": "number",
-                "minimum": 80,
-                "maximum": 100,
-            },
-        },
-        "required": [
-            "evidence_refs",
-            "executable_lines",
-            "covered_lines",
-            "minimum_coverage_percent",
-        ],
     }
 
 
@@ -122,7 +84,12 @@ def _change_outputs_schema() -> dict[str, object]:
             "coding_task_id": _string(),
             "workspace_root": _string(),
             "output_stage": {
-                "enum": ["document_change", "code_scope", "test_planning"]
+                "enum": [
+                    "document_change",
+                    "code_scope",
+                    "test_planning",
+                    "ui_test_revision",
+                ]
             },
             "document_ids": {
                 "type": "array",
@@ -205,6 +172,10 @@ def _change_outputs_schema() -> dict[str, object]:
             "properties": {"output_stage": {"const": "test_planning"}},
             "required": ["test_plan", "test_data_plan"],
         },
+        {
+            "properties": {"output_stage": {"const": "ui_test_revision"}},
+            "required": ["test_plan", "test_data_plan"],
+        },
     ]
     return schema
 
@@ -276,7 +247,9 @@ TOOLS: tuple[dict[str, object], ...] = (
         "title": "Validate and publish the current Coding Task diff",
         "description": (
             "Compare all current Git path changes with the Change Task path allowlist and "
-            "automatically publish the path-only Diff result to OperaMind Web."
+            "automatically publish the path-only Diff result to OperaMind Web. Preserve the "
+            "returned committed_edit_result_id for copilot_record_task_result; a working and "
+            "committed validation are distinct immutable evidence records."
         ),
         "inputSchema": _schema(
             {
@@ -298,14 +271,23 @@ TOOLS: tuple[dict[str, object], ...] = (
         "title": "Record the committed Coding Task result",
         "description": (
             "Validate the committed Diff, bind the Task command evidence, and publish the "
-            "final result to OperaMind Web without a response file. Source changes require "
-            "changed_line_coverage evidence before Closure can pass."
+            "code result to OperaMind Web without a response file. For source changes, pass "
+            "the approved coverage command ID; OperaMind reads and verifies its bound report "
+            "before the UI TestPlan stage can start. edit_result_id must be the distinct "
+            "committed_edit_result_id returned by copilot_validate_task_diff."
         ),
         "inputSchema": _schema(
             {
                 "coding_task_id": _string(),
                 "workspace_root": _string(),
-                "edit_result_id": _string(),
+                "edit_result_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": (
+                        "The distinct committed_edit_result_id returned by "
+                        "copilot_validate_task_diff."
+                    ),
+                },
                 "test_result_refs": {
                     "type": "array",
                     "minItems": 1,
@@ -313,7 +295,7 @@ TOOLS: tuple[dict[str, object], ...] = (
                     "items": _string(),
                 },
                 "tests_passed": {"type": "boolean"},
-                "changed_line_coverage": _changed_line_coverage_schema(),
+                "coverage_report_command_execution_id": _string(),
             },
             (
                 "coding_task_id",
@@ -434,14 +416,17 @@ class CopilotToolDispatcher:
                 connection=self._connection,
                 repository_root=self._contracts.root.parent,
             )
-            automation = service.resume_pending_change_automation(
+            service.resume_pending_change_automation(
                 request_id=str(task_artifact["change_request_id"]),
                 actor="mcp:github-copilot",
             )
-            result["flow_status"] = _public_flow_status(
-                service.main_change_flow(str(task_artifact["change_request_id"]))
-            )
-            if not isinstance(automation, dict) or automation.get("status") != "blocked":
+            flow = service.main_change_flow(str(task_artifact["change_request_id"]))
+            result["flow_status"] = _public_flow_status(flow)
+            if _can_load_next_context(
+                coding_task_state=internal_result.get("coding_task_state"),
+                flow=flow,
+                output_stage=output_stage,
+            ):
                 result["next_context"] = coding_tasks.get_mcp_context(
                     coding_task_id=_text(args, "coding_task_id"),
                     workspace_root=Path(_text(args, "workspace_root")),
@@ -468,7 +453,11 @@ class CopilotToolDispatcher:
                         for value in cast(list[object], args["test_result_refs"])
                     ),
                     tests_passed=cast(bool, args["tests_passed"]),
-                    changed_line_coverage=_changed_line_coverage(args),
+                    coverage_report_command_execution_id=(
+                        _text(args, "coverage_report_command_execution_id")
+                        if "coverage_report_command_execution_id" in args
+                        else None
+                    ),
                 )
             )
             from operamind.application.web_control_plane import WebControlPlaneService
@@ -479,12 +468,18 @@ class CopilotToolDispatcher:
                 connection=self._connection,
                 repository_root=self._contracts.root.parent,
             )
-            service.resume_pending_change_automation(
-                request_id=str(task_artifact["change_request_id"]),
-                actor="mcp:github-copilot",
-            )
-            result["flow_status"] = _public_flow_status(
-                service.main_change_flow(str(task_artifact["change_request_id"]))
+            flow = service.main_change_flow(str(task_artifact["change_request_id"]))
+            result["flow_status"] = _public_flow_status(flow)
+            result["next_context"] = (
+                coding_tasks.get_mcp_context(
+                    coding_task_id=_text(args, "coding_task_id"),
+                    workspace_root=Path(_text(args, "workspace_root")),
+                )
+                if _can_load_next_context(
+                    coding_task_state=result.get("coding_task_state"),
+                    flow=flow,
+                )
+                else None
             )
             return result
         raise AssertionError(f"Tool dispatch is incomplete: {name}")
@@ -615,6 +610,21 @@ class OperaMindMcpServer:
                 {"error": "Database operation failed"},
                 is_error=True,
             )
+        except ArtifactValidationError as error:
+            details = [
+                {
+                    "location": issue.location,
+                    "message": issue.message,
+                }
+                for issue in error.report.issues[:20]
+            ]
+            result_payload = _tool_result(
+                {
+                    "error": "Artifact validation failed",
+                    "validation_issues": details,
+                },
+                is_error=True,
+            )
         except (OSError, RuntimeError, ValueError) as error:
             result_payload = _tool_result({"error": str(error)}, is_error=True)
         else:
@@ -626,21 +636,20 @@ def _tool_validation_error_message(errors: list[Any], *, limit: int = 20) -> str
     details = []
     for error in errors[:limit]:
         location = "/".join(str(part) for part in error.absolute_path) or "$"
-        details.append(f"{location}: {error.message}")
+        message = error.message
+        if (
+            error.validator == "additionalProperties"
+            and isinstance(error.instance, dict)
+            and isinstance(error.schema, dict)
+        ):
+            allowed = set(error.schema.get("properties", {}))
+            unexpected = sorted(set(error.instance) - allowed)
+            if unexpected:
+                message = f"unexpected properties {unexpected}; allowed={sorted(allowed)}"
+        details.append(f"{location}: {message}")
     remaining = len(errors) - len(details)
     suffix = f"; ... and {remaining} more" if remaining else ""
     return "Invalid tool arguments: " + "; ".join(details) + suffix
-
-
-def _changed_line_coverage(
-    args: dict[str, object],
-) -> ChangedLineCoverageEvidence | None:
-    value = args.get("changed_line_coverage")
-    if value is None:
-        return None
-    if not isinstance(value, dict):
-        raise ValueError("changed_line_coverage must be an object")
-    return ChangedLineCoverageEvidence.from_dict(cast(dict[str, Any], value))
 
 
 def _text(args: dict[str, object], key: str) -> str:
@@ -690,6 +699,30 @@ def _public_flow_status(flow: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _can_load_next_context(
+    *,
+    coding_task_state: object,
+    flow: dict[str, object],
+    output_stage: object | None = None,
+) -> bool:
+    """Continue only when the accepted output did not reach a human checkpoint."""
+
+    if output_stage == "document_change":
+        return False
+    if coding_task_state != "in_progress" or flow.get("status") == "blocked":
+        return False
+    stages = flow.get("stages")
+    if not isinstance(stages, list):
+        return False
+    for stage in stages:
+        if not isinstance(stage, dict):
+            continue
+        details = stage.get("details")
+        if isinstance(details, dict) and isinstance(details.get("confirmation"), dict):
+            return False
+    return True
+
+
 def _public_change_output(
     result: dict[str, object],
     *,
@@ -708,9 +741,11 @@ def _public_change_output(
         )
     elif output_stage == "code_scope":
         public["code_scope"] = result.get("code_scope", [])
-    elif output_stage == "test_planning":
+    elif output_stage in {"test_planning", "ui_test_revision"}:
         public["test_plan_id"] = result.get("test_plan_id")
         public["test_data_plan_id"] = result.get("test_data_plan_id")
+        if output_stage == "ui_test_revision":
+            public["revision_id"] = result.get("revision_id")
     else:
         raise ValueError(f"Unsupported public Change Task output stage: {output_stage}")
     return public
@@ -719,7 +754,7 @@ def _public_change_output(
 def _public_command_result(result: dict[str, object]) -> dict[str, object]:
     """Return command outcome and digest Evidence, never Profile or path internals."""
 
-    return {
+    public = {
         key: result.get(key)
         for key in (
             "command_execution_id",
@@ -737,6 +772,7 @@ def _public_command_result(result: dict[str, object]) -> dict[str, object]:
             "coding_task_state",
         )
     }
+    return public
 
 
 def _public_edit_result(result: dict[str, object]) -> dict[str, object]:
@@ -753,6 +789,7 @@ def _public_edit_result(result: dict[str, object]) -> dict[str, object]:
             "out_of_scope_files",
             "result_repository_revision",
             "coding_task_state",
+            "committed_edit_result_id",
         )
     }
     coverage = result.get("changed_line_coverage")

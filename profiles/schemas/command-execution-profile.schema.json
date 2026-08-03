@@ -19,6 +19,7 @@
     "template": {
       "type": "object",
       "additionalProperties": false,
+      "allOf": [{"$ref": "#/$defs/coverage_template"}],
       "required": [
         "command_ref",
         "argv",
@@ -51,8 +52,23 @@
           "uniqueItems": true
         },
         "output_limit_bytes": {"type": "integer", "minimum": 1024, "maximum": 1048576},
-        "failure_policy": {"const": "record_and_block"}
+        "failure_policy": {"const": "record_and_block"},
+        "purpose": {"enum": ["compile", "test", "coverage", "build"]},
+        "coverage_report": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["format", "path"],
+          "properties": {
+            "format": {"enum": ["jacoco_xml", "coverage_py_json", "lcov"]},
+            "path": {"type": "string", "minLength": 1, "maxLength": 1000}
+          }
+        }
       }
+    },
+    "coverage_template": {
+      "if": {"properties": {"purpose": {"const": "coverage"}}, "required": ["purpose"]},
+      "then": {"required": ["coverage_report"]},
+      "else": {"not": {"required": ["coverage_report"]}}
     }
   }
 }

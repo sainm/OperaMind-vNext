@@ -25,8 +25,12 @@ Service = Annotated[WebControlPlaneService, Depends(get_service)]
 def next_confirmation(
     workspace_root: Annotated[str, Query(min_length=1, max_length=4000)],
     service: Service,
+    change_request_id: Annotated[str | None, Query(min_length=1, max_length=160)] = None,
 ) -> dict[str, object]:
-    return service.next_change_confirmation(workspace_root=Path(workspace_root))
+    return service.next_change_confirmation(
+        workspace_root=Path(workspace_root),
+        change_request_id=change_request_id,
+    )
 
 
 @router.post("/change-requests/{request_id}/confirmations/{checkpoint}")
@@ -36,14 +40,20 @@ def decide_confirmation(
     body: BridgeChangeCheckpointDecision,
     service: Service,
 ) -> dict[str, object]:
-    return service.decide_change_checkpoint(
-        request_id=request_id,
-        checkpoint=checkpoint,
-        decision=body.decision,
-        surface="vscode_copilot",
-        actor=body.actor,
+    return service.execute_web_command(
+        command_scope=f"change-confirmation:{request_id}:{checkpoint}",
         idempotency_key=body.idempotency_key,
-        note=body.note,
+        actor=body.actor,
+        payload=body.model_dump(mode="json"),
+        operation=lambda: service.decide_change_checkpoint(
+            request_id=request_id,
+            checkpoint=checkpoint,
+            decision=body.decision,
+            surface="vscode_copilot",
+            actor=body.actor,
+            idempotency_key=body.idempotency_key,
+            note=body.note,
+        ),
     )
 
 
@@ -52,10 +62,12 @@ def claim_next_task(
     workspace_root: Annotated[str, Query(min_length=1, max_length=4000)],
     consumer_id: Annotated[str, Query(min_length=1, max_length=200)],
     service: Service,
+    change_request_id: Annotated[str | None, Query(min_length=1, max_length=160)] = None,
 ) -> dict[str, object]:
     return service.claim_copilot_task(
         workspace_root=Path(workspace_root),
         consumer_id=consumer_id,
+        change_request_id=change_request_id,
     )
 
 

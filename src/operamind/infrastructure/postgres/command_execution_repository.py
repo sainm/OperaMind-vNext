@@ -52,12 +52,27 @@ class CommandExecutionResultWrite:
     output_truncated: bool
     started_at: datetime
     completed_at: datetime
+    coverage_report_format: str | None = None
+    coverage_report_path: str | None = None
+    coverage_report_digest: str | None = None
     recovery_id: str | None = None
     recovery_actor: str | None = None
     recovery_reason: str | None = None
     recovery_stale_before: datetime | None = None
 
     def __post_init__(self) -> None:
+        coverage_values = (
+            self.coverage_report_format,
+            self.coverage_report_path,
+            self.coverage_report_digest,
+        )
+        if any(value is not None for value in coverage_values):
+            if any(value is None or not value.strip() for value in coverage_values):
+                raise ValueError("Coverage report binding must be complete")
+            if self.status != "passed":
+                raise ValueError("Only a passed command can bind a Coverage report")
+            if len(self.coverage_report_digest or "") != 64:
+                raise ValueError("Coverage report digest must be SHA-256")
         recovery_values = (
             self.recovery_id,
             self.recovery_actor,
@@ -100,6 +115,9 @@ class CommandExecutionRecord:
     output_truncated: bool
     started_at: datetime
     completed_at: datetime
+    coverage_report_format: str | None = None
+    coverage_report_path: str | None = None
+    coverage_report_digest: str | None = None
     recovery_id: str | None = None
     recovery_actor: str | None = None
     recovery_reason: str | None = None
@@ -258,10 +276,13 @@ class CommandExecutionRepository:
                     executable_path, working_directory, stdout_digest, stderr_digest,
                     stdout_bytes, stderr_bytes, output_truncated, result_digest,
                     started_at, completed_at, recovery_id, recovery_actor,
-                    recovery_reason, recovery_stale_before
+                    recovery_reason, recovery_stale_before,
+                    coverage_report_format, coverage_report_path,
+                    coverage_report_digest
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s
                 )
                 """,
                 (command_execution_id, *expected),
@@ -280,6 +301,9 @@ class CommandExecutionRepository:
             output_truncated=write.output_truncated,
             started_at=write.started_at,
             completed_at=write.completed_at,
+            coverage_report_format=write.coverage_report_format,
+            coverage_report_path=write.coverage_report_path,
+            coverage_report_digest=write.coverage_report_digest,
             recovery_id=write.recovery_id,
             recovery_actor=write.recovery_actor,
             recovery_reason=write.recovery_reason,
@@ -363,10 +387,13 @@ class CommandExecutionRepository:
                     executable_path, working_directory, stdout_digest, stderr_digest,
                     stdout_bytes, stderr_bytes, output_truncated, result_digest,
                     started_at, completed_at, recovery_id, recovery_actor,
-                    recovery_reason, recovery_stale_before
+                    recovery_reason, recovery_stale_before,
+                    coverage_report_format, coverage_report_path,
+                    coverage_report_digest
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s
                 )
                 """,
                 (command_execution_id, *expected),
@@ -385,6 +412,9 @@ class CommandExecutionRepository:
             output_truncated=write.output_truncated,
             started_at=write.started_at,
             completed_at=write.completed_at,
+            coverage_report_format=write.coverage_report_format,
+            coverage_report_path=write.coverage_report_path,
+            coverage_report_digest=write.coverage_report_digest,
             recovery_id=write.recovery_id,
             recovery_actor=write.recovery_actor,
             recovery_reason=write.recovery_reason,
@@ -401,7 +431,8 @@ class CommandExecutionRepository:
                    stdout_digest, stderr_digest, stdout_bytes, stderr_bytes,
                    output_truncated, started_at, completed_at,
                    recovery_id, recovery_actor, recovery_reason, recovery_stale_before,
-                   project_id, result_digest
+                   project_id, result_digest, coverage_report_format,
+                   coverage_report_path, coverage_report_digest
             FROM command_execution_results
             WHERE command_execution_id = %s
             """,
@@ -424,6 +455,9 @@ class CommandExecutionRepository:
             output_truncated=bool(row[8]),
             started_at=cast(datetime, row[9]),
             completed_at=cast(datetime, row[10]),
+            coverage_report_format=str(row[17]) if row[17] is not None else None,
+            coverage_report_path=str(row[18]) if row[18] is not None else None,
+            coverage_report_digest=str(row[19]) if row[19] is not None else None,
             recovery_id=str(row[11]) if row[11] is not None else None,
             recovery_actor=str(row[12]) if row[12] is not None else None,
             recovery_reason=str(row[13]) if row[13] is not None else None,
@@ -457,6 +491,10 @@ def _request_identity(write: CommandExecutionRequestWrite) -> tuple[object, ...]
 
 def _result_digest(write: CommandExecutionResultWrite) -> str:
     payload = asdict(write)
+    if write.coverage_report_format is None:
+        payload.pop("coverage_report_format")
+        payload.pop("coverage_report_path")
+        payload.pop("coverage_report_digest")
     payload["started_at"] = _canonical_timestamp(write.started_at)
     payload["completed_at"] = _canonical_timestamp(write.completed_at)
     if write.recovery_stale_before is not None:
@@ -494,6 +532,9 @@ def _result_identity(
         write.recovery_actor,
         write.recovery_reason,
         write.recovery_stale_before,
+        write.coverage_report_format,
+        write.coverage_report_path,
+        write.coverage_report_digest,
     )
 
 
@@ -510,6 +551,9 @@ def _record_identity(record: CommandExecutionRecord, project_id: str) -> tuple[o
         output_truncated=record.output_truncated,
         started_at=record.started_at,
         completed_at=record.completed_at,
+        coverage_report_format=record.coverage_report_format,
+        coverage_report_path=record.coverage_report_path,
+        coverage_report_digest=record.coverage_report_digest,
         recovery_id=record.recovery_id,
         recovery_actor=record.recovery_actor,
         recovery_reason=record.recovery_reason,

@@ -40,6 +40,15 @@ def test_migrations_apply_once_and_record_checksum() -> None:
         with connection.cursor() as cursor:
             cursor.execute("SELECT version, name, checksum FROM schema_migrations ORDER BY version")
             rows = cursor.fetchall()
+            cursor.execute(
+                """
+                SELECT pg_get_constraintdef(oid)
+                FROM pg_constraint
+                WHERE conname = 'copilot_coding_task_events_type_valid'
+                  AND connamespace = current_schema()::regnamespace
+                """
+            )
+            event_constraint = str(cursor.fetchone()[0])
         drop_isolated_schema(connection, schema_name)
 
     assert first == (
@@ -105,6 +114,13 @@ def test_migrations_apply_once_and_record_checksum() -> None:
         "0060",
         "0061",
         "0062",
+        "0063",
+        "0064",
+        "0065",
+        "0066",
+        "0067",
+        "0068",
+        "0069",
     )
     assert second == ()
     assert rows == [
@@ -406,7 +422,43 @@ def test_migrations_apply_once_and_record_checksum() -> None:
             "change_checkpoint_confirmations",
             catalog.migrations[61].checksum,
         ),
+        (
+            "0063",
+            "change_automation_recovery",
+            catalog.migrations[62].checksum,
+        ),
+        (
+            "0064",
+            "ui_test_plan_revision_task",
+            catalog.migrations[63].checksum,
+        ),
+        (
+            "0065",
+            "project_test_environment",
+            catalog.migrations[64].checksum,
+        ),
+        (
+            "0066",
+            "project_source_git_baselines",
+            catalog.migrations[65].checksum,
+        ),
+        (
+            "0067",
+            "command_coverage_evidence",
+            catalog.migrations[66].checksum,
+        ),
+        (
+            "0068",
+            "copilot_document_discovery_event",
+            catalog.migrations[67].checksum,
+        ),
+        (
+            "0069",
+            "verification_only_execution_scope",
+            catalog.migrations[68].checksum,
+        ),
     ]
+    assert "document_discovery_bound" in event_constraint
 
 
 @pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
@@ -617,16 +669,23 @@ def test_applied_migration_checksum_mismatch_is_rejected(tmp_path: Path) -> None
         "0051_web_command_idempotency.sql",
         "0052_changed_line_coverage.sql",
         "0053_canonical_profile_drift.sql",
-            "0054_profile_rebuild_lifecycle.sql",
-            "0055_golden_rag_quality_gate.sql",
-            "0056_snapshot_variant_provenance.sql",
-            "0057_copilot_change_task.sql",
-            "0058_copilot_change_outputs.sql",
-            "0059_copilot_change_task_lifecycle.sql",
-            "0060_ui_verification_artifact_binding.sql",
-            "0061_project_local_sources.sql",
-            "0062_change_checkpoint_confirmations.sql",
-        ):
+        "0054_profile_rebuild_lifecycle.sql",
+        "0055_golden_rag_quality_gate.sql",
+        "0056_snapshot_variant_provenance.sql",
+        "0057_copilot_change_task.sql",
+        "0058_copilot_change_outputs.sql",
+        "0059_copilot_change_task_lifecycle.sql",
+        "0060_ui_verification_artifact_binding.sql",
+        "0061_project_local_sources.sql",
+        "0062_change_checkpoint_confirmations.sql",
+        "0063_change_automation_recovery.sql",
+        "0064_ui_test_plan_revision_task.sql",
+        "0065_project_test_environment.sql",
+        "0066_project_source_git_baselines.sql",
+        "0067_command_coverage_evidence.sql",
+        "0068_copilot_document_discovery_event.sql",
+        "0069_verification_only_execution_scope.sql",
+    ):
         (tmp_path / version).write_text(
             (ROOT / "migrations" / version).read_text(encoding="utf-8"),
             encoding="utf-8",
@@ -1031,6 +1090,13 @@ def test_locator_observation_migration_upgrades_candidate_identity_with_existing
         "0060",
         "0061",
         "0062",
+        "0063",
+        "0064",
+        "0065",
+        "0066",
+        "0067",
+        "0068",
+        "0069",
     )
     assert candidates == [
         ("knowledge-v1", "shared-status-label"),
@@ -1133,6 +1199,13 @@ def test_profile_rebuild_lifecycle_migrates_legacy_requests_fail_closed() -> Non
             "0060",
             "0061",
             "0062",
+            "0063",
+            "0064",
+            "0065",
+            "0066",
+            "0067",
+            "0068",
+            "0069",
         )
         with connection.cursor() as cursor:
             cursor.execute(
@@ -1260,6 +1333,13 @@ def test_snapshot_variant_provenance_migration_backfills_legacy_facts() -> None:
             "0060",
             "0061",
             "0062",
+            "0063",
+            "0064",
+            "0065",
+            "0066",
+            "0067",
+            "0068",
+            "0069",
         )
         with connection.cursor() as cursor:
             cursor.execute(

@@ -11,7 +11,7 @@ AI による編集は **VS Code 上の GitHub Copilot** に統一します。Ope
 1. Web で変更要件を登録する。
 2. RAG が関連片を検索し、`document_id` から完全な Canonical 文書と実ファイル参照を復元して、VS Code GitHub Copilot が対象設計書を修正する。
 3. VS Code GitHub Copilot が設計書差分からコード候補を調査し、OperaMind が現在の Code Graph、Repository、Revision、Test Binding に照合して変更可能範囲を確定する。
-4. VS Code GitHub Copilot が限定範囲のコードを変更し、差分検証後に TestPlan / TestDataPlan を生成して、設定された必須コマンドをすべて実行する。生成済みテストケースは Web から自然言語で修正を提案でき、差分と選択肢を一度確認した後だけ下流計画を再生成する。
+4. VS Code GitHub Copilot が限定範囲のコードを変更し、コンパイル・テスト・カバレッジ成功後に実ブラウザ用 UiTestPlan / TestDataPlan を生成する。生成済み計画は Web から自然言語で修正を提案でき、確認後は Copilot が完全な UI 計画を再生成してから新しい実行を開始する。
 5. OperaMind が TestDataPlan の順序で一連の業務データを生成し、その後に UI 操作・断言・スクリーンショット取得を実行する。
 6. 要件、設計書差分、コード範囲、テスト結果、UI Evidence を結合した最終レポートを出力する。
 
@@ -23,7 +23,7 @@ Web が表示するのはこの六工程だけです。内部の承認記録、�
 | コンポーネント | 責務 |
 |---|---|
 | OperaMind Web | 変更要件と六工程の成果物・状態を表示し、生成済みテストケースの自然言語修正を提案・確認 |
-| VS Code GitHub Copilot | 設計書変更、コード変更、テスト計画生成 |
+| VS Code GitHub Copilot | 設計書変更、コード変更、UiTestPlan / TestDataPlan 生成・再生成 |
 | Local Bridge / MCP | Copilot に限定コンテキストと安全な実行ツールを提供 |
 | RAG / Code Graph | 設計書検索、Canonical Data 復元、コード影響範囲確定 |
 | Test Data / Playwright | 画面横断データ生成、UI 操作、スクリーンショット取得 |
@@ -66,13 +66,9 @@ Windows 配布版の設定は `%LOCALAPPDATA%\OperaMind\config.env`、実行情�
 
 Web は単機利用を前提とし、`127.0.0.1` のみで公開します。ユーザー認証はありません。Bridge Token は Launcher がユーザー領域へ生成し、VS Code Extension が SecretStorage へ同期します。
 
-初回は Web の「新しいプロジェクト」から、コード Workspace と一つ以上の設計書 Folder を登録します。どちらも Git 管理外のローカルファイルとして登録でき、コンテナを必須としません。Windows では Windows の絶対 Path、macOS／Linux では各 OS の絶対 Path を入力します。
+初回は Web の「新しいプロジェクト」から、コード Workspace、一つ以上の設計書 Folder、Project 固有の UI テスト対象 URL を登録します。OperaMind はコードと各設計書 Folder の実際の Git Repository Root を判定します。Git 管理外の Folder は外部送信しない内部 Git Repository と初回 Commit を作成し、既存 Repository は未 Commit 変更がない場合だけ現在 Commit を基線にします。設計書 Folder がコード Repository 内にある場合は同じ Repository を再利用し、Nested Repository は作成しません。Windows では Windows の絶対 Path、macOS／Linux では各 OS の絶対 Path を入力します。
 
-TestDataPlan で対象システムの HTTP／UI Step を実行する場合は、資格情報を含まない Origin を明示します。未設定の場合、外部 HTTP／UI 実行は fail closed になります。
-
-```bash
-export OPERAMIND_TEST_TARGET_BASE_URL='http://127.0.0.1:8080'
-```
+TestDataPlan で対象システムの HTTP／UI Step を実行する場合は、Project 初期化画面で資格情報を含まない Origin を明示します。URL は Project と TestDataPlan 実行に固定され、未設定の場合は確認前に fail closed になります。
 
 ## VS Code
 

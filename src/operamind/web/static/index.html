@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>OperaMind 変更フロー</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23176b50'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='sans-serif' font-size='18' font-weight='700' fill='white'%3EO%3C/text%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/app.css?v=20260801-impact-graph-v4">
+  <link rel="stylesheet" href="/app.css?v=20260802-web-handoff-v1">
 </head>
 <body>
   <a class="skip-link" href="#main">メインコンテンツへ移動</a>
@@ -19,6 +19,11 @@
         <span>プロジェクト</span>
         <select id="projectSelect" aria-label="プロジェクト"></select>
       </label>
+      <button id="openVsCodeButton" class="secondary vscode-open-button" type="button" disabled
+        title="選択中のコード Workspace を VS Code で開く">
+        <span class="vscode-open-icon" aria-hidden="true">⌁</span>
+        <span class="vscode-open-label">VS Code で開く</span>
+      </button>
       <button id="newProjectButton" class="secondary" type="button">新しいプロジェクト</button>
       <button id="newRequestButton" class="primary" type="button">新しい変更要件</button>
     </div>
@@ -36,6 +41,8 @@
           <span id="projectSourceKind" class="source-kind"></span>
         </div>
         <strong id="projectWorkspaceSummary"></strong>
+        <span id="projectTestBaseUrlSummary" class="muted"></span>
+        <span id="projectQualitySummary" class="muted"></span>
         <ul id="projectDocumentRootSummary"></ul>
       </section>
       <div id="requestList" class="request-list" aria-live="polite">
@@ -50,6 +57,7 @@
         <div>
           <span class="eyebrow">ONE CHANGE FLOW</span>
           <h1 id="pageTitle">変更フロー</h1>
+          <span id="pageRequestId" class="request-id"></span>
           <p id="pageDescription">変更要件を選択してください。設計書、コード、テスト、UI 証跡を一つの流れで追跡します。</p>
         </div>
         <div class="hero-actions">
@@ -66,6 +74,8 @@
       </section>
 
       <div id="flowWorkspace" class="hidden">
+        <div id="nextActionPanel"></div>
+
         <section class="progress-panel" aria-labelledby="progressTitle">
           <div class="progress-copy">
             <div><span class="eyebrow">PROGRESS</span><h2 id="progressTitle">全体進捗</h2></div>
@@ -92,7 +102,7 @@
         <div><span class="eyebrow">NEW PROJECT</span><h2 id="projectDialogTitle">新しいプロジェクト</h2></div>
         <button id="closeProjectDialogButton" class="icon-button" type="button" aria-label="閉じる">×</button>
       </div>
-      <p>コードと設計書のローカル保存場所を登録します。Git やコンテナは必要ありません。</p>
+      <p>コードと設計書のローカル保存場所を登録します。既存 Git リポジトリやコンテナの準備は不要です。</p>
       <div class="form-grid">
         <label>
           <span>プロジェクト ID</span>
@@ -115,8 +125,13 @@
         <textarea id="projectDocumentRoots" rows="5" maxlength="20000" required
           placeholder="一行に一つのフォルダーを入力&#10;C:\design\expense-system&#10;D:\shared\api-specs"></textarea>
       </label>
+      <label>
+        <span>UI テスト対象 URL（任意・後から設定可）</span>
+        <input id="projectTestBaseUrl" type="url" maxlength="2000"
+          autocomplete="off" placeholder="例：http://127.0.0.1:8080">
+      </label>
       <div class="dialog-note">
-        Workspace と設計書は Git 管理外の通常フォルダーでも登録できます。OperaMind は原本を移動せず、入力した場所をプロジェクト設定として保存します。
+        Git 管理外のコードには、外部送信しないローカル差分基線を OperaMind が作成します。原本は移動せず、秘密ファイルと構築成果物は基線から除外します。
       </div>
       <p id="projectFormStatus" class="request-form-status hidden" role="status" aria-live="polite"></p>
       <div class="dialog-actions">
@@ -196,16 +211,16 @@
       <div class="dialog-heading">
         <div>
           <span class="eyebrow">REVIEW BEFORE APPLY</span>
-          <h2 id="testCaseRevisionDialogTitle">テストケース修正</h2>
+          <h2 id="testCaseRevisionDialogTitle">UI テスト計画の修正</h2>
         </div>
         <button id="closeTestCaseRevisionButton" class="icon-button" type="button"
           aria-label="閉じる">×</button>
       </div>
-      <p>ケース名、現在の文言、変更後の文言を含めると対象を確定しやすくなります。</p>
+      <p>ケース名と現在・変更後の文言を指定できます。テスト手順だけでなく、データ生成、変数、断言、クリーンアップも修正できます。</p>
       <label>
         <span>修正内容</span>
         <textarea id="testCaseRevisionInstruction" rows="5" maxlength="20000" required
-          placeholder="例：ケース「差戻し状態で検索する」の期待結果「1 件を表示する」を「2 件を表示する」に変更"></textarea>
+          placeholder="例：ケース「差戻し状態で検索する」の生成ステップ「申請を作成する」を「差戻し申請を作成する」に変更&#10;例：ケース「差戻し状態で検索する」の変数「expense_id」の取得元を「response.body.id」に変更&#10;例：ケース「差戻し状態で検索する」のクリーンアップステップ「申請を残す」を「作成した申請を削除する」に変更"></textarea>
       </label>
       <div id="testCaseRevisionPreview" class="revision-preview hidden"></div>
       <div class="dialog-actions">
@@ -216,7 +231,8 @@
     </form>
   </dialog>
 
-  <script src="/change-flow-view.js?v=20260801-impact-graph-v4"></script>
-  <script src="/app.js?v=20260801-impact-graph-v4"></script>
+  <script src="/change-flow-view.js?v=20260802-test-data-rerun-v1"></script>
+  <script src="/vscode-link.js?v=20260802-web-handoff-v1"></script>
+  <script src="/app.js?v=20260802-web-handoff-v1"></script>
 </body>
 </html>

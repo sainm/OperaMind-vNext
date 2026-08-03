@@ -10,14 +10,13 @@
 コードと設計書を受領
 → Web で Project、コード Workspace、設計書 Root を初期化
 → 原本のローカル基線を固定（Git は任意）
-→ Profile を登録
-→ 設計書を Canonical 化して RAG Index を構築
-→ 対象工程の起動・テスト方法を固定
+→ 設計書を Canonical 化して RAG Index を自動構築
+→ 変更要件から技術 Profile と固定 Command を自動準備
 → Web で変更要件を登録
 → 設計書差分
 → コード影響範囲
-→ コード・テスト・TestPlan
-→ TestData・UI 検証
+→ コード変更・コンパイル・コードテスト・カバレッジ
+→ UI TestPlan・TestDataPlan・実ブラウザ検証
 → 最終レポート
 ```
 
@@ -26,8 +25,8 @@
 1. 変更要件
 2. 設計書差分
 3. コード影響範囲
-4. コンパイル・テスト
-5. UI 検証
+4. コード変更・コンパイル・テスト
+5. テストデータ・UI 検証
 6. 最終レポート
 
 コードと設計書の受領から RAG 準備までは、六工程を開始する前の「導入基線」とする。内部の Approval、Edit Packet、Task、Queue、Lease、Worker、再試行制御は OperaMind が自動処理する。通常の手動テストでは個別に操作しない。
@@ -61,6 +60,21 @@
 | `<CHANGE_ID>` | 今回だけ使用する一意な変更番号 |
 | `<REQUIREMENT>` | 業務動作と期待結果を含む自然言語要件 |
 
+一回のテストで使用した実値は、実行前に次の表へ転記する。途中で値を変更した場合は上書きせず、変更理由と変更時刻を備考へ残す。
+
+| 項目 | 今回の実値 |
+|---|---|
+| OperaMind Root | |
+| Database URL（Password を除く） | |
+| Code Workspace | |
+| Document Root 1 | |
+| Document Root 2 以降 | |
+| Project ID／Project 名 | |
+| UI テスト対象 URL | |
+| Change ID | |
+| Requirement | |
+| 開始時刻 | |
+
 `<CHANGE_ID>`、Analysis Case、Change Task は過去の実行から再利用しない。
 
 ## 4. 手動テストの原則
@@ -73,9 +87,9 @@
 - 決定的で Scope 内の遷移は OperaMind が自動承認する。
 - 利用者確認は、Change Task の受領、意味判断を伴う変更、Scope 拡大、自然言語テストケース修正の最終適用に限定する。
 - 受領したコードと設計書は、導入基線が完成するまで変更しない。
-- コードと設計書はローカルファイルだけでもよく、Git Repository を必須にしない。
+- コードと設計書は登録前に Git Repository でなくてもよい。Project 初期化時に OperaMind が実際の Git 帰属を判定し、未管理 Folder には内部 Git と初回 Commit を作る。
 - 設計書はコード Workspace 内に固定せず、Project ごとに設定した `<DOCUMENT_ROOTS>` から取り込めるものとする。
-- Git が存在する場合は補助的な Revision 情報として利用し、存在しない場合はファイル Digest によるローカル Snapshot を基線とする。
+- 既存 Git の現在 Commit、または OperaMind が作成した内部 Git の初回 Commit を、Canonical Snapshot とともに導入基線として記録する。
 - Web の表示や更新操作をバックエンド処理の継続条件にしない。
 - 失敗時に DB 更新、手動 commit、内部 Artifact 編集で先へ進めない。Web の停止理由と実際の Evidence を記録する。
 
@@ -85,7 +99,7 @@
 
 ### 5.1 コードと設計書をローカルに配置する
 
-コードを `<CODE_WORKSPACE>`、設計書を一つ以上の `<DOCUMENT_ROOTS>` に保存する。両者は Git 管理外の通常 Folder でよく、同じ Directory 配下に置く必要もない。OperaMind は原本を別の場所へ移動しない。
+コードを `<CODE_WORKSPACE>`、設計書を一つ以上の `<DOCUMENT_ROOTS>` に保存する。両者は Git 管理外の通常 Folder でよく、同じ Directory 配下に置く必要もない。Git 管理外のコードには OperaMind が local-only の内部 Git 基線を作るが、原本を別の場所へ移動したり外部へ push したりしない。
 
 Windows 例:
 
@@ -112,7 +126,8 @@ macOS／Linux 例:
 3. Project ID と Project 名を入力する。
 4. 「コード Workspace」に `<CODE_WORKSPACE>` の絶対 Path を入力する。
 5. 「設計書の場所」に `<DOCUMENT_ROOTS>` を一行につき一つ入力する。
-6. 「初期化」を押す。
+6. UI 影響がある場合は「UI テスト対象 URL」に `<TARGET_BASE_URL>` を入力する。後で決める場合は空欄でもよいが、UI TestPlan の確認前には設定が必要である。
+7. 「初期化」を押す。
 
 この操作では Shell Script や SQL Import を実行しない。入力した Directory は、OperaMind を実行している OS から読み取れる実在 Directory でなければならない。Windows では Windows Path、macOS／Linux では各 OS の絶対 Path を使用する。
 
@@ -123,25 +138,31 @@ macOS／Linux 例:
 - Project 選択欄に作成した Project が表示され、選択済みである。
 - 左側の Project Source に `<CODE_WORKSPACE>` が表示される。
 - 入力したすべての `<DOCUMENT_ROOTS>` が入力順に表示される。
-- `.git` が Workspace 直下にあれば「Git」、なければ「ローカルファイル」と表示される。
-- Git がなくても初期化が成功する。
+- 既存 Git を再利用した場合は「Git」、OperaMind が作成した場合は「OperaMind 内部 Git」と表示される。
+- コードと各設計書 Root に Git 基線 Commit の短縮 SHA が表示される。
+- `コード品質基線` が `ready` または `blocked` として表示され、`blocked` の場合は不足している Coverage Plugin、機械可読 Report 設定、Test Source が列挙される。
+- Git 管理外でも初期化が成功し、各独立 Root に `.git` と初回 Commit が作成される。
+- 設計書 Root がコード Repository 内にある場合は同じ Repository Root／Commit が表示され、設計書 Root の中に Nested `.git` は作成されない。
+- 既存 Repository に未 Commit 変更がある場合は自動 Commit せず、初期化が停止する。
+- コード Workspace が上位 Repository の Subdirectory の場合は Nested Git を作らず、選択すべき Repository Root を表示して停止する。
 - 存在しない Path、File Path、重複する Document Root は拒否される。
 
-この時点では RAG 取込、コード解析、変更要件の実行を開始しない。まず Project の資料位置だけを確定し、その後の基線作成を別工程として確認する。
+この時点で Git 基線と Canonical RAG 基線まで作成される。コード解析と変更要件の実行はまだ開始しない。
 
-### 5.4 工程と文書の Profile を決める
+### 5.4 工程と文書の Profile 準備を確認する
 
-対象コードと設計書を読み取り、次を明示的に選択または作成する。
+現在の製品フローでは、利用者が Profile ファイルを手作業で登録しない。Project 初期化で DocumentConventionProfile と Embedding Binding が使われ、最初の変更要件登録時に Workspace の実ファイルから CodeFrameworkProfile と CommandExecutionProfile が自動準備される。
 
-- DocumentConventionProfile
-- CodeFrameworkProfile
-- CommandExecutionProfile
-- 必要な TestData Binding
-- 必要な UI Action／Assertion Binding
+確認事項:
 
-CodeFrameworkProfile では、対象工程の production、test、UI、設定、SQL、ビルド定義を取りこぼさない scan root と language を設定する。
+- 利用者に JSON、SQL、Shell Script の Import を要求しない。
+- production、test、UI、設定、SQL、ビルド定義を含む scan root が生成される。
+- 固定 Command は対象 Workspace に存在する Wrapper／Build 定義から作られる。
+- Coverage Command が参照する Task と機械可読 Report が対象工程に実在し、少なくとも一つの Test Source がある場合だけ CommandExecutionProfile が ready になる。
+- TestData と UI Binding は生成された Plan に明示され、未登録 Binding を推測実行しない。
+- フレームワーク、文書形式、Command、UI Locator を一意に判定できない場合は、Web の現在アクションに停止理由を表示する。
 
-フレームワークや文書形式を一意に判定できない場合は、推測で続行せず導入基線を blocked にする。
+停止した場合は DB や Profile ファイルを直接編集せず、表示された不足情報を Project 設定または対象 Workspace で是正してから再解析する。
 
 ### 5.5 設計書を Canonical 化する
 
@@ -194,6 +215,16 @@ Index 未準備、Embedding 失敗、Project 越境、原本参照欠落があ�
 
 受領時点ですでに失敗するコマンドがある場合は、既知基線失敗として明示し、今回の変更による失敗と混同しない。ただし必須 Command が実行不能な Project を ready にしない。
 
+Coverage は Command 名が Profile に存在するだけでは不十分である。変更要件を登録する前に、対象工程について次を確認する。
+
+- Coverage Plugin または Runner が Build に組み込まれている。
+- Profile が要求する Report Format（JaCoCo XML、coverage.py JSON、LCOV など）が有効である。
+- Report Path が Profile の `coverage_report.path` と一致する。
+- 少なくとも一つの実 Test Source があり、空 Test Suite の成功を Coverage 成功として扱わない。
+- 同一 Workspace の compile、test、coverage、build は直列に実行され、同じ Gradle／Build Cache を同時更新しない。
+
+不足時は Project Source の `コード品質基線: blocked` と不足項目を記録する。Build 定義を業務変更 Task の Scope 外で暗黙変更せず、対象工程の品質基線として先に整備・固定してから変更要件を開始する。
+
 ### 5.8 導入基線の完了条件
 
 次をすべて満たした場合だけ、Web から最初の変更要件を登録する。
@@ -207,6 +238,7 @@ Index 未準備、Embedding 失敗、Project 越境、原本参照欠落があ�
 - Section から完全な原本へ復元可能
 - CodeFrameworkProfile が production／test／UI／設定を包含
 - 必須 Command が登録済み
+- Coverage Task、Report、Test Source の品質前提が ready
 - UI Impact がある場合の対象 Origin と Binding が準備済み
 - 別 Project のデータが混入しない
 
@@ -221,8 +253,8 @@ OperaMind に次の設定が一意に存在することを確認する。
 - 対象基線 Revision（Git commit またはローカル Snapshot）
 - 設計文書 Root と Canonical Snapshot
 - RAG Search Index と Embedding
-- CodeFrameworkProfile
-- CommandExecutionProfile
+- 自動準備された CodeFrameworkProfile
+- 自動準備された CommandExecutionProfile
 - 必要な TestData/UI Binding
 - 対象 Deployment
 
@@ -261,8 +293,9 @@ Windows のユーザー領域は次である。
 
 ```dotenv
 OPERAMIND_DATABASE_URL=postgresql://operamind:<PASSWORD>@127.0.0.1:5432/operamind_vnext
-OPERAMIND_TEST_TARGET_BASE_URL=<TARGET_BASE_URL>
 ```
+
+`<TARGET_BASE_URL>` は環境変数ではなく、Web の Project 初期化画面に Project ごとに入力する。
 
 UTF-8、UTF-8 BOM、CRLF のいずれでも読み込めることを確認する。実際の Password と Token はテスト記録へ転記しない。
 
@@ -384,7 +417,7 @@ Windows 配布版では次を追加確認する。
 2. `新しい変更要件` を押す。
 3. `変更番号` に `<CHANGE_ID>` を入力する。
 4. `変更要件` に `<REQUIREMENT>` を入力する。
-5. `登録して開始` を押す。
+5. `変更要求を送信` を押す。
 
 要件には少なくとも次を含める。
 
@@ -397,7 +430,10 @@ Windows 配布版では次を追加確認する。
 期待結果:
 
 - 六工程が表示される。
+- 画面上部には内部 ID ではなく変更要件の先頭文が見出しとして表示され、Change ID は小さく補助表示される。
+- `現在のアクション` に、今確認または実行すべき一件だけが表示される。
 - `変更要件` に人工確認が表示される。
+- 現在より後の工程は `待機中` であり、過去 Task の失敗や取消状態を停止理由として表示しない。
 - Web の `確認して進む`、または VS Code の `現在の工程を確認` で要件を確認する。
 - 要件確認後、RAG が選んだ完全な対象設計書と根拠箇所を同じ方法で確認する。
 - RAG 対象設計書の確認後だけ、VS Code Bridge が同一 Change Task を実行可能にする。
@@ -484,50 +520,78 @@ git diff
 
 Copilot が `copilot_validate_task_diff` を実行し、working diff が `in_scope` になることを確認する。
 
-### Step 6: TestPlan / TestDataPlan を確認する
+### Step 6: コード Command と Coverage を確認する
 
-working diff の受理後、Copilot が同じ Change Task 内で TestPlan と TestDataPlan を生成し、`output_stage=test_planning` を記録することを確認する。
+working diff の受理後、必須のコンパイル・テスト・カバレッジ Command が同一 content digest に対してすべて成功し、コードを commit して `copilot_record_task_result` を記録する。OperaMind が coverage command の JaCoCo XML／coverage.py JSON／LCOV を直接解析し、変更行 80% 門禁を通過することを確認する。
+
+Web の `コード変更・コンパイル・テスト` を開き、次を確認する。
+
+- Copilot Task が完了
+- Working Diff が Scope 内
+- Compile／Code Test／Coverage Command がすべて成功
+- Result Revision が変更後の Git Commit またはローカル結果 Snapshot と一致
+- 変更行 Coverage が最低基準以上
+
+### Step 7: 実 UI TestPlan / TestDataPlan を確認する
+
+コード Command と Coverage の合格後だけ、Copilot が同じ Change Task 内で実ブラウザ用 `schema_version=v2, plan_kind=ui` の UiTestPlan と TestDataPlan を生成し、`output_stage=test_planning` を記録できることを確認する。TestPlan は単体テストの計画ではなく、実際の画面を操作する UI テスト計画である。
+
+OperaMind は記録前に Change Request の全 Business Rule を母数として業務カバレッジを再計算する。100% 未満の場合は次を確認する。
+
+1. Web に人工確認ボタンや UI Test 実行ボタンが表示されない。
+2. Copilot Task は `test_planning` のままで、`completed` や `ui_validation` へ進まない。
+3. MCP の失敗応答に `coverage_percent` と `uncovered_business_rules` が含まれる。
+4. Copilot が不足 Rule を受け取り、UiTestPlan と TestDataPlan の完全版を再生成して同じ出力を再送する。
+5. 単に Business Rule ID や説明文を Test Case／Evidence に追記しただけでは Coverage が上がらない。各 Business Rule は実行可能な UI Case を持ち、各 UI Case は同一 Flow の Test Data、全 `step_id` の Playwright 対応、Step ごとの Observation、Assertion、期待結果を持つ。Code Test は承認済み Test File と成功済み Command の両方を参照する。Command／Canonical／Plan Evidence は監査用の補助情報として現在 Task の実在 Source に解決できる必要があるが、それ自体で業務 Coverage を上げない。
+6. 100% 到達後にだけ最終 Plan が保存され、Web の人工確認に表示される。利用者は不足項目を探したり追記したりせず、完成した最終 Plan の妥当性だけを確認する。
 
 各 Test Case には次を含める。
 
 - Case 名
 - 前提条件
 - 自然言語 Step
+- 自然言語 Step と同数の一意な `step_id`
 - 期待結果
 - 対応する業務ルール
-- API／UI などの検証 Channel
+- 実 UI の画面遷移、操作、観測、期待結果
 
 TestDataPlan には次を含める。
 
 - 依存順に並んだデータ生成 Step
+- 被テストシステムを実際に変更する Setup Step の構造化 `data_effect`（`creates` または `updates`）、必須 Output Binding、および同じ観測値を検証する Assertion。Action 名の「登録」「create」などの文字列だけではデータ生成と判定しない
 - Step 間の変数
 - 後置および最終 Assertion
 - UI Step と UI Assertion
+- 各 UI Step の限定 Playwright Action、Screenshot
+- 各自然言語 Step を指す `test_step_refs`（未対応 Step が 0 件であること）
+- Playwright で表現できない Step だけに、理由・自然言語 Objective・最大操作数・観測項目を固定した `computer_use_fallback`（通常 Step には設定しない）
 - 逆順 Cleanup
 - 実行不能時の blocking reason
 
 複数画面のデータを別々の手動ファイルに分けない。一つの TestDataPlan Flow の変数、依存関係、Assertion、Cleanup として表現する。
 
-Web または VS Code で TestPlan／TestDataPlan／Coverage の確認を行い、`確認して進む` を押す。内容を変更した場合は Evidence Digest が変わり、再確認が必要になることを確認する。
+Web の `テストデータ・UI 検証` を開き、自然言語手順、生成 Flow、変数、Assertion、Cleanup、Playwright Action と AI 画面操作への限定フォールバックを確認する。Web または VS Code で UiTestPlan／TestDataPlan を確認し、`確認して進む` を押す。確認後に実ブラウザ実行が開始され、Screenshot と最終レポートが生成されることを確認する。
 
-### Step 7: 自然言語テストケース修正を確認する
+### Step 8: 自然言語テストケース修正を確認する
 
 Test Case が Web に表示された後、必要に応じて次を実行する。
 
-1. 表示された自然言語 Step の直下にある `自然言語で修正` を押す。
-2. Case 名、現在の文言、変更後の文言を含む自然言語を入力する。
+1. Test Case またはデータ生成 Flow の直下にある `自然言語で修正` を押す。
+2. Case 名、対象種別、現在の文言、変更後の文言を含む自然言語を入力する。対象種別にはテスト Step、期待結果、生成 Step、変数の取得元、業務 Assertion、クリーンアップ Step を指定できる。
 3. `差分を確認` を押す。
 4. 変更前／変更後と、曖昧な場合の選択肢を確認する。
-5. `この内容を適用` を押す。
+5. `この内容を適用` を押す。これは旧計画を直接編集せず、VS Code GitHub Copilot の `ui_test_plan_revision` Task をキューに入れる操作である。
 
 期待結果:
 
-- 新しい TestPlan／TestDataPlan Version が生成される。
+- Copilot が完全な新しい UiTestPlan／TestDataPlan Version を再生成し、OperaMind の検証後に保存される。
+- すべての自然言語 Step が `test_step_refs` を通じて実行可能な Playwright UI Step に対応し、不足・範囲外参照・ID だけの説明は受理されない。
+- 再生成が完了するまで旧 Version は current のままである。
 - Coverage と下流実行が再生成される。
 - 旧 Run、Evidence、Screenshot、Closure は stale 履歴になる。
 - 旧 Version の結果を新 Version へ流用しない。
 
-### Step 8: 固定コマンドと最終 Diff を確認する
+### Step 9: 固定コマンドと最終 Diff を確認する
 
 Copilot が `copilot_run_task_command` で CommandExecutionProfile に登録された必須コマンドをすべて実行することを確認する。
 
@@ -551,7 +615,7 @@ git status --short
 
 Git 管理の場合は最新 commit が今回の結果で worktree が clean であることを確認する。Git 管理外の場合は今回の結果 Snapshot が固定され、変更後 Digest と一致することを確認する。
 
-### Step 9: TestData と UI 自動実行を確認する
+### Step 10: TestData と UI 自動実行を確認する
 
 Copilot の最終結果記録後、Web または VS Code に UI 実行確認が表示される。TestDataPlan の生成手順、UI Step、UI Assertion、Cleanup を確認して `確認して進む` を押す。この確認後だけ内部 Coordinator が TestData と実ブラウザ UI を自動実行する。利用者は内部 Task、Queue、Worker を操作しない。
 
@@ -578,7 +642,7 @@ Windows では、UI 実行時に Microsoft Edge が自動で使用され、利�
 
 UI Impact がない場合は `not_impacted` または `not_required` として閉じる。
 
-### Step 10: 最終レポートを確認する
+### Step 11: 最終レポートを確認する
 
 Web の `最終レポート` で次を確認する。
 
@@ -615,7 +679,7 @@ OperaMind: 現在のタスクを再開
 | Diff 越境 | Scope 外ファイルを変更 | `reanalysis_required` |
 | Revision drift | 実行中に Git HEAD またはローカル基線対象ファイルを変更 | 現在 Grant を再利用せず停止 |
 | Command 失敗 | 必須 compile／test command を失敗させる | committed Result と Closure を合格にしない |
-| Target URL 未設定 | `OPERAMIND_TEST_TARGET_BASE_URL` を設定しない | 外部 HTTP／UI を fail closed |
+| Target URL 未設定 | Project の `test_base_url` を空にする | TestPlan の確認前に HTTP／UI 実行を fail closed |
 | UI Assertion 失敗 | 期待値を意図的に不一致にする | UI／Closure が失敗し、Cleanup は実行 |
 | Cleanup 失敗 | Cleanup Binding を失敗させる | Closure を合格にしない |
 | Test Case 修正の曖昧性 | 対象 Case を特定できない指示を入力 | 選択肢を表示するか全体を blocked にし、部分適用しない |
@@ -692,3 +756,233 @@ OperaMind: 現在のタスクを再開
 - Windows では Desktop、MCP Companion、VSIX が同一リリースで、Windows Runner の package smoke test が成功している
 
 一つでも欠落する場合は合格にしない。
+
+## 14. 空 Database から行う詳細な開発版受入手順
+
+この章は、製品利用者の通常操作ではなく、OperaMind 自体を開発中に「過去データが一件もない状態」から主フローを検証するための実行手順である。Database の初期化だけは管理作業として Terminal を使用する。その後の Project 登録、変更要件、確認、成果物閲覧は Web と VS Code GitHub Copilot から行う。
+
+### 14.1 今回の実行値を固定する
+
+次の例をコピーし、実在する Path と一意な ID に置き換える。
+
+```text
+OperaMind Root:      /Users/me/work/OperaMind-vNext
+Code Workspace:      /Users/me/work/target-system
+Document Root:       /Users/me/work/target-documents
+Project ID:          target-manual-e2e-YYYYMMDD
+Project Name:        TargetSystem 手動 E2E
+UI Test Target URL:  http://127.0.0.1:8080
+Change ID:           change-YYYYMMDD-01
+```
+
+Requirement 例:
+
+```text
+経費精算申請一覧でステータス「すべて」を選択した場合、申請状態で絞り込まず全件を表示する。
+「申請中」と「差戻し」を選択した場合の既存検索動作は変更しない。
+一覧の検索結果件数と選択状態を実ブラウザで確認する。
+```
+
+同じ ID を前回データから再利用しない。Path は相対 Path、Shell の `~`、資格情報を含む URL を使用しない。
+
+### 14.2 Database と RAG データを空にする
+
+1. OperaMind Web、Launcher、MCP が対象 Database を使用していないことを確認して停止する。
+2. `.env` またはユーザー設定の `OPERAMIND_DATABASE_URL` を確認し、開発用 Database であることを確認する。
+3. PostgreSQL の `public` Schema を Drop／Create する。これにより Project、Change Request、Canonical 文書、Embedding、RAG Index、Code Graph、Task、TestPlan、Evidence がすべて削除される。
+4. OperaMind の Migration を一回適用する。
+5. Web を起動する。
+
+ソース開発時の例:
+
+```bash
+psql '<DATABASE_URL>' -v ON_ERROR_STOP=1 \
+  -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
+.venv/bin/operamind-local --root <OPERAMIND_ROOT> migrate
+.venv/bin/operamind-local --root <OPERAMIND_ROOT> web
+```
+
+確認事項:
+
+- Migration が全件成功する。
+- `GET /health` が成功する。
+- `GET /api/v1/projects` の `count` が `0` である。
+- Project 関連 Table が 0 件である。
+- Canonical／Embedding／Search Index 関連 Table が 0 件である。
+- Web 左側に過去 Project や変更要件が一件も表示されない。
+- Web がユーザー名と Password を要求しない。
+
+Migration 後に参照用 Profile や Schema 管理行が存在してもよいが、過去の Project、RAG、変更、実行 Evidence が残っている場合は開始しない。
+
+### 14.3 空画面を確認する
+
+1. `http://127.0.0.1:8765/` を開く。
+2. Header に OperaMind、Project 選択欄、`新しいプロジェクト`、`新しい変更要件` が表示されることを確認する。
+3. Project 選択欄に選択肢がないことを確認する。
+4. 左側に `登録済みプロジェクトがありません` が表示されることを確認する。
+5. Main に `プロジェクトを初期化します` と `プロジェクトを初期化` Button が表示されることを確認する。
+6. 左側だけに独立した画面全体 Scroll が発生せず、Desktop 幅では左側 Navigation が Main の縦 Scroll に追従しないことを確認する。
+
+不合格例:
+
+- 過去 Project が表示される。
+- Request ID が一文字ずつ縦に折り返される。
+- Login Dialog が表示される。
+- `新しい変更要件` だけが有効で、Project を作成できない。
+
+### 14.4 新しい Project を初期化する
+
+1. `新しいプロジェクト` を押す。
+2. Dialog の見出しが `新しいプロジェクト` であることを確認する。
+3. `プロジェクト ID` に今回の Project ID を入力する。
+4. `プロジェクト名` に今回の Project 名を入力する。
+5. `コード Workspace` に実在する絶対 Path を入力する。
+6. `設計書の場所` に一行一 Folder で実在する絶対 Path を入力する。
+7. UI 影響を確認する場合は `UI テスト対象 URL` に対象 Origin を入力する。
+8. 入力内容を再確認し、`初期化` を一回だけ押す。
+9. Button が `RAG 基線を準備しています` に変わり、連打できないことを確認する。
+10. Dialog を閉じず、処理完了まで待つ。
+
+期待結果:
+
+- Dialog が自動で閉じる。
+- 作成した Project が選択される。
+- 左側の Project Source に Workspace、UI Test URL、すべての Document Root が表示される。
+- Git 管理外 Workspace は `OperaMind 内部 Git` と表示され、初回 Commit が作成される。
+- 既存 Git Root は変更を追加 Commit せず、その現在 Commit を基線として表示する。
+- 初期化成功通知に Canonical 設計書数と RAG Vector 数が表示され、どちらも 0 より大きい。
+- Project Source に `コード品質基線` が表示され、`blocked` の場合は不足項目が初期化通知にも表示される。
+- Project を再選択しても同じ情報が表示される。
+- Browser を更新しても Project が Database から再読込される。
+
+ここで失敗した場合、または `コード品質基線: blocked` の場合は変更要件を登録しない。画面に Path、Git、文書解析、Embedding、Coverage Plugin、Report、Test Source のどこで停止したかが分かる理由が必要である。
+
+### 14.5 変更要件を登録して最初の確認を行う
+
+1. Header の `新しい変更要件` を押す。
+2. Dialog 上部に選択中 Project 名、Workspace、設計書 Folder 数が表示されることを確認する。
+3. `変更番号` を今回の Change ID に変更する。
+4. `変更要件` に、業務動作、入力条件、期待結果、維持条件、UI 影響を改行で分けて入力する。
+5. 文字数表示が入力に追従することを確認する。
+6. `変更要求を送信` を一回だけ押す。
+7. 送信中に二重送信できないことを確認する。
+
+期待結果:
+
+- 左側の変更要件一覧に要件の先頭と Change ID が一件表示される。
+- Main の大見出しは Change ID ではなく要件の先頭文である。
+- Change ID は見出し下に小さく表示される。
+- 全体 Status は `確認待ち` である。
+- `現在のアクション` は `変更要件の確認`、担当は `利用者` である。
+- 六工程は `要件`、`設計書`、`影響範囲`、`コード・テスト`、`UI 検証`、`レポート` の順である。
+- 現在工程だけが開き、後続工程には未確定の古い Error や Artifact が表示されない。
+
+要件本文と対象 Project が正しいことを確認し、`確認して進む` を押す。誤っている場合だけ `差し戻す` を押し、正しい要件を新しい Change ID で登録する。
+
+### 14.6 RAG が選んだ設計書を確認する
+
+1. 画面を更新せず、`現在のアクション` が次の確認へ自動遷移することを確認する。
+2. `設計書差分` を開く。
+3. RAG 対象設計書、根拠 Section、Source Ref を確認する。
+4. Section 断片だけでなく、元の完全な設計書名と実ファイルへ戻れることを確認する。
+5. Requirement と無関係な別画面、別 API、別 Project の設計書が混入していないことを確認する。
+6. RAG の状態が `ready` であることを確認する。
+7. 正しい場合だけ `確認して進む` を押す。
+
+候補が 0 件、別 Project が混入、Source Ref が実ファイルへ戻れない、Embedding が未準備の場合は不合格とし、Copilot に推測させない。
+
+### 14.7 VS Code GitHub Copilot に設計書変更を依頼する
+
+1. `<CODE_WORKSPACE>` を VS Code で開く。
+2. Workspace Trust を確認する。
+3. OperaMind Extension の表示で、Bridge 接続先、Project、Change ID、現在工程を確認する。
+4. `変更タスクを確認` を実行する。
+5. Task の Workspace が `<CODE_WORKSPACE>`、工程が `document_change`、対象文書が Web で確認した RAG Scope と一致することを確認する。
+6. `確認して Copilot を開く` を押す。
+7. Copilot が OperaMind MCP の限定 Tool だけを使うことを確認する。
+8. Copilot が対象設計書の完全な内容を読み、RAG Scope 内の文書だけを変更することを確認する。
+9. Copilot が設計書差分を OperaMind に記録するまで待つ。
+
+不合格条件:
+
+- Artifact validation failed で Task 定義を取得できない。
+- Workspace が別 Project を指す。
+- 対象文書を手動で Chat へ貼り付ける必要がある。
+- Copilot が `code_scope` の確認前に production code を編集する。
+
+### 14.8 設計書差分とコード影響範囲を確認する
+
+1. Web の `現在のアクション` に設計書差分確認が表示されることを確認する。
+2. 変更前／変更後、対象文書、差分件数、変更理由を確認する。
+3. Requirement にない文書変更がないことを確認し、`確認して進む` を押す。
+4. Copilot が現在 Task を再取得し、コードを変更せず読み取り専用で影響解析することを確認する。
+5. `コード影響範囲` を開く。
+6. 変更対象 production file、test file、設定、UI、DB 影響を確認する。
+7. `影響ファイルグラフ` で Node と Edge が表示されることを確認する。
+8. Node を選び、Path、Role、Symbol、Rationale、関連 Test が切り替わることを確認する。
+9. Scope が不足または過剰なら差し戻し、正しい場合だけ `確認して進む` を押す。
+
+### 14.9 コード変更、Compile、Test、Coverage を確認する
+
+1. Scope 確認後にだけ Copilot が production code と test code を編集することを確認する。
+2. Copilot が `copilot_validate_task_diff` を実行し、Scope 外 Path が 0 件であることを確認する。
+3. 固定 compile、test、coverage Command が OperaMind 経由で実行されることを確認する。
+4. Command、終了 Code、Result Digest が記録されることを確認する。
+5. Result Revision が固定され、再現可能であることを確認する。
+6. Web の `コード変更・コンパイル・テスト` を開き、変更ファイルと Command 結果を確認する。
+7. 変更行 Coverage が 80% 以上であることを確認する。
+
+Compile、Test、Coverage の一つでも失敗した場合は UI TestPlan へ進めない。失敗中に過去成功 Evidence を表示した場合は不合格とする。
+
+### 14.10 UI TestPlan と TestDataPlan を確認・修正する
+
+1. Web の `テストデータ・UI 検証` を開く。
+2. 各 Case に自然言語の前提条件、操作 Step、期待結果が表示されることを確認する。
+3. 各自然言語 Step に対応する実行 Step が一件以上あることを確認する。
+4. 複数画面を使う場合、データ生成 Flow が一つの変数系列で画面間を連結していることを確認する。
+5. 入力変数、出力変数、後置 Assertion、最終 Assertion、Cleanup を確認する。
+6. Playwright で実行できる操作に `computer_use_fallback` が付いていないことを確認する。
+7. Canvas、画像認識など Playwright で表現できない操作だけに、理由、Objective、最大操作数、観測項目が表示されることを確認する。
+8. 内容を変更する場合は `自然言語で修正` を押し、Case と変更前後を明記して入力する。
+9. `差分を確認` で変更対象を確認し、正しい場合だけ `この内容を適用` を押す。
+10. 新 Version が完成するまで旧 Version が current で、旧 Evidence が新 Version に流用されないことを確認する。
+11. 最終的な Plan が正しい場合だけ `確認して進む` を押す。
+
+### 14.11 TestData と実ブラウザ UI テストを確認する
+
+1. TestData の setup が依存順に実行されることを確認する。
+2. 生成値が後続画面へ変数として渡ることを確認する。
+3. 対象 Browser が Project と実行環境の設定どおりであることを確認する。
+4. UI 操作、画面遷移、選択状態、件数、業務 Assertion を確認する。
+5. Case ごとに Screenshot が一件以上保存されることを確認する。
+6. Password、Token、個人情報が Screenshot に含まれないことを確認する。
+7. Cleanup が逆依存順に実行されることを確認する。
+8. UI Test 失敗時も Cleanup が実行されることを確認する。
+9. Web に Step ごとの成功／失敗、変数、Assertion、Screenshot、停止理由が表示されることを確認する。
+
+### 14.12 最終レポートと再起動耐性を確認する
+
+1. `最終レポート` を開く。
+2. Requirement、設計書差分、Scope、Code Diff、Command、Coverage、UI TestPlan、TestDataPlan、Screenshot が同一 Change ID と Result Revision に結び付いていることを確認する。
+3. Business Coverage が 100%、Changed-line Coverage が最低基準以上であることを確認する。
+4. unresolved item と blocking reason が 0 件であることを確認する。
+5. `確認して進む` を押し、全体 Status が `完了` になることを確認する。
+6. Browser を更新し、完了状態と成果物が維持されることを確認する。
+7. OperaMind Web を再起動し、同じ Project と Change ID を選択して完了状態が復元されることを確認する。
+8. 過去の途中状態や古い Copilot Task の失敗が現在工程を上書きしないことを確認する。
+
+### 14.13 実行終了時の記録
+
+Section 12 の表に加えて、各工程について次を記録する。
+
+| 工程 | 開始 | 終了 | 操作者 | 確認内容 | 結果 | Evidence／停止理由 |
+|---|---|---|---|---|---|---|
+| Project 初期化 | | | | Git／Canonical／RAG | | |
+| 変更要件 | | | | 要件本文 | | |
+| 設計書差分 | | | | RAG 文書／差分 | | |
+| コード影響範囲 | | | | Graph／Scope | | |
+| コード・テスト | | | | Diff／Command／Coverage | | |
+| UI 検証 | | | | UI Plan／Data／Screenshot | | |
+| 最終レポート | | | | Coverage／Closure | | |
+
+失敗または停止した場合も、その時点までの合格項目と最初の停止理由を残す。DB を直接補正して同じ実行を成功扱いにせず、修正後は新しい Change ID で最初から再実行する。

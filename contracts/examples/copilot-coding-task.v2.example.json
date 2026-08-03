@@ -59,6 +59,20 @@
       "test",
       "--no-daemon"
     ],
+    "coverage_command": [
+      "./gradlew",
+      "test",
+      "jacocoTestReport",
+      "--no-daemon"
+    ],
+    "coverage_report": "build/reports/jacoco/test/jacocoTestReport.xml",
+    "quality_readiness": "ready",
+    "quality_evidence": [
+      "build.gradle:JaCoCo plugin",
+      "build.gradle:JaCoCo XML report",
+      "src/test/java/com/visiondemo/controller/ExpenseControllerSearchTest.java"
+    ],
+    "quality_missing_signals": [],
     "build_command": [
       "./gradlew",
       "build",

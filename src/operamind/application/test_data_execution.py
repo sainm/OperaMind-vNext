@@ -12,6 +12,8 @@ from operamind.contracts import ContractCatalog
 
 _VARIABLE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_JSON_ARRAY_INDEX = re.compile(r"\[(\d+)\]")
+_NUMERIC_PREDICATE = re.compile(r"^\s*(>=|<=|>|<)\s*(-?\d+(?:\.\d+)?)\s*$")
 
 
 class TestDataStepBlockedError(RuntimeError):
@@ -166,7 +168,7 @@ class TestDataExecutionEngine:
         flow_results: list[dict[str, Any]] = []
         all_evidence: list[TestDataExecutionEvidence] = []
         failure_reasons: list[str] = []
-        executed_flows: list[tuple[dict[str, Any], dict[str, object]]] = []
+        executed_flows: list[tuple[dict[str, Any], dict[str, object], set[str], set[str]]] = []
         stopped = False
         for flow in flows:
             if stopped:
@@ -176,6 +178,8 @@ class TestDataExecutionEngine:
             self._emit("flow_started", flow_id=flow_id, status="running")
             variables: dict[str, object] = {}
             observations: dict[str, object] = {}
+            cleanup_dependency_ids: set[str] = set()
+            attempted_channels: set[str] = set()
             step_results: list[dict[str, Any]] = []
             steps = cast(list[dict[str, Any]], flow["steps"])
             flow_status = "passed"
@@ -189,6 +193,7 @@ class TestDataExecutionEngine:
                     status="running",
                 )
                 try:
+                    attempted_channels.add(str(step["channel"]))
                     step_result, observed, evidence = self._execute_step(
                         request=request,
                         flow=flow,
@@ -197,6 +202,7 @@ class TestDataExecutionEngine:
                         phase="setup",
                     )
                     observations.update(observed)
+                    cleanup_dependency_ids.add(step_id)
                     step_results.append(step_result)
                     all_evidence.extend(evidence)
                     self._emit(
@@ -221,6 +227,10 @@ class TestDataExecutionEngine:
                         message="Step execution was blocked.",
                     )
                 except _TestDataStepFailedError as error:
+                    # The adapter returned Evidence before an output binding or
+                    # assertion failed, so its external side effect may exist.
+                    # Make the step eligible for its reviewed cleanup sequence.
+                    cleanup_dependency_ids.add(step_id)
                     reason = f"{flow['flow_id']}/{step['step_id']}: {error}"
                     all_evidence.extend(error.evidence)
                     step_results.append(
@@ -245,6 +255,20 @@ class TestDataExecutionEngine:
                     )
                 except (AssertionError, OSError, RuntimeError, ValueError) as error:
                     reason = f"{flow['flow_id']}/{step['step_id']}: {error}"
+                    step_results.append(_failed_step(step, "setup", "failed", reason))
+                    failure_reasons.append(reason)
+                    flow_status = "failed"
+                    stopped = True
+                    self._emit(
+                        "step_completed",
+                        flow_id=flow_id,
+                        phase="setup",
+                        step_id=step_id,
+                        status="failed",
+                        message="Step execution failed.",
+                    )
+                except Exception as error:
+                    reason = f"{flow['flow_id']}/{step['step_id']}: {type(error).__name__}: {error}"
                     step_results.append(_failed_step(step, "setup", "failed", reason))
                     failure_reasons.append(reason)
                     flow_status = "failed"
@@ -285,15 +309,17 @@ class TestDataExecutionEngine:
                 }
             )
             self._emit("flow_completed", flow_id=flow_id, status=flow_status)
-            executed_flows.append((flow, variables))
+            executed_flows.append((flow, variables, cleanup_dependency_ids, attempted_channels))
 
         cleanup_failed = False
         cleanup_required = stopped or any(
-            flow["cleanup_policy"] == "delete_after_run" for flow, _ in executed_flows
+            flow["cleanup_policy"] == "delete_after_run" for flow, _, _, _ in executed_flows
         )
         if cleanup_required:
             results_by_flow = {str(value["flow_id"]): value for value in flow_results}
-            for flow, variables in reversed(executed_flows):
+            for flow, variables, cleanup_dependency_ids, attempted_channels in reversed(
+                executed_flows
+            ):
                 if not stopped and flow["cleanup_policy"] != "delete_after_run":
                     continue
                 cleanup_results = cast(
@@ -302,6 +328,42 @@ class TestDataExecutionEngine:
                 for step in cast(list[dict[str, Any]], flow["cleanup_steps"]):
                     flow_id = str(flow["flow_id"])
                     step_id = str(step["step_id"])
+                    dependencies = {
+                        str(value) for value in cast(list[object], step.get("depends_on", []))
+                    }
+                    missing_dependencies = dependencies - cleanup_dependency_ids
+                    if missing_dependencies:
+                        cleanup_results.append(
+                            _not_run_step(
+                                step,
+                                phase="cleanup",
+                            )
+                        )
+                        self._emit(
+                            "step_completed",
+                            flow_id=flow_id,
+                            phase="cleanup",
+                            step_id=step_id,
+                            status="not_run",
+                            message="Cleanup step was not required.",
+                        )
+                        continue
+                    if step["channel"] == "ui" and "ui" not in attempted_channels:
+                        cleanup_results.append(
+                            _not_run_step(
+                                step,
+                                phase="cleanup",
+                            )
+                        )
+                        self._emit(
+                            "step_completed",
+                            flow_id=flow_id,
+                            phase="cleanup",
+                            step_id=step_id,
+                            status="not_run",
+                            message="Cleanup step was not required.",
+                        )
+                        continue
                     self._emit(
                         "step_started",
                         flow_id=flow_id,
@@ -318,6 +380,7 @@ class TestDataExecutionEngine:
                             phase="cleanup",
                         )
                         cleanup_results.append(result)
+                        cleanup_dependency_ids.add(step_id)
                         all_evidence.extend(evidence)
                         self._emit(
                             "step_completed",
@@ -325,6 +388,35 @@ class TestDataExecutionEngine:
                             phase="cleanup",
                             step_id=step_id,
                             status="passed",
+                        )
+                    except TestDataStepBlockedError as error:
+                        if "Variable" in str(error) and "not available" in str(error):
+                            cleanup_results.append(
+                                _not_run_step(
+                                    step,
+                                    phase="cleanup",
+                                )
+                            )
+                            self._emit(
+                                "step_completed",
+                                flow_id=flow_id,
+                                phase="cleanup",
+                                step_id=step_id,
+                                status="not_run",
+                                message="Cleanup step was not required.",
+                            )
+                            continue
+                        reason = f"{flow['flow_id']}/{step['step_id']} cleanup: {error}"
+                        cleanup_results.append(_failed_step(step, "cleanup", "blocked", reason))
+                        failure_reasons.append(reason)
+                        cleanup_failed = True
+                        self._emit(
+                            "step_completed",
+                            flow_id=flow_id,
+                            phase="cleanup",
+                            step_id=step_id,
+                            status="blocked",
+                            message="Cleanup step was blocked.",
                         )
                     except _TestDataStepFailedError as error:
                         reason = f"{flow['flow_id']}/{step['step_id']} cleanup: {error}"
@@ -350,6 +442,22 @@ class TestDataExecutionEngine:
                         )
                     except (AssertionError, OSError, RuntimeError, ValueError) as error:
                         reason = f"{flow['flow_id']}/{step['step_id']} cleanup: {error}"
+                        cleanup_results.append(_failed_step(step, "cleanup", "failed", reason))
+                        failure_reasons.append(reason)
+                        cleanup_failed = True
+                        self._emit(
+                            "step_completed",
+                            flow_id=flow_id,
+                            phase="cleanup",
+                            step_id=step_id,
+                            status="failed",
+                            message="Cleanup step failed.",
+                        )
+                    except Exception as error:
+                        reason = (
+                            f"{flow['flow_id']}/{step['step_id']} cleanup: "
+                            f"{type(error).__name__}: {error}"
+                        )
                         cleanup_results.append(_failed_step(step, "cleanup", "failed", reason))
                         failure_reasons.append(reason)
                         cleanup_failed = True
@@ -496,6 +604,8 @@ class TestDataExecutionEngine:
         resolved_step = dict(step)
         if "target" in resolved_step:
             resolved_step["target"] = _resolve_variables(resolved_step["target"], variables)
+        if "playwright" in resolved_step:
+            resolved_step["playwright"] = _resolve_variables(resolved_step["playwright"], variables)
         execution = executor.execute(
             request=request,
             flow_id=str(flow["flow_id"]),
@@ -604,16 +714,39 @@ def _assert_postcondition(
         if not contains:
             raise AssertionError(f"{assertion['assertion_id']} did not contain {expected!r}")
     elif operator == "count_equals":
-        try:
-            actual_count = len(actual)  # type: ignore[arg-type]
-        except TypeError as error:
-            raise AssertionError(
-                f"{assertion['assertion_id']} observed value does not have a count"
-            ) from error
+        if isinstance(actual, int) and not isinstance(actual, bool):
+            # Playwright's bounded `count` observation is already the numeric
+            # element count.  Other channels may expose the collection itself.
+            actual_count = actual
+        else:
+            try:
+                actual_count = len(actual)  # type: ignore[arg-type]
+            except TypeError as error:
+                raise AssertionError(
+                    f"{assertion['assertion_id']} observed value does not have a count"
+                ) from error
         if actual_count != expected:
             raise AssertionError(f"{assertion['assertion_id']} count did not equal {expected!r}")
-    elif operator == "satisfies" and actual != expected:
+    elif operator == "satisfies" and not _satisfies(actual, expected):
         raise AssertionError(f"{assertion['assertion_id']} did not satisfy {expected!r}")
+
+
+def _satisfies(actual: object, expected: object) -> bool:
+    if (
+        isinstance(expected, str)
+        and isinstance(actual, (int, float))
+        and not isinstance(actual, bool)
+        and (match := _NUMERIC_PREDICATE.fullmatch(expected)) is not None
+    ):
+        boundary = float(match.group(2))
+        value = float(actual)
+        return {
+            ">=": value >= boundary,
+            "<=": value <= boundary,
+            ">": value > boundary,
+            "<": value < boundary,
+        }[match.group(1)]
+    return actual == expected
 
 
 def _resolve_variables(value: object, variables: Mapping[str, object]) -> object:
@@ -638,8 +771,14 @@ def _resolve_variables(value: object, variables: Mapping[str, object]) -> object
 def _extract(source: object, path: str) -> tuple[bool, object | None]:
     if path in {"", "$"}:
         return source is not None, source
+    normalized = path[2:] if path.startswith("$.") else path
+    normalized = _JSON_ARRAY_INDEX.sub(r".\1", normalized)
+    if "[" in normalized or "]" in normalized:
+        return False, None
     current = source
-    for component in path.split("."):
+    for component in normalized.split("."):
+        if not component:
+            return False, None
         if isinstance(current, Mapping) and component in current:
             current = current[component]
         elif isinstance(current, list) and component.isdigit() and int(component) < len(current):
@@ -669,12 +808,16 @@ def _failed_step(
     }
 
 
-def _not_run_step(step: Mapping[str, object]) -> dict[str, object]:
+def _not_run_step(
+    step: Mapping[str, object],
+    *,
+    phase: str = "setup",
+) -> dict[str, object]:
     return {
         "step_id": step["step_id"],
         "sequence": step["sequence"],
         "channel": step["channel"],
-        "phase": "setup",
+        "phase": phase,
         "status": "not_run",
         "output_variables": [],
         "evidence_refs": [],

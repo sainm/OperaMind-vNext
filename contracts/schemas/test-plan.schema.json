@@ -7,7 +7,8 @@
   "required": ["artifact_type", "schema_version", "test_plan_id", "change_request_id", "project_id", "status", "test_cases"],
   "properties": {
     "artifact_type": {"const": "TestPlan"},
-    "schema_version": {"const": "v1"},
+    "schema_version": {"enum": ["v1", "v2"]},
+    "plan_kind": {"const": "ui"},
     "test_plan_id": {"type": "string", "minLength": 1},
     "change_request_id": {"type": "string", "minLength": 1},
     "project_id": {"type": "string", "minLength": 1},
@@ -28,11 +29,63 @@
           "acceptance_criteria_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "uniqueItems": true},
           "preconditions": {"type": "array", "items": {"type": "string", "minLength": 1}},
           "steps": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+          "step_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "uniqueItems": true},
           "expected_results": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
           "test_data_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
         }
       }
     },
+    "requirement_evidence": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "business_rule_id",
+          "verification_kind",
+          "assertion",
+          "test_file_refs",
+          "command_refs",
+          "artifact_refs",
+          "plan_component_refs"
+        ],
+        "properties": {
+          "business_rule_id": {"type": "string", "minLength": 1},
+          "verification_kind": {"enum": ["code_test", "command_evidence", "canonical_evidence", "plan_evidence"]},
+          "assertion": {"type": "string", "minLength": 1},
+          "test_file_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+          "command_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+          "artifact_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+          "plan_component_refs": {
+            "type": "array",
+            "items": {"enum": ["ui_test_plan", "test_data_plan", "generation_flows", "cleanup", "playwright_observations"]},
+            "uniqueItems": true
+          }
+        }
+      }
+    },
     "blocking_reasons": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"schema_version": {"const": "v2"}},
+        "required": ["schema_version"]
+      },
+      "then": {
+        "required": ["plan_kind"],
+        "properties": {
+          "test_cases": {
+            "items": {
+              "properties": {
+                "level": {"const": "ui"},
+                "execution_mode": {"const": "browser"}
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

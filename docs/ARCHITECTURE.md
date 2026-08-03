@@ -12,7 +12,7 @@ Application Flow
   ├─ Document RAG ── Canonical Documents / Search Index
   ├─ Code Scope ──── Code Graph / Impact Report
   ├─ Copilot Bridge ─ VS Code GitHub Copilot
-  ├─ Test Runtime ─── Test Data → bounded UI steps / Playwright
+  ├─ Test Runtime ─── Test Data → bounded UI steps / Playwright → Screenshot Evidence
   └─ Closure ──────── Coverage / Evidence / Final Report
 ```
 
@@ -44,7 +44,7 @@ Requirement から関連 Document ID を検索し、Canonical DB で本文と関
 
 ### Test Runtime
 
-Copilot が検証済みコード差分から作った TestPlan / TestDataPlan を受け取り、Fixture / API / SQL で画面横断データを生成した後、同じ Plan の有限 UI Action / Assertion を実行する。Cleanup は失敗時も試行する。UI Step が成功しサニタイズ済み Screenshot が揃った場合だけ `UiVerificationResult` を自動生成する。
+Copilot が同一 content digest に対する必須コンパイル／テスト／Coverage と committed EditResult の成功後に作った実ブラウザ用 UiTestPlan / TestDataPlan を受け取る。OperaMind は全 Business Rule を、実行可能 UI Test、検証済み Code Test、または現在 Task に実在する Command／Canonical Artifact／Plan Component Evidence に照合してカバレッジを再計算し、100% 未満なら未カバー Rule を同じ Copilot `test_planning` Task に返して完全版を再生成させる。Evidence は型に対応する許可済み参照へ解決できなければ採用しない。100% 未満の Plan は永続化、人工確認、Test Data 実行、UI Test に進めない。現在の標準実行器は Project 固有 `test_base_url` に限定した HTTP / Playwright UI であり、未登録の Fixture / SQL Binding を含む Plan は確認前に阻断する。Cleanup は失敗時も試行する。UI Step ごとのサニタイズ済み Screenshot と Step Log を保存し、実行結果が揃った場合だけ `UiVerificationResult` と最終 Closure Report を自動生成する。Web の自然言語修正は read-only Copilot revision Task を経由し、同じ Automation Run の上流確認を維持したまま TestPlan 以降だけ再確認・再実行し、旧 Run／Evidence／Closure／Report を stale として無効化する。
 
 ### Closure
 

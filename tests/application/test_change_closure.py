@@ -87,6 +87,9 @@ def _replace(value: ChangeClosureInput, **changes: object) -> ChangeClosureInput
         "ui_result": value.ui_result,
         "changed_line_coverage": value.changed_line_coverage,
         "ui_test_case_refs": value.ui_test_case_refs,
+        "verification_only": value.verification_only,
+        "workspace_evidence_current": value.workspace_evidence_current,
+        "workspace_evidence_reason": value.workspace_evidence_reason,
     }
     fields.update(changes)
     return ChangeClosureInput(**fields)  # type: ignore[arg-type]
@@ -259,6 +262,59 @@ def test_blocks_when_changed_line_coverage_is_below_threshold() -> None:
     assert result["status"] == "blocked"
     assert result["changed_line_coverage_percent"] == 75
     assert "Changed-line coverage: 75% < 80%" in result["unresolved_items"]
+
+
+def test_verification_only_no_changes_can_pass() -> None:
+    value = _input()
+    edit = copy.deepcopy(value.edit_result)
+    report = copy.deepcopy(value.changed_line_coverage)
+    assert edit is not None and report is not None
+    edit.update(
+        {
+            "status": "no_changes",
+            "result_repository_revision": "base-sha",
+            "changed_paths": [],
+        }
+    )
+    report.update(
+        {
+            "result_repository_revision": "base-sha",
+            "changed_line_count": 0,
+            "covered_changed_line_count": 0,
+            "coverage_percent": 100,
+            "status": "not_required",
+            "blocking_reasons": [],
+        }
+    )
+
+    result = _evaluator().evaluate(
+        _replace(
+            value,
+            edit_result=edit,
+            changed_line_coverage=report,
+            verification_only=True,
+        )
+    )
+
+    assert result["status"] == "passed"
+    assert result["modified_paths"] == []
+    assert "Edit Result is not in scope" not in result["unresolved_items"]
+
+
+def test_blocks_when_workspace_no_longer_matches_committed_evidence() -> None:
+    result = _evaluator().evaluate(
+        _replace(
+            _input(),
+            workspace_evidence_current=False,
+            workspace_evidence_reason="Code workspace no longer matches committed Edit Result",
+        )
+    )
+
+    assert result["status"] == "blocked"
+    assert (
+        "Code workspace no longer matches committed Edit Result"
+        in result["unresolved_items"]
+    )
 
 
 def test_blocks_when_business_coverage_is_incomplete() -> None:

@@ -27,6 +27,8 @@ class ChangeClosureEvidence:
     test_data_result: dict[str, Any] | None
     ui_result: dict[str, Any] | None
     ui_test_case_refs: tuple[tuple[str, tuple[str, ...]], ...]
+    verification_only: bool
+    workspace_root: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,7 +106,8 @@ class ChangeClosureRepository:
                        result.result_repository_revision,
                        result.changed_paths, result.out_of_scope_files,
                        result.test_result_refs, result.tests_passed,
-                       result.command_evidence_status, result.changed_line_coverage
+                       result.command_evidence_status, result.changed_line_coverage,
+                       packet.editable_files, repository.workspace_root
                 FROM edit_results AS result
                 JOIN edit_packets AS packet
                   ON packet.edit_packet_id = result.edit_packet_id
@@ -113,6 +116,9 @@ class ChangeClosureRepository:
                   ON orchestration.impact_report_id = packet.impact_report_id
                  AND orchestration.project_id = packet.project_id
                  AND orchestration.analysis_case_id = packet.analysis_case_id
+                LEFT JOIN repositories AS repository
+                  ON repository.repository_id = packet.repository_id
+                 AND repository.project_id = packet.project_id
                 WHERE result.project_id = %s
                   AND result.analysis_case_id = %s
                   AND orchestration.orchestration_id = %s
@@ -158,6 +164,7 @@ class ChangeClosureRepository:
                 if direct_ui_row is not None:
                     ui_artifact_id = str(direct_ui_row[0])
         edit_result = None
+        verification_only = False
         if edit_row is not None:
             edit_result = {
                 "edit_result_id": str(edit_row[0]),
@@ -177,6 +184,7 @@ class ChangeClosureRepository:
             }
             changed_line_coverage = cast(dict[str, Any], edit_row[12])
             self._contracts.validate_artifact(changed_line_coverage)
+            verification_only = not bool(cast(list[object], edit_row[13]))
         else:
             changed_line_coverage = None
         data_result = None
@@ -203,6 +211,12 @@ class ChangeClosureRepository:
             test_data_result=data_result,
             ui_result=ui_result,
             ui_test_case_refs=ui_test_case_refs,
+            verification_only=verification_only,
+            workspace_root=(
+                str(edit_row[14])
+                if edit_row is not None and edit_row[14] is not None
+                else None
+            ),
         )
 
     def persist(
@@ -217,7 +231,7 @@ class ChangeClosureRepository:
         orchestration = evidence.orchestration
         component_digest = hashlib.sha256(
             json.dumps(
-                artifact["artifact_refs"],
+                artifact,
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),

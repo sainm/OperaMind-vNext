@@ -24,6 +24,7 @@ class CopilotTaskContextRequest:
     edit_packet_id: str
     approval_grant_id: str
     workspace_root: Path
+    require_active_grant: bool = True
 
     def __post_init__(self) -> None:
         if any(
@@ -54,13 +55,26 @@ class CopilotTaskContextService:
             edit_packet_id=request.edit_packet_id,
             approval_grant_id=request.approval_grant_id,
         )
-        grant = self._grants.authorize_edit(
-            grant_id=request.approval_grant_id,
-            project_id=request.project_id,
-            analysis_case_id=request.analysis_case_id,
-            edit_packet_id=request.edit_packet_id,
-            required_action="read",
-        )
+        if request.require_active_grant:
+            grant = self._grants.authorize_edit(
+                grant_id=request.approval_grant_id,
+                project_id=request.project_id,
+                analysis_case_id=request.analysis_case_id,
+                edit_packet_id=request.edit_packet_id,
+                required_action="read",
+            )
+        else:
+            grant = self._grants.inspect(request.approval_grant_id)
+            if (grant.project_id, grant.analysis_case_id, grant.edit_packet_id) != (
+                request.project_id,
+                request.analysis_case_id,
+                request.edit_packet_id,
+            ):
+                raise ValueError("Approval Grant does not match Copilot planning scope")
+            if grant.state not in {"active_editing", "ui_pending", "completed"}:
+                raise ValueError(
+                    "Copilot planning requires a valid or successfully closed code grant"
+                )
         registered_root = Path(scope.workspace_root).resolve(strict=True)
         requested_root = request.workspace_root.resolve(strict=True)
         registered_common_dir = self._git.common_repository_dir(registered_root)
@@ -70,13 +84,21 @@ class CopilotTaskContextService:
                 "Copilot Change Task Workspace is not a linked worktree "
                 "of the registered Repository"
             )
-        evidence = self._git.inspect_worktree(
+        evidence = self._git.inspect_current(
             requested_root,
             base_sha=scope.base_repository_revision,
         )
         if evidence.remote_url != scope.remote_url:
             raise ValueError(
                 "Copilot Change Task Workspace origin does not match Repository registration"
+            )
+        out_of_scope = tuple(
+            sorted(set(evidence.changed_paths) - set(scope.writable_files))
+        )
+        if out_of_scope:
+            raise ValueError(
+                "Copilot Change Task Workspace contains changes outside the approved scope: "
+                f"{list(out_of_scope)}"
             )
         packet = self._artifacts.get(request.edit_packet_id)
         if packet is None or packet.get("artifact_type") != "CopilotEditPacket":
@@ -99,8 +121,9 @@ class CopilotTaskContextService:
                 "registered_root": str(registered_root),
                 "isolated_worktree": requested_root != registered_root,
                 "remote_url": evidence.remote_url,
-                "head_revision": evidence.base_sha,
+                "head_revision": evidence.result_sha or evidence.base_sha,
                 "changed_paths": list(evidence.changed_paths),
+                "result_committed": evidence.result_sha is not None,
             },
             "context_package_available": False,
         }

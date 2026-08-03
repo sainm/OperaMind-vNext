@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
@@ -57,7 +58,7 @@ class GitWorkspaceInspector:
         status = self._run(root, "status", "--porcelain=v1", "--untracked-files=all")
         if status:
             raise ValueError("Code Graph scan requires a clean Git worktree")
-        remote_url = self._run(root, "remote", "get-url", "origin")
+        remote_url = self._repository_identity(root)
         if not remote_url.strip():
             raise ValueError("Git origin URL must not be blank")
         tracked_output = self._run_bytes(
@@ -90,6 +91,22 @@ class GitWorkspaceInspector:
         if actual_root != root:
             raise ValueError("workspace_root must be the Git repository root")
         return root
+
+    def _repository_identity(self, root: Path) -> str:
+        config = self._run(root, "config", "--local", "--list", "-z")
+        for entry in config.split("\0"):
+            key, separator, value = entry.partition("\n")
+            if separator and key.casefold() == "operamind.repositoryidentity":
+                identity = value.strip()
+                if identity:
+                    return identity
+        remotes = set(self._run(root, "remote").splitlines())
+        if "origin" not in remotes:
+            raise ValueError("Git Repository identity is not configured")
+        remote_url = self._run(root, "remote", "get-url", "origin")
+        if not remote_url.strip():
+            raise ValueError("Git origin URL must not be blank")
+        return remote_url
 
     def _run(self, root: Path, *arguments: str) -> str:
         return self._run_bytes(root, *arguments).decode("utf-8", errors="strict").strip()
@@ -139,6 +156,7 @@ class GitDiffEvidence:
     remote_url: str
     changes: tuple[GitPathChange, ...]
     changed_lines: tuple[tuple[str, tuple[int, ...]], ...] = ()
+    content_digest: str = ""
 
     @property
     def changed_paths(self) -> tuple[str, ...]:
@@ -147,6 +165,20 @@ class GitDiffEvidence:
 
 class GitWorktreeDiffInspector(GitWorkspaceInspector):
     """Inspect changed paths while retaining Git environment hardening."""
+
+    def inspect_current(self, workspace_root: Path, *, base_sha: str) -> GitDiffEvidence:
+        """Inspect either an uncommitted edit or a clean descendant commit.
+
+        A resumed Copilot session may reconnect after the user has committed the
+        validated changes.  In that case HEAD legitimately differs from the
+        Edit Packet base, while the full base-to-HEAD diff still remains
+        verifiable.
+        """
+
+        root, head_sha, _remote_url = self._identity(workspace_root)
+        if head_sha == base_sha:
+            return self.inspect_worktree(root, base_sha=base_sha)
+        return self.inspect_committed(root, base_sha=base_sha)
 
     def inspect_worktree(self, workspace_root: Path, *, base_sha: str) -> GitDiffEvidence:
         root, head_sha, remote_url = self._identity(workspace_root)
@@ -162,14 +194,39 @@ class GitWorktreeDiffInspector(GitWorkspaceInspector):
         changes = (*tracked, *untracked)
         paths = tuple(sorted({path for change in changes for path in change.paths}))
         changed_lines = self._changed_lines(root, "HEAD", None, paths)
-        return GitDiffEvidence(root, base_sha, None, remote_url, changes, changed_lines)
+        return GitDiffEvidence(
+            root,
+            base_sha,
+            None,
+            remote_url,
+            changes,
+            changed_lines,
+            _changed_content_digest(root, base_sha, changes),
+        )
 
-    def inspect_committed(self, workspace_root: Path, *, base_sha: str) -> GitDiffEvidence:
+    def inspect_committed(
+        self,
+        workspace_root: Path,
+        *,
+        base_sha: str,
+        allow_unchanged_head: bool = False,
+    ) -> GitDiffEvidence:
         root, head_sha, remote_url = self._identity(workspace_root)
-        if head_sha == base_sha:
+        if head_sha == base_sha and not allow_unchanged_head:
             raise ValueError("Committed Edit Result requires a new HEAD")
         if self._run(root, "status", "--porcelain=v1", "--untracked-files=all"):
             raise ValueError("Committed Edit Result requires a clean Git worktree")
+        if head_sha == base_sha:
+            changes: tuple[GitPathChange, ...] = ()
+            return GitDiffEvidence(
+                root,
+                base_sha,
+                head_sha,
+                remote_url,
+                changes,
+                (),
+                _changed_content_digest(root, base_sha, changes),
+            )
         self._run(root, "merge-base", "--is-ancestor", base_sha, head_sha)
         changes = _parse_name_status(
             self._run_bytes(
@@ -184,7 +241,15 @@ class GitWorktreeDiffInspector(GitWorkspaceInspector):
         )
         paths = tuple(sorted({path for change in changes for path in change.paths}))
         changed_lines = self._changed_lines(root, base_sha, head_sha, paths)
-        return GitDiffEvidence(root, base_sha, head_sha, remote_url, changes, changed_lines)
+        return GitDiffEvidence(
+            root,
+            base_sha,
+            head_sha,
+            remote_url,
+            changes,
+            changed_lines,
+            _changed_content_digest(root, base_sha, changes),
+        )
 
     def _changed_lines(
         self,
@@ -223,8 +288,43 @@ class GitWorktreeDiffInspector(GitWorkspaceInspector):
         return (
             root,
             self._run(root, "rev-parse", "--verify", "HEAD"),
-            self._run(root, "remote", "get-url", "origin"),
+            self._repository_identity(root),
         )
+
+
+def _changed_content_digest(
+    root: Path, base_sha: str, changes: tuple[GitPathChange, ...]
+) -> str:
+    """Digest the final changed-file content independently of commit metadata."""
+
+    digest = hashlib.sha256()
+    digest.update(base_sha.encode("ascii", errors="strict"))
+    for change in sorted(changes, key=lambda item: (item.status, item.paths)):
+        digest.update(b"\0status\0")
+        digest.update(change.status.encode("ascii", errors="strict"))
+        for value in change.paths:
+            digest.update(b"\0path\0")
+            digest.update(value.encode("utf-8", errors="strict"))
+            relative = Path(value)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError("Git changed path escapes the Workspace")
+            path = root / relative
+            if path.is_symlink():
+                digest.update(b"\0symlink\0")
+                digest.update(os.readlink(path).encode("utf-8", errors="strict"))
+            elif not path.exists():
+                digest.update(b"\0deleted")
+            elif path.is_file():
+                digest.update(b"\0file\0")
+                digest.update(
+                    b"100755" if path.stat().st_mode & 0o111 else b"100644"
+                )
+                with path.open("rb") as stream:
+                    while chunk := stream.read(65536):
+                        digest.update(chunk)
+            else:
+                raise ValueError("Git changed path is not a regular file")
+    return digest.hexdigest()
 
 
 def _parse_nul_paths(value: bytes) -> tuple[str, ...]:

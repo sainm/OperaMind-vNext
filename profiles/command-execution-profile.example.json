@@ -1,10 +1,22 @@
 {
   "profile_type": "CommandExecutionProfile",
   "profile_id": "gradle-project-example",
-  "profile_version": "1.0.0",
+  "profile_version": "1.1.0",
   "templates": [
     {
+      "command_ref": "gradle-compile",
+      "purpose": "compile",
+      "argv": ["./gradlew", "classes", "--no-daemon"],
+      "working_directory": ".",
+      "timeout_seconds": 600,
+      "expected_exit_codes": [0],
+      "environment_keys": ["PATH", "JAVA_HOME", "GRADLE_USER_HOME", "LANG"],
+      "output_limit_bytes": 262144,
+      "failure_policy": "record_and_block"
+    },
+    {
       "command_ref": "targeted-unit",
+      "purpose": "test",
       "argv": ["./gradlew", "test", "--no-daemon"],
       "working_directory": ".",
       "timeout_seconds": 600,
@@ -15,6 +27,7 @@
     },
     {
       "command_ref": "module-integration",
+      "purpose": "test",
       "argv": ["./gradlew", "integrationTest", "--no-daemon"],
       "working_directory": ".",
       "timeout_seconds": 1200,
@@ -22,6 +35,21 @@
       "environment_keys": ["PATH", "JAVA_HOME", "GRADLE_USER_HOME", "LANG"],
       "output_limit_bytes": 524288,
       "failure_policy": "record_and_block"
+    },
+    {
+      "command_ref": "changed-line-coverage",
+      "purpose": "coverage",
+      "argv": ["./gradlew", "test", "jacocoTestReport", "--no-daemon"],
+      "working_directory": ".",
+      "timeout_seconds": 1200,
+      "expected_exit_codes": [0],
+      "environment_keys": ["PATH", "HOME", "JAVA_HOME", "GRADLE_USER_HOME", "LANG"],
+      "output_limit_bytes": 1048576,
+      "failure_policy": "record_and_block",
+      "coverage_report": {
+        "format": "jacoco_xml",
+        "path": "build/reports/jacoco/test/jacocoTestReport.xml"
+      }
     }
   ]
 }

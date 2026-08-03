@@ -92,6 +92,7 @@ def create_app(
     app.state.database_url = database_url
     app.state.bridge_token = bridge_token
     app.state.orchestration_scheduling_policy = scheduling_policy
+    app.state.test_data_executor_factory = test_data_executor_factory
     app.state.local_environment_diagnostics = LocalEnvironmentDiagnosticsService(
         repository_root=root,
         database_url=database_url,

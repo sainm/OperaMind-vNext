@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
+from pytest import MonkeyPatch
 
 from operamind.application.web_control_plane import (
     WebControlPlaneService,
@@ -18,6 +19,10 @@ class RequestRepository:
             "project_id": "visiondemo",
             "analysis_case_id": "case-001",
         }
+
+    def project_workspace_root(self, project_id: str) -> str:
+        assert project_id == "visiondemo"
+        return "."
 
 
 class ArtifactRepository:
@@ -144,10 +149,28 @@ class RevisingTestCaseService:
             "proposal": _revision_proposal(str(values["instruction"])),
         }
 
-    def confirm(self, **values: object) -> dict[str, object]:
+    def prepare_ai_regeneration(self, **values: object) -> dict[str, object]:
         assert values["proposal_id"] == "proposal-001"
         assert values["selections"] == {}
-        return {"revision": {"revision_id": "revision-001"}}
+        return {
+            "proposal": _revision_proposal("期待結果を変更"),
+            "operations": _revision_proposal("期待結果を変更")["operations"],
+            "selections": {},
+        }
+
+
+class CopilotRevisionTaskService:
+    published: ClassVar[list[object]] = []
+
+    def __init__(self, **values: object) -> None:
+        del values
+
+    def publish(self, request: object) -> dict[str, object]:
+        type(self).published.append(request)
+        return {
+            "task": {"coding_task_id": "copilot-revision-001"},
+            "state": "pending_confirmation",
+        }
 
 
 class ExecutionAuthorizationRepository:
@@ -213,13 +236,50 @@ def test_management_does_not_expose_closure_from_an_older_edit_result(
     )
 
 
-def test_test_case_revision_preview_hides_internal_ids_and_confirmation_restarts_downstream(
+def test_incomplete_business_coverage_disables_execution_and_direct_start(
     tmp_path: Path,
 ) -> None:
     service = _service(tmp_path)
+    complete_bundle = OrchestrationRepository().latest_bundle("change-001")
+    complete_bundle["coverage_report"] = {
+        "artifact_type": "BusinessCoverageReport",
+        "status": "failed",
+        "coverage_percent": 50,
+        "items": [],
+    }
+    service._orchestrations = type(  # type: ignore[attr-defined]
+        "IncompleteCoverageRepository",
+        (),
+        {"latest_bundle": lambda _self, _request_id: complete_bundle},
+    )()
+
+    management = service.execution_management("change-001")
+
+    assert management["controls"]["can_start"] is False  # type: ignore[index]
+    assert management["controls"]["can_rerun"] is False  # type: ignore[index]
+    assert management["controls"]["blocking_reason"] == (  # type: ignore[index]
+        "Business coverage must be 100 before TestDataPlan or UI execution"
+    )
+    with pytest.raises(ValueError, match="Business coverage must be 100"):
+        service.start_test_data_run(
+            request_id="change-001",
+            idempotency_key="blocked-run",
+            actor="local-user",
+        )
+
+
+def test_test_case_revision_preview_hides_internal_ids_and_confirmation_restarts_downstream(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    service._connection = object()  # type: ignore[attr-defined]
     service._test_case_revisions = RevisingTestCaseService()  # type: ignore[attr-defined]
-    started: list[dict[str, object]] = []
-    service.start_change_automation = lambda **values: started.append(values) or {}  # type: ignore[method-assign]
+    CopilotRevisionTaskService.published = []
+    monkeypatch.setattr(
+        "operamind.application.web_control_plane.CopilotCodingTaskService",
+        CopilotRevisionTaskService,
+    )
     service.main_change_flow = lambda request_id: {"change_request_id": request_id}  # type: ignore[method-assign]
 
     preview = service.propose_test_case_revision(
@@ -236,15 +296,15 @@ def test_test_case_revision_preview_hides_internal_ids_and_confirmation_restarts
 
     assert preview["proposal"] == _public_test_case_proposal(_revision_proposal("期待結果を変更"))
     assert "test_case_id" not in repr(preview)
-    assert started == [
-        {
-            "request_id": "change-001",
-            "idempotency_key": "test-case-revision:revision-001",
-            "actor": "automation:operamind",
-        }
-    ]
+    assert len(CopilotRevisionTaskService.published) == 1
     assert applied == {
-        "state": "applied",
+        "state": "awaiting_copilot",
+        "copilot_task": {
+            "task": {"coding_task_id": "copilot-revision-001"},
+            "state": "pending_confirmation",
+            "attempt_number": None,
+            "current_stage": None,
+        },
         "flow": {"change_request_id": "change-001"},
     }
 
@@ -276,6 +336,9 @@ def _revision_proposal(instruction: str) -> dict[str, Any]:
     }
     return {
         "proposal_id": "proposal-001",
+        "project_id": "visiondemo",
+        "source_orchestration_id": "orchestration-001",
+        "source_test_plan_id": "test-plan-001",
         "instruction": instruction,
         "analysis_status": "needs_confirmation",
         "operations": [operation],

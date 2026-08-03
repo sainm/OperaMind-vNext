@@ -12,6 +12,7 @@ from operamind.mcp.server import (
     MCP_TOOL_NAME_PATTERN,
     TOOLS,
     OperaMindMcpServer,
+    _can_load_next_context,
     _public_change_output,
     _public_command_result,
     _public_edit_result,
@@ -95,17 +96,22 @@ def test_mcp_lists_bounded_annotated_copilot_tools_after_initialization() -> Non
         "copilot_validate_task_diff",
         "copilot_record_task_result",
     }
-    threshold = by_name["copilot_record_task_result"]["inputSchema"]["properties"][
-        "changed_line_coverage"
-    ]["properties"]["minimum_coverage_percent"]
-    assert threshold == {"type": "number", "minimum": 80, "maximum": 100}
+    result_properties = by_name["copilot_record_task_result"]["inputSchema"][
+        "properties"
+    ]
+    assert result_properties["coverage_report_command_execution_id"] == {
+        "type": "string",
+        "minLength": 1,
+    }
+    assert "changed_line_coverage" not in result_properties
     outputs = by_name["copilot_record_change_outputs"]["inputSchema"]
     assert outputs["properties"]["output_stage"]["enum"] == [
         "document_change",
         "code_scope",
         "test_planning",
+        "ui_test_revision",
     ]
-    assert len(outputs["oneOf"]) == 3
+    assert len(outputs["oneOf"]) == 4
     assert outputs["oneOf"][0]["required"] == ["document_ids", "document_edits"]
     assert outputs["properties"]["document_edits"]["items"]["required"] == [
         "document_id",
@@ -170,9 +176,10 @@ def test_mcp_rejects_non_contract_test_planning_shape_with_actionable_location()
     assert list(errors[0].absolute_path) == ["test_data_plan"]
     assert "Additional properties are not allowed" in errors[0].message
     message = _tool_validation_error_message(errors)
-    assert "test_data_plan: Additional properties are not allowed" in message
+    assert "test_data_plan: unexpected properties ['ui']" in message
+    assert "allowed=['artifact_type'" in message
     assert "test_data_plan: 'artifact_type' is a required property" in message
-    assert "test_plan: Additional properties are not allowed" in message
+    assert "test_plan: unexpected properties ['cases']" in message
     assert "test_plan: 'artifact_type' is a required property" in message
 
 
@@ -256,6 +263,46 @@ def test_mcp_flow_status_drops_internal_automation_and_scheduler_fields() -> Non
     }
 
 
+def test_mcp_does_not_load_next_context_at_a_human_confirmation_checkpoint() -> None:
+    assert not _can_load_next_context(
+        coding_task_state="in_progress",
+        flow={
+            "status": "in_progress",
+            "stages": [
+                {
+                    "stage_id": "document_change",
+                    "details": {"confirmation": {"checkpoint": "document_diff"}},
+                }
+            ],
+        },
+    )
+
+
+def test_mcp_never_loads_code_scope_immediately_after_document_change() -> None:
+    assert not _can_load_next_context(
+        coding_task_state="in_progress",
+        output_stage="document_change",
+        flow={
+            "status": "running",
+            "stages": [
+                {"stage_id": "document_change", "details": {"confirmation": None}}
+            ],
+        },
+    )
+
+
+def test_mcp_loads_next_context_when_no_human_confirmation_is_pending() -> None:
+    assert _can_load_next_context(
+        coding_task_state="in_progress",
+        flow={
+            "status": "in_progress",
+            "stages": [
+                {"stage_id": "document_change", "details": {"confirmation": None}}
+            ],
+        },
+    )
+
+
 def test_mcp_tool_outputs_hide_internal_artifact_profile_and_scope_fields() -> None:
     change_output = _public_change_output(
         {
@@ -300,6 +347,7 @@ def test_mcp_tool_outputs_hide_internal_artifact_profile_and_scope_fields() -> N
             "out_of_scope_files": [],
             "result_repository_revision": "abc123",
             "coding_task_state": "completed",
+            "committed_edit_result_id": "edit-1-committed",
             "approval_grant_id": "grant-internal",
             "changed_line_coverage": {
                 "artifact_type": "ChangedLineCoverageReport",
@@ -348,6 +396,7 @@ def test_mcp_tool_outputs_hide_internal_artifact_profile_and_scope_fields() -> N
         "out_of_scope_files",
         "result_repository_revision",
         "coding_task_state",
+        "committed_edit_result_id",
         "changed_line_coverage",
     }
     assert "internal" not in repr((change_output, command, edit))

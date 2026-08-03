@@ -35,3 +35,17 @@ def test_command_result_digest_rejects_naive_timestamps() -> None:
 
     with pytest.raises(ValueError, match="must include a timezone"):
         _result_digest(naive)
+
+
+def test_command_result_digest_immutably_binds_coverage_report() -> None:
+    write = _write(offset=UTC)
+    covered = replace(
+        write,
+        coverage_report_format="jacoco_xml",
+        coverage_report_path="build/reports/jacoco/test/jacocoTestReport.xml",
+        coverage_report_digest="c" * 64,
+    )
+
+    assert _result_digest(covered) != _result_digest(write)
+    with pytest.raises(ValueError, match="binding must be complete"):
+        replace(write, coverage_report_format="jacoco_xml")

@@ -1,6 +1,7 @@
 "use strict";
 
 const view = window.OperaMindChangeFlow;
+const vscodeLink = window.OperaMindVsCodeLink;
 const state = {
   projects: [],
   projectId: null,
@@ -14,20 +15,25 @@ const state = {
 
 const elements = {
   projectSelect: document.getElementById("projectSelect"),
+  openVsCodeButton: document.getElementById("openVsCodeButton"),
   requestList: document.getElementById("requestList"),
   notice: document.getElementById("notice"),
   emptyState: document.getElementById("emptyState"),
   flowWorkspace: document.getElementById("flowWorkspace"),
   pageTitle: document.getElementById("pageTitle"),
+  pageRequestId: document.getElementById("pageRequestId"),
   pageDescription: document.getElementById("pageDescription"),
   flowStatus: document.getElementById("flowStatus"),
   progressValue: document.getElementById("progressValue"),
   progressBar: document.getElementById("progressBar"),
   flowStages: document.getElementById("flowStages"),
   stageDetails: document.getElementById("stageDetails"),
+  nextActionPanel: document.getElementById("nextActionPanel"),
   projectSummary: document.getElementById("projectSummary"),
   projectSourceKind: document.getElementById("projectSourceKind"),
   projectWorkspaceSummary: document.getElementById("projectWorkspaceSummary"),
+  projectTestBaseUrlSummary: document.getElementById("projectTestBaseUrlSummary"),
+  projectQualitySummary: document.getElementById("projectQualitySummary"),
   projectDocumentRootSummary: document.getElementById("projectDocumentRootSummary"),
   emptyStateTitle: document.getElementById("emptyStateTitle"),
   emptyStateDescription: document.getElementById("emptyStateDescription"),
@@ -39,6 +45,7 @@ const elements = {
   projectName: document.getElementById("projectName"),
   projectWorkspaceRoot: document.getElementById("projectWorkspaceRoot"),
   projectDocumentRoots: document.getElementById("projectDocumentRoots"),
+  projectTestBaseUrl: document.getElementById("projectTestBaseUrl"),
   projectFormStatus: document.getElementById("projectFormStatus"),
   submitProjectButton: document.getElementById("submitProjectButton"),
   requestDialog: document.getElementById("requestDialog"),
@@ -118,12 +125,46 @@ async function loadProjects(preferredId = null) {
 
 function renderProjectSummary(project) {
   elements.projectSummary.classList.toggle("hidden", !project?.workspace_root);
+  elements.openVsCodeButton.disabled = !project?.workspace_root;
+  elements.openVsCodeButton.title = project?.workspace_root
+    ? `${project.workspace_root} を VS Code で開く`
+    : "コード Workspace を設定してください";
   if (!project?.workspace_root) return;
-  elements.projectSourceKind.textContent = project.source_control_kind === "git" ? "Git" : "ローカルファイル";
+  const baselines = project.source_git_baselines || [];
+  const managedLocally = project.source_control_kind !== "git"
+    || baselines.some(item => item.management_kind === "operamind_local_git");
+  elements.projectSourceKind.textContent = managedLocally ? "OperaMind 内部 Git" : "Git";
   elements.projectWorkspaceSummary.textContent = project.workspace_root;
-  elements.projectDocumentRootSummary.innerHTML = (project.document_roots || []).map(root =>
-    `<li>${view.escapeHtml(root)}</li>`
-  ).join("");
+  elements.projectTestBaseUrlSummary.textContent = project.test_base_url
+    ? `UI テスト: ${project.test_base_url}`
+    : "UI テスト URL 未設定";
+  const targetProject = project.target_project || {};
+  const qualityMissing = targetProject.quality_missing_signals || [];
+  elements.projectQualitySummary.textContent = targetProject.quality_readiness === "ready"
+    ? "コード品質基線: ready"
+    : qualityMissing.length
+      ? `コード品質基線: blocked · ${qualityMissing.join("、")}`
+      : "コード品質基線: 未判定";
+  elements.projectDocumentRootSummary.innerHTML = (project.document_roots || []).map(root => {
+    const binding = baselines.find(item => item.source_kind === "document" && item.configured_root === root);
+    const baselineLabel = binding?.baseline_revision
+      ? `Git 基線 · ${binding.baseline_revision.slice(0, 8)}`
+      : "旧登録 · Git 基線情報なし";
+    return `<li>${view.escapeHtml(root)}<small>${view.escapeHtml(baselineLabel)}</small></li>`;
+  }).join("");
+}
+
+function openSelectedProjectInVsCode() {
+  const project = state.projects.find(item => item.project_id === state.projectId);
+  if (!project?.workspace_root) {
+    showNotice("コード Workspace を設定してください。", "error");
+    return;
+  }
+  try {
+    window.location.assign(vscodeLink.buildOpenUrl(project.workspace_root, state.requestId));
+  } catch (error) {
+    showNotice(error.message, "error");
+  }
 }
 
 async function loadRequests(preferredId = null) {
@@ -166,37 +207,67 @@ async function loadFlow() {
 function renderFlow(flow) {
   elements.emptyState.classList.add("hidden");
   elements.flowWorkspace.classList.remove("hidden");
-  elements.pageTitle.textContent = flow.change_request_id;
   const requirement = flow.stages.find(stage => stage.stage_id === "requirement");
-  elements.pageDescription.textContent = requirement?.details?.requirement_text || requirement?.summary || "変更フロー";
-  elements.flowStatus.textContent = view.statusLabels[flow.status] || flow.status;
-  elements.flowStatus.className = `status-badge ${flow.status}`;
+  const requirementText = requirement?.details?.requirement_text || requirement?.summary || "変更フロー";
+  const currentStage = flow.stages.find(stage => stage.stage_id === flow.current_stage);
+  const confirmationWaiting = Boolean(currentStage?.details?.confirmation);
+  elements.pageTitle.textContent = view.requirementTitle(requirementText);
+  elements.pageRequestId.textContent = flow.change_request_id;
+  elements.pageDescription.textContent = requirementText;
+  elements.flowStatus.textContent = confirmationWaiting
+    ? "確認待ち"
+    : view.statusLabels[flow.status] || flow.status;
+  elements.flowStatus.className = `status-badge ${confirmationWaiting ? "waiting" : flow.status}`;
+  elements.nextActionPanel.innerHTML = view.nextAction(flow);
   elements.progressValue.textContent = `${flow.progress_percent}%`;
   elements.progressBar.style.width = `${flow.progress_percent}%`;
   elements.flowStages.innerHTML = view.stageRail(flow.stages, flow.current_stage);
-  elements.stageDetails.innerHTML = view.stageDetails(flow.stages);
-  for (const button of elements.stageDetails.querySelectorAll("[data-confirm-checkpoint]")) {
-    button.addEventListener("click", () => decideCheckpoint(
-      button.dataset.confirmCheckpoint,
-      button.dataset.subjectDigest,
-      "confirmed"
-    ));
-  }
-  for (const button of elements.stageDetails.querySelectorAll("[data-reject-checkpoint]")) {
-    button.addEventListener("click", () => decideCheckpoint(
-      button.dataset.rejectCheckpoint,
-      button.dataset.subjectDigest,
-      "rejected"
-    ));
-  }
+  elements.stageDetails.innerHTML = view.stageDetails(flow.stages, flow.current_stage);
+  bindConfirmationActions(elements.nextActionPanel);
   for (const button of elements.stageDetails.querySelectorAll("[data-open-test-case-revision]")) {
     button.addEventListener("click", openTestCaseRevisionDialog);
+  }
+  for (const button of elements.stageDetails.querySelectorAll("[data-rerun-test-data]")) {
+    button.addEventListener("click", () => rerunTestData(button.dataset.rerunTestData));
   }
   bindImpactGraph(flow);
   for (const button of elements.flowStages.querySelectorAll("[data-stage-target]")) {
     button.addEventListener("click", () => {
       document.getElementById(`stage-${button.dataset.stageTarget}`)?.scrollIntoView({behavior: "smooth", block: "start"});
     });
+  }
+}
+
+async function rerunTestData(runId) {
+  if (!state.requestId || !runId) return;
+  const scope = `test-data-rerun:${state.requestId}:${runId}`;
+  try {
+    await api(
+      `/api/v1/change-requests/${encodeURIComponent(state.requestId)}/test-data-runs/${encodeURIComponent(runId)}/rerun`,
+      {method: "POST", idempotencyScope: scope, body: "{}"}
+    );
+    clearCommandKey(scope);
+    showNotice("同じ確認済み計画でテストデータ生成と UI 検証を再実行します。", "success");
+    await loadFlow();
+  } catch (error) {
+    showNotice(error.message, "error");
+  }
+}
+
+function bindConfirmationActions(container) {
+  for (const button of container.querySelectorAll("[data-confirm-checkpoint]")) {
+    button.addEventListener("click", () => decideCheckpoint(
+      button.dataset.confirmCheckpoint,
+      button.dataset.subjectDigest,
+      "confirmed"
+    ));
+  }
+  for (const button of container.querySelectorAll("[data-reject-checkpoint]")) {
+    button.addEventListener("click", () => decideCheckpoint(
+      button.dataset.rejectCheckpoint,
+      button.dataset.subjectDigest,
+      "rejected"
+    ));
   }
 }
 
@@ -310,6 +381,7 @@ async function createProject(event) {
     .split(/\r?\n/)
     .map(value => value.trim())
     .filter(Boolean);
+  const testBaseUrl = elements.projectTestBaseUrl.value.trim();
   if (!projectId || !name || !workspaceRoot || documentRoots.length === 0) return;
   setProjectSubmitting(true);
   setProjectFormStatus("設計書を解析し、検索用の RAG 基線を準備しています。この画面を閉じずにお待ちください。");
@@ -322,13 +394,27 @@ async function createProject(event) {
         project_id: projectId,
         name,
         workspace_root: workspaceRoot,
-        document_roots: documentRoots
+        document_roots: documentRoots,
+        test_base_url: testBaseUrl || null
       })
     });
     elements.projectDialog.close();
     await loadProjects(result.project.project_id);
     clearCommandKey(idempotencyScope);
-    showNotice("プロジェクトを初期化しました。");
+    const baseline = result.document_baseline || {};
+    const targetProject = result.target_project || {};
+    const documentCount = Number(baseline.document_count);
+    const vectorCount = Number(baseline.generated_vector_count);
+    const initialized = Number.isInteger(documentCount) && Number.isInteger(vectorCount)
+      ? `プロジェクトを初期化しました。設計書 ${documentCount.toLocaleString("ja-JP")} 件、RAG Vector ${vectorCount.toLocaleString("ja-JP")} 件を準備しました。`
+      : "プロジェクトを初期化しました。";
+    const qualityMissing = targetProject.quality_missing_signals || [];
+    showNotice(
+      qualityMissing.length
+        ? `${initialized} 変更開始前にコード品質基線を準備してください: ${qualityMissing.join("、")}`
+        : initialized,
+      qualityMissing.length ? "error" : "success"
+    );
   } catch (error) {
     setProjectFormStatus(error.message, "error");
   } finally {
@@ -491,7 +577,7 @@ async function confirmTestCaseRevision() {
   }
   try {
     const idempotencyScope = `revision-confirm:${state.requestId}:${proposal.proposal_id}`;
-    await api(
+    const result = await api(
       `/api/v1/change-requests/${encodeURIComponent(state.requestId)}/test-case-revisions/${encodeURIComponent(proposal.proposal_id)}/confirm`,
       {
         method: "POST",
@@ -501,7 +587,11 @@ async function confirmTestCaseRevision() {
     );
     elements.testCaseRevisionDialog.close();
     state.revisionProposal = null;
-    showNotice("テストケースを更新し、下流のテスト計画を再生成しました。");
+    showNotice(
+      result.state === "awaiting_copilot"
+        ? "確認済みです。VS Code の GitHub Copilot が UI テスト計画と Playwright 手順を再生成します。"
+        : "UI テスト計画を更新しました。"
+    );
     await loadFlow();
     clearCommandKey(idempotencyScope);
   } catch (error) {
@@ -520,6 +610,7 @@ elements.projectSelect.addEventListener("change", async () => {
   renderProjectSummary((state.projects || []).find(project => project.project_id === state.projectId));
   await loadRequests();
 });
+elements.openVsCodeButton.addEventListener("click", openSelectedProjectInVsCode);
 elements.projectForm.addEventListener("submit", createProject);
 elements.requestForm.addEventListener("submit", createRequest);
 elements.requirementText.addEventListener("input", updateRequirementCount);

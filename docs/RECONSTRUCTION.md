@@ -73,6 +73,9 @@ Web API と画面は、次の六つだけを公開する。
 - [x] TestDataPlan のデータ生成後に UI Step / Assertion / Screenshot を実行し、UI Result を自動生成
 - [x] TestPlan、TestDataPlan の手順／変数／断言／cleanup と Closure 結果を六工程へ統合表示
 - [x] 生成済み Test Case の自然言語修正を六工程内の「提案 → 差分／選択肢 → 一括確認」に限定し、確認後だけ TestPlan／TestDataPlan と下流実行を再生成
+- [x] 自然言語 Test Step と Playwright UI Step を一対多で追跡し、生成 Step／跨画面変数／Assertion／cleanup の自然言語修正後も完全な Plan を再生成して対応漏れを阻断
+- [x] Playwright DSL を主要な Web 操作、実 Frame URL を検証する同一 Origin iframe、追加 Observation まで拡張し、明示的 Capability Gap のみを確認済み AI Computer Use 境界へ渡す fail-closed Executor を追加。AI 後の URL、Observation、Screenshot は同じ Playwright Session から独立再取得する
+- [ ] VS Code GitHub Copilot だけで AI Computer Use を実行する Visual MCP Provider を Extension に接続し、実端末 Evidence を取得
 - [x] `コード影響範囲` に現在 Code Graph 由来の変更対象／依存／関連テストを SVG で表示し、Node 選択から Symbol、影響理由、関連テストを確認可能にする
 - [x] Web 公開 API を Project、Change Request、六工程、六工程内 Test Case 修正、Screenshot、Local Bridge に限定
 - [x] Web の Project／Change Request 一覧と作成応答から Case、Review、Copilot Task、Automation Run を除外
@@ -96,19 +99,20 @@ Web API と画面は、次の六つだけを公開する。
 - [x] 残存していた Dataset の documents／requirement dual-entry、手動 Analysis Start、StructuredChange Review、Code Scope CLI と専用 Planner／Batch／テスト／文書を削除
 - [x] 旧 MCP／Web の公開先を失った Control Plane Case／Impact／UI Plan／Validation Query と UI Knowledge Review Query 層を削除
 - [x] 主閉ループと接続されていない旧 UiKnowledge／BrowserManifest／UiVerificationPlan 実行管線を削除し、TestDataPlan 起点の限定 UI Evidence 経路へ統一
-- [x] Copilot TestPlan／TestDataPlan を迂回する Frozen Golden Case の runtime fallback と旧 ChangeLoopCase 実行モデルを削除（Golden RAG はオフライン品質基準として維持）
+- [x] Copilot UiTestPlan／TestDataPlan を迂回する Frozen Golden Case の runtime fallback と旧 ChangeLoopCase 実行モデルを削除（Golden RAG はオフライン品質基準として維持）
 - [x] 旧 UI Execution Plan 専用の Grant 認可、Web Validation 進捗 Query、二重 Screenshot origin を削除し、TestDataExecutionResult／ChangeClosureResult を唯一の UI 状態源に統一
 - [x] 新規利用できない旧 `UiLocatorProfile` の Catalog／Schema／例と Browser Manifest 例を削除し、既存 DB の移行履歴と監査互換だけを維持
 - [x] `UiVerificationResult v2` を current Orchestration／TestDataExecutionResult に固定し、Closure の UI 外部キーを `artifact_records` に移行
 - [x] Readiness は同一 Orchestration の最新 TestData run のみ受理し、後続失敗・実行中 run がある場合は fail closed
 - [x] `UiVerificationResult v2` に current Orchestration ID を固定し、Closure の旧 `change_validations` fallback を削除して Test Case Revision 間の Evidence 混入を fail closed に防止
 - [x] Readiness、Profile Drift／Rebuild、Test Case Revision を current TestData／UI v2 Artifact に統一し、production source の旧 UI table query を全廃
-- [x] 現行 TestData 実行から旧 UI Environment／Deployment／Plan Query を除去し、資格情報なしの `OPERAMIND_TEST_TARGET_BASE_URL` 一つへ target Origin 設定を統一
+- [x] target Origin を Project の `test_base_url` に固定し、別 Project や旧環境変数の URL を流用できないようにする
 - [x] VisionDemo 固有の画面／API／業務日付／H2 Binding を持つ target adapter を削除し、跨画面 TestDataPlan だけを契約 fixture として維持。production は Copilot が直接生成した TestDataPlan、注入可能な `TestDataExecutorFactory`、fail-closed bounded executor に限定
 - [x] VisionDemo 固有の Code／Relation／Command Profile を test fixture へ移し、production Profile は汎用 Schema と再利用可能な技術 Stack 例だけに限定
 - [x] 旧 `CopilotHandoff` 内部名を `CopilotTaskContext` に統一し、MCP Server の公開説明から file handoff 表現を削除
 - [x] 文書差分／Impact の未確認状態を完了表示せず、working `in_scope` と committed 成功を区別する六工程状態門禁
-- [x] TestPlan 記録後も `compile_test` を維持し、Grant に含まれる必須 Command Ref がすべて成功した場合だけ committed EditResult を完了扱いにする
+- [x] Command と被試験 content digest を固定し、committed EditResult と変更行 Coverage 成功後だけ実ブラウザ用 UiTestPlan／TestDataPlan を受理する
+- [x] Web の自然言語 UI 計画修正を read-only Copilot revision Task として再生成し、旧 Run／Screenshot／Closure／Report を stale 化する
 - [x] Copilot Impact と並存していた旧 deterministic Impact Report／Code Scope／Code Graph Query 管線を削除し、現行 Orchestration の Impact と graph artifact に統一
 - [x] 内部 XLSX Proposal Writer／Workspace Editor を削除し、文書・コード変更は VS Code GitHub Copilot の限定 Change Task と受領差分だけに統一
 - [x] production package 内の PostgreSQL テスト helper を `tests/support` へ移し、`BusinessDataTemplate` を廃止して跨画面データを直接 TestDataPlan へ統合
@@ -119,7 +123,7 @@ Web API と画面は、次の六つだけを公開する。
 - [ ] Microsoft Edge / Playwright live E2E Evidence（検証端末に Edge が未導入）
 - [ ] VS Code GitHub Copilot による一件の実変更閉ループを完走し、六工程と最終レポートを確認
 - [ ] 最終ソース Commit と対象 Deployment に結び付いた zero-failure／zero-skip の `full_local_regression` Evidence を再生成
-- [ ] `local_files` Workspace のファイル Digest 基線、前後 Snapshot Diff、Code Scope と結果 Revision を実装し、下流工程の Git 必須条件を除去
+- [x] `local_files` Workspace に外部送信しない内部 Git 基線を作成し、前後 Diff、Code Scope、結果 Revision と Command Evidence を同じ方式で固定する
 - [ ] Windows native で Web、MCP、Command 実行、Process tree 停止を統合確認し、POSIX 固有の実行 Path と Signal 前提を解消
 
 未完了項目が残る間、この文書を「再構成完了」の証拠として扱わない。

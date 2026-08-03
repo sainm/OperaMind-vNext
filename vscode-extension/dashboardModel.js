@@ -94,18 +94,11 @@ function buildDashboardTree(value) {
       expanded: true,
       children: [
         action(
-          "checkpointConfirm",
-          "現在の工程を確認",
-          "operamind.confirmCurrentCheckpoint",
-          "check",
-          "Web と共有される確認記録を保存し、次の確定処理へ進みます。",
-        ),
-        action(
-          "checkpointReject",
-          "現在の工程を差戻し",
-          "operamind.rejectCurrentCheckpoint",
-          "discard",
-          "理由を記録して現在の工程を停止します。",
+          "webConfirmation",
+          "OperaMind Web で工程を確認",
+          "operamind.openWeb",
+          "globe",
+          "工程の確認、差戻し、自然言語入力は OperaMind Web で行います。",
         ),
         action(
           "confirm",
@@ -120,13 +113,6 @@ function buildDashboardTree(value) {
           "operamind.resumeCurrentTask",
           "debug-continue",
           "同じ Task ID で GitHub Copilot Chat を再開します。",
-        ),
-        action(
-          "cancel",
-          "現在のタスクを取消",
-          "operamind.cancelCurrentTask",
-          "close",
-          "理由を記録して現在のタスクを取り消します。",
         ),
         action(
           "refresh",

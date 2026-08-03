@@ -451,6 +451,15 @@ def test_load_created_by_and_normalized_comparison_helpers() -> None:
         Cursor(all_rows=[flows, steps, []]), "run-1", artifact
     )
 
+    first = artifact["flow_results"][0]["step_results"][0]
+    second = dict(first, step_id="a-later-step", sequence=2)
+    first["step_id"] = "z-first-step"
+    artifact["flow_results"][0]["step_results"].append(second)
+    flows, steps, evidence = _normalized_rows(artifact)
+    assert DataRepository._normalized_matches(
+        Cursor(all_rows=[flows, steps, evidence]), "run-1", artifact
+    )
+
 
 def test_evidence_binding_and_scalar_helpers_reject_invalid_content() -> None:
     artifact = _result_artifact()
@@ -631,17 +640,20 @@ def _normalized_rows(
     ]
     steps = sorted(
         (
-            flow["flow_id"],
-            step["phase"],
-            step["step_id"],
-            step["sequence"],
-            step["channel"],
-            step["status"],
-            step["output_variables"],
-            step["evidence_refs"],
-            step.get("failure_reason"),
-        )
-        for step in _flow_steps(flow)
+            (
+                flow["flow_id"],
+                step["phase"],
+                step["step_id"],
+                step["sequence"],
+                step["channel"],
+                step["status"],
+                step["output_variables"],
+                step["evidence_refs"],
+                step.get("failure_reason"),
+            )
+            for step in _flow_steps(flow)
+        ),
+        key=lambda value: (value[0], value[1], value[3]),
     )
     evidence = [
         (

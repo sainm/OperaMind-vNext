@@ -20,6 +20,9 @@ class SafeCommandTemplate:
     environment_keys: tuple[str, ...]
     output_limit_bytes: int
     failure_policy: str
+    purpose: str = "test"
+    coverage_report_format: str | None = None
+    coverage_report_path: str | None = None
 
     @classmethod
     def from_profile(
@@ -39,6 +42,8 @@ class SafeCommandTemplate:
                 f"Validated Command Profile has duplicate command_ref: {command_ref}"
             )
         template = matches[0]
+        purpose = str(template.get("purpose") or "test")
+        coverage_report = cast(dict[str, Any] | None, template.get("coverage_report"))
         return cls(
             command_ref=str(template["command_ref"]),
             argv=tuple(str(value) for value in template["argv"]),
@@ -48,6 +53,13 @@ class SafeCommandTemplate:
             environment_keys=tuple(str(value) for value in template["environment_keys"]),
             output_limit_bytes=int(template["output_limit_bytes"]),
             failure_policy=str(template["failure_policy"]),
+            purpose=purpose,
+            coverage_report_format=(
+                str(coverage_report["format"]) if coverage_report is not None else None
+            ),
+            coverage_report_path=(
+                str(coverage_report["path"]) if coverage_report is not None else None
+            ),
         )
 
     @property
@@ -61,6 +73,9 @@ class SafeCommandTemplate:
             "output_limit_bytes": self.output_limit_bytes,
             "timeout_seconds": self.timeout_seconds,
             "working_directory": self.working_directory,
+            "purpose": self.purpose,
+            "coverage_report_format": self.coverage_report_format,
+            "coverage_report_path": self.coverage_report_path,
         }
         canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
         return hashlib.sha256(canonical.encode()).hexdigest()

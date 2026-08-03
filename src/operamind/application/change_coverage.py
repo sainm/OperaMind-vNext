@@ -100,9 +100,6 @@ def evaluate_changed_line_coverage(
 
     executable = _line_map(evidence.executable_lines, "executable")
     covered = _line_map(evidence.covered_lines, "covered")
-    unexpected = sorted((set(executable) | set(covered)) - set(changed_paths))
-    if unexpected:
-        raise ValueError(f"Coverage evidence contains paths outside the Edit Result: {unexpected}")
     missing_paths = sorted(set(source_with_lines) - set(executable))
     files = [
         _file_result(
@@ -243,7 +240,14 @@ def _safe_path(value: str) -> str:
 
 
 def _is_source_path(path: str) -> bool:
-    return PurePosixPath(path).suffix.lower() in {
+    value = PurePosixPath(path)
+    parts = {part.lower() for part in value.parts}
+    if parts & {"test", "tests", "__tests__"}:
+        return False
+    lowered_name = value.name.lower()
+    if any(marker in lowered_name for marker in (".test.", ".spec.")):
+        return False
+    return value.suffix.lower() in {
         ".c",
         ".cc",
         ".cpp",

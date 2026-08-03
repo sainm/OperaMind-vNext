@@ -89,7 +89,9 @@ class EditPacketService:
             for item in approved_items
             if item.recommended_action in {"modify", "add", "delete"}
         )
-        test_files = tuple(sorted({path for item in actionable for path in item.test_file_refs}))
+        verification_only = not actionable
+        test_sources = approved_items if verification_only else actionable
+        test_files = tuple(sorted({path for item in test_sources for path in item.test_file_refs}))
         editable_files = tuple(
             sorted({item.target_path for item in actionable if item.target_path not in test_files})
         )
@@ -99,11 +101,14 @@ class EditPacketService:
                     item.target_path
                     for item in approved_items
                     if item.recommended_action == "review_only"
+                    and item.target_path not in test_files
                 }
             )
         )
-        if not editable_files:
+        if not editable_files and not verification_only:
             raise ValueError("Confirmed Impact contains no approved editable file")
+        if verification_only and not read_only_files and not test_files:
+            raise ValueError("Verification-only Impact contains no review or test file")
         all_paths = (*editable_files, *read_only_files, *test_files)
         if len(all_paths) != len(set(all_paths)):
             raise ValueError("Edit Packet file classifications must not overlap")

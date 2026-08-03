@@ -17,7 +17,7 @@
   ],
   "properties": {
     "artifact_type": {"const": "TestDataPlan"},
-    "schema_version": {"const": "v1"},
+    "schema_version": {"enum": ["v1", "v2"]},
     "test_data_plan_id": {"type": "string", "minLength": 1},
     "test_plan_id": {"type": "string", "minLength": 1},
     "project_id": {"type": "string", "minLength": 1},
@@ -69,6 +69,40 @@
     {
       "if": {"properties": {"status": {"const": "blocked"}}},
       "then": {"properties": {"blocking_reasons": {"minItems": 1}}}
+    },
+    {
+      "if": {
+        "properties": {"schema_version": {"const": "v2"}},
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "generation_flows": {
+            "items": {
+              "properties": {
+                "steps": {
+                  "items": {
+                    "if": {
+                      "properties": {"channel": {"const": "ui"}},
+                      "required": ["channel"]
+                    },
+                    "then": {"required": ["playwright"]}
+                  }
+                },
+                "cleanup_steps": {
+                  "items": {
+                    "if": {
+                      "properties": {"channel": {"const": "ui"}},
+                      "required": ["channel"]
+                    },
+                    "then": {"required": ["playwright"]}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -96,6 +130,124 @@
         "required": {"type": "boolean"}
       }
     },
+    "playwrightLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["by", "value"],
+      "properties": {
+        "by": {"enum": ["role", "label", "placeholder", "text", "alt_text", "title", "test_id", "css"]},
+        "value": {"$ref": "#/$defs/nonBlank"},
+        "name": {"$ref": "#/$defs/nonBlank"},
+        "exact": {"type": "boolean"},
+        "frame": {"$ref": "#/$defs/nonBlank"}
+      }
+    },
+    "playwrightObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "kind"],
+      "properties": {
+        "key": {"$ref": "#/$defs/nonBlank"},
+        "kind": {"enum": ["url", "title", "text", "count", "visible", "enabled", "checked", "value", "attribute"]},
+        "locator": {"$ref": "#/$defs/playwrightLocator"},
+        "attribute_name": {"$ref": "#/$defs/nonBlank"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"enum": ["text", "count", "visible", "enabled", "checked", "value", "attribute"]}}},
+          "then": {"required": ["locator"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "attribute"}}},
+          "then": {"required": ["attribute_name"]}
+        }
+      ]
+    },
+    "playwrightPosition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": {"type": "number", "minimum": 0},
+        "y": {"type": "number", "minimum": 0}
+      }
+    },
+    "playwrightAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "observations", "mask_locators"],
+      "properties": {
+        "action": {"enum": ["goto", "reload", "go_back", "go_forward", "click", "double_click", "fill", "type", "clear", "select_option", "check", "uncheck", "press", "hover", "focus", "blur", "scroll_into_view", "drag_to", "wait_for", "wait_for_url", "wait_for_load_state"]},
+        "path": {"type": "string", "pattern": "^/(?!/).*"},
+        "locator": {"$ref": "#/$defs/playwrightLocator"},
+        "target_locator": {"$ref": "#/$defs/playwrightLocator"},
+        "value": {},
+        "key": {"$ref": "#/$defs/nonBlank"},
+        "state": {"enum": ["attached", "detached", "visible", "hidden", "load", "domcontentloaded", "networkidle"]},
+        "mouse_button": {"enum": ["left", "right", "middle"]},
+        "modifiers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"enum": ["Alt", "Control", "Meta", "Shift"]}
+        },
+        "position": {"$ref": "#/$defs/playwrightPosition"},
+        "timeout_ms": {"type": "integer", "minimum": 100, "maximum": 60000},
+        "observations": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/playwrightObservation"}
+        },
+        "mask_locators": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {"$ref": "#/$defs/playwrightLocator"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"action": {"enum": ["goto", "wait_for_url"]}}},
+          "then": {"required": ["path"]}
+        },
+        {
+          "if": {"properties": {"action": {"enum": ["click", "double_click", "fill", "type", "clear", "select_option", "check", "uncheck", "press", "hover", "focus", "blur", "scroll_into_view", "drag_to", "wait_for"]}}},
+          "then": {"required": ["locator"]}
+        },
+        {
+          "if": {"properties": {"action": {"enum": ["fill", "type", "select_option"]}}},
+          "then": {"required": ["value"]}
+        },
+        {
+          "if": {"properties": {"action": {"const": "press"}}},
+          "then": {"required": ["key"]}
+        },
+        {
+          "if": {"properties": {"action": {"const": "drag_to"}}},
+          "then": {"required": ["target_locator"]}
+        },
+        {
+          "if": {"properties": {"action": {"const": "wait_for"}}},
+          "then": {"required": ["state"], "properties": {"state": {"enum": ["attached", "detached", "visible", "hidden"]}}}
+        },
+        {
+          "if": {"properties": {"action": {"const": "wait_for_load_state"}}},
+          "then": {"required": ["state"], "properties": {"state": {"enum": ["load", "domcontentloaded", "networkidle"]}}}
+        }
+      ]
+    },
+    "computerUseFallback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "objective", "max_actions", "requires_confirmation", "observations"],
+      "properties": {
+        "reason": {"enum": ["non_dom_control", "canvas", "native_dialog", "virtualized_ui", "locator_unavailable", "playwright_capability_gap"]},
+        "objective": {"type": "string", "minLength": 2, "maxLength": 2000},
+        "max_actions": {"type": "integer", "minimum": 1, "maximum": 20},
+        "requires_confirmation": {"const": true},
+        "observations": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/playwrightObservation"}
+        }
+      }
+    },
     "generationStep": {
       "type": "object",
       "additionalProperties": false,
@@ -114,10 +266,18 @@
         "sequence": {"type": "integer", "minimum": 1},
         "channel": {"enum": ["fixture", "http", "sql", "ui"]},
         "business_action": {"$ref": "#/$defs/nonBlank"},
+        "data_effect": {"enum": ["none", "creates", "updates", "deletes"]},
+        "test_step_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/nonBlank"}
+        },
         "entity_ref": {"$ref": "#/$defs/nonBlank"},
         "target": {"$ref": "#/$defs/nonBlank"},
         "screen_ref": {"$ref": "#/$defs/nonBlank"},
         "ui_action_ref": {"$ref": "#/$defs/nonBlank"},
+        "playwright": {"$ref": "#/$defs/playwrightAction"},
+        "computer_use_fallback": {"$ref": "#/$defs/computerUseFallback"},
         "inputs": {"type": "object"},
         "depends_on": {
           "type": "array",

@@ -42,6 +42,7 @@ class MainFlowCoordinator:
     def run_once(self) -> MainFlowCoordinatorIteration:
         scheduled: list[tuple[str, str]] = []
         observed = 0
+        reserved = 0
         failures = 0
         with psycopg.connect(self.database_url, autocommit=True) as connection:
             service = WebControlPlaneService(
@@ -68,15 +69,24 @@ class MainFlowCoordinator:
                             request_id=request_id,
                             actor=_AUTOMATION_ACTOR,
                         )
-                        if not _test_data_execution_is_ready(automation):
-                            continue
-                        result = service.start_test_data_run(
-                            request_id=request_id,
-                            idempotency_key=_AUTOMATION_IDEMPOTENCY_KEY,
-                            actor=_AUTOMATION_ACTOR,
-                        )
-                        if result.get("background_required") is True:
-                            scheduled.append((request_id, str(result["run_id"])))
+                        if _test_data_execution_is_ready(automation):
+                            result = service.start_test_data_run(
+                                request_id=request_id,
+                                idempotency_key=_AUTOMATION_IDEMPOTENCY_KEY,
+                                actor=_AUTOMATION_ACTOR,
+                            )
+                            if result.get("background_required") is True:
+                                reserved += 1
+                                scheduled.append((request_id, str(result["run_id"])))
+                        elif _ui_publication_is_ready(automation):
+                            management = service.execution_management(request_id)
+                            execution = management.get("test_data_execution")
+                            if (
+                                isinstance(execution, dict)
+                                and execution.get("status") != "running"
+                                and management.get("change_closure") is None
+                            ):
+                                scheduled.append((request_id, str(execution["run_id"])))
                     except (ValueError, psycopg.Error):
                         failures += 1
                         LOGGER.exception(
@@ -111,7 +121,7 @@ class MainFlowCoordinator:
                 )
         return MainFlowCoordinatorIteration(
             observed_requests=observed,
-            reserved_runs=len(scheduled),
+            reserved_runs=reserved,
             executed_runs=executed,
             failed_requests=failures,
         )
@@ -128,8 +138,20 @@ class MainFlowCoordinator:
 
 
 def _test_data_execution_is_ready(automation: dict[str, object] | None) -> bool:
+    if automation is not None and isinstance(automation.get("run"), dict):
+        automation = cast(dict[str, object], automation["run"])
     return (
         automation is not None
         and automation.get("status") == "waiting"
         and automation.get("next_action") == "start_test_data_execution"
+    )
+
+
+def _ui_publication_is_ready(automation: dict[str, object] | None) -> bool:
+    if automation is not None and isinstance(automation.get("run"), dict):
+        automation = cast(dict[str, object], automation["run"])
+    return (
+        automation is not None
+        and automation.get("status") == "waiting"
+        and automation.get("next_action") == "run_ui_verification"
     )

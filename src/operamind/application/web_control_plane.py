@@ -22,6 +22,7 @@ from operamind.application.change_automation import (
     ChangeAutomationDecision,
     decide_change_automation,
 )
+from operamind.application.change_orchestration import ChangeOrchestrationBlockedError
 from operamind.application.change_orchestration_service import ChangeOrchestrationService
 from operamind.application.copilot_coding_task import (
     CopilotCodingTaskPublishRequest,
@@ -30,13 +31,20 @@ from operamind.application.copilot_coding_task import (
 )
 from operamind.application.edit_packet import EditPacketRequest, EditPacketService
 from operamind.application.failure_management import build_failure_management
+from operamind.application.local_source_control import (
+    LocalSourceBaseline,
+    LocalSourceControlService,
+)
 from operamind.application.main_change_flow import build_main_change_flow
 from operamind.application.orchestration_task import (
     OrchestrationSchedulingPolicy,
     build_orchestration_task,
 )
 from operamind.application.project_document_baseline import ProjectDocumentBaselineService
-from operamind.application.project_stack import ProjectProfileBootstrapper
+from operamind.application.project_stack import (
+    ProjectProfileBootstrapper,
+    detect_project_stack,
+)
 from operamind.application.test_case_revision_service import TestCaseRevisionService
 from operamind.contracts import ContractCatalog
 from operamind.domain.test_case_execution_scope import (
@@ -51,6 +59,7 @@ from operamind.infrastructure.postgres import (
     ChangeClosureRepository,
     ChangeOrchestrationRepository,
     CodeGraphSnapshotRepository,
+    CopilotCodingTaskRepository,
     ImpactRepository,
     OrchestrationTaskRepository,
     PersistenceConflictError,
@@ -102,6 +111,7 @@ class ProjectInitializationInput:
     workspace_root: Path
     document_roots: tuple[Path, ...]
     configured_by: str
+    test_base_url: str | None = None
 
 
 class WebControlPlaneService:
@@ -139,6 +149,7 @@ class WebControlPlaneService:
         self._orchestration_tasks = OrchestrationTaskRepository(
             connection, orchestration_scheduling_policy
         )
+        self._copilot_tasks = CopilotCodingTaskRepository(connection, self._contracts)
         self._test_case_revisions = TestCaseRevisionService(
             connection=connection,
             repository_root=self._root,
@@ -201,8 +212,7 @@ class WebControlPlaneService:
                 case_blocker = str(error)
         if case_blocker is not None:
             raise ValueError(
-                "変更要件を開始できません。Project のコード基線を準備してください: "
-                f"{case_blocker}"
+                f"変更要件を開始できません。Project のコード基線を準備してください: {case_blocker}"
             )
         record = self._repository.submit_change_request(
             artifact=artifact,
@@ -246,6 +256,21 @@ class WebControlPlaneService:
     def initialize_project(self, value: ProjectInitializationInput) -> dict[str, object]:
         """Register local roots and prepare the Canonical RAG baseline when Git is available."""
 
+        if value.test_base_url is not None:
+            parsed_url = urlsplit(value.test_base_url)
+            if (
+                parsed_url.scheme not in {"http", "https"}
+                or not parsed_url.netloc
+                or parsed_url.username is not None
+                or parsed_url.password is not None
+                or parsed_url.query
+                or parsed_url.fragment
+            ):
+                raise ValueError(
+                    "UI テスト対象 URL は認証情報、Query、Fragment を含まない "
+                    "HTTP(S) URL にしてください"
+                )
+
         workspace_root = _resolved_local_directory(
             value.workspace_root,
             field_name="コード Workspace",
@@ -256,45 +281,102 @@ class WebControlPlaneService:
         )
         if len(document_roots) != len(set(document_roots)):
             raise ValueError("設計書の場所に同じフォルダーを重複して登録できません")
-        source_control_kind = "git" if (workspace_root / ".git").exists() else "local_files"
-        record = self._repository.initialize_project(
-            project_id=value.project_id,
-            name=value.name,
-            workspace_root=str(workspace_root),
-            source_control_kind=source_control_kind,
-            document_roots=tuple(str(root) for root in document_roots),
-            configured_by=value.configured_by,
-        )
-        response: dict[str, object] = {
-            "created": record.created,
-            "project": {
-                "project_id": record.project_id,
-                "name": record.name,
-                "workspace_root": record.workspace_root,
-                "document_roots": list(record.document_roots),
-                "source_control_kind": record.source_control_kind,
-            },
-        }
-        if source_control_kind == "git":
-            baseline = ProjectDocumentBaselineService(
-                connection=self._connection,
-                repository_root=self._root,
-            ).ensure(
-                project_id=value.project_id,
-                document_roots=document_roots,
-                actor=value.configured_by,
-            )
-            response["document_baseline"] = {
-                "status": "ready",
-                "snapshot_id": baseline.snapshot_id,
-                "document_count": baseline.document_count,
-                "index_build_id": baseline.index_build_id,
-                "generated_vector_count": baseline.generated_vector_count,
-                "embedding_profile_binding_key": (
-                    baseline.embedding_profile_binding_key
-                ),
-            }
-        return response
+        existing_workspace = self._repository.project_workspace_registration(value.project_id)
+        source_git_baselines: tuple[dict[str, object], ...] = ()
+        initialized_baselines: list[LocalSourceBaseline] = []
+        source_control: LocalSourceControlService | None = None
+        try:
+            if existing_workspace is None:
+                source_control = LocalSourceControlService()
+                code_baseline = source_control.ensure(
+                    root=workspace_root,
+                    project_id=value.project_id,
+                    source_kind="code",
+                    position=0,
+                    require_repository_root=True,
+                )
+                initialized_baselines.append(code_baseline)
+                document_baseline_values: list[LocalSourceBaseline] = []
+                for position, root in enumerate(document_roots):
+                    document_baseline = source_control.ensure(
+                        root=root,
+                        project_id=value.project_id,
+                        source_kind="document",
+                        position=position,
+                    )
+                    initialized_baselines.append(document_baseline)
+                    document_baseline_values.append(document_baseline)
+                document_baselines = tuple(document_baseline_values)
+                source_git_baselines = tuple(
+                    {
+                        "source_kind": item.source_kind,
+                        "configured_root": str(item.configured_root),
+                        "repository_root": str(item.repository_root),
+                        "repository_identity": item.repository_identity,
+                        "baseline_revision": item.baseline_revision,
+                        "management_kind": item.management_kind,
+                        "position": item.position,
+                    }
+                    for item in (code_baseline, *document_baselines)
+                )
+                source_control_kind = (
+                    "local_files"
+                    if code_baseline.management_kind == "operamind_local_git"
+                    else "git"
+                )
+            else:
+                source_control_kind = str(existing_workspace["source_control_kind"])
+            with self._connection.transaction():
+                record = self._repository.initialize_project(
+                    project_id=value.project_id,
+                    name=value.name,
+                    workspace_root=str(workspace_root),
+                    source_control_kind=source_control_kind,
+                    document_roots=tuple(str(root) for root in document_roots),
+                    configured_by=value.configured_by,
+                    test_base_url=(
+                        value.test_base_url.rstrip("/")
+                        if value.test_base_url is not None
+                        else None
+                    ),
+                    source_git_baselines=source_git_baselines,
+                )
+                response: dict[str, object] = {
+                    "created": record.created,
+                    "project": {
+                        "project_id": record.project_id,
+                        "name": record.name,
+                        "workspace_root": record.workspace_root,
+                        "document_roots": list(record.document_roots),
+                        "source_control_kind": record.source_control_kind,
+                        "test_base_url": record.test_base_url,
+                        "source_git_baselines": list(record.source_git_baselines),
+                    },
+                }
+                baseline = ProjectDocumentBaselineService(
+                    connection=self._connection,
+                    repository_root=self._root,
+                ).ensure(
+                    project_id=value.project_id,
+                    document_roots=document_roots,
+                    actor=value.configured_by,
+                )
+                response["document_baseline"] = {
+                    "status": "ready",
+                    "snapshot_id": baseline.snapshot_id,
+                    "document_count": baseline.document_count,
+                    "index_build_id": baseline.index_build_id,
+                    "generated_vector_count": baseline.generated_vector_count,
+                    "embedding_profile_binding_key": (baseline.embedding_profile_binding_key),
+                }
+                response["target_project"] = detect_project_stack(
+                    workspace_root
+                ).copilot_context()
+            return response
+        except Exception:
+            if source_control is not None:
+                source_control.rollback_created_repositories(tuple(initialized_baselines))
+            raise
 
     def _ensure_change_request_case(self, value: ChangeRequestInput) -> str:
         registration = self._repository.project_repository_registration(value.project_id)
@@ -302,12 +384,9 @@ class WebControlPlaneService:
             workspace = self._repository.project_workspace_registration(value.project_id)
             if workspace is None:
                 raise ValueError("Project has no registered Workspace for automatic Analysis Case")
-            if workspace["source_control_kind"] != "git":
-                raise ValueError(
-                    "ローカルファイル Workspace はファイル Digest 基線が完成するまで"
-                    "自動 Analysis Case の対象外です"
-                )
-            workspace_root = Path(workspace["workspace_root"]).resolve(strict=True)
+            if not (Path(str(workspace["workspace_root"])) / ".git").exists():
+                raise ValueError("ローカルファイル Workspace の内部差分基線がありません")
+            workspace_root = Path(str(workspace["workspace_root"])).resolve(strict=True)
             git = GitWorkspaceInspector().inspect(workspace_root)
             repository_id = _web_id(
                 "repository", value.project_id, git.remote_url, str(workspace_root)
@@ -319,7 +398,7 @@ class WebControlPlaneService:
                 workspace_root=str(workspace_root),
             )
             registration = {
-                "project_name": workspace["project_name"],
+                "project_name": str(workspace["project_name"]),
                 "repository_id": repository_id,
                 "remote_url": git.remote_url,
                 "workspace_root": str(workspace_root),
@@ -366,7 +445,16 @@ class WebControlPlaneService:
 
     def list_projects(self) -> dict[str, object]:
         projects = self._repository.list_projects()
-        return {"projects": list(projects), "count": len(projects)}
+        enriched = [
+            {
+                **project,
+                "target_project": _safe_project_stack_context(
+                    Path(str(project["workspace_root"]))
+                ),
+            }
+            for project in projects
+        ]
+        return {"projects": enriched, "count": len(enriched)}
 
     def list_change_requests(self, *, project_id: str) -> dict[str, object]:
         requests = self._repository.list_change_requests(project_id=project_id)
@@ -395,10 +483,7 @@ class WebControlPlaneService:
                 if isinstance(graph_id, str) and graph_id:
                     workspace["code_graph_artifact"] = self._code_graphs.get(graph_id)
         automation = self._automation_runs.latest_for_request(request_id)
-        task = CopilotCodingTaskService(
-            connection=self._connection,
-            repository_root=self._root,
-        ).latest_for_request(request_id)
+        task = self._latest_code_task(request_id)
         return build_main_change_flow(
             request=request,
             document_diff=self._repository.document_diff(request_id),
@@ -431,31 +516,78 @@ class WebControlPlaneService:
         selections: dict[str, str],
         actor: str,
     ) -> dict[str, object]:
-        """Apply one reviewed proposal and restart only the downstream test flow."""
+        """Queue one reviewed UI plan change for read-only Copilot regeneration."""
 
-        result = self._test_case_revisions.confirm(
+        prepared = self._test_case_revisions.prepare_ai_regeneration(
             change_request_id=request_id,
             proposal_id=proposal_id,
             selections=selections,
-            actor=actor,
         )
-        revision = cast_dict(result["revision"])
-        revision_id = str(revision["revision_id"])
-        self.start_change_automation(
-            request_id=request_id,
-            idempotency_key=f"test-case-revision:{revision_id}",
-            actor="automation:operamind",
+        proposal = cast_dict(prepared["proposal"])
+        workspace_root = self._repository.project_workspace_root(str(proposal["project_id"]))
+        if workspace_root is None:
+            raise ValueError("Project has no registered Workspace for the VS Code Change Task")
+        coding_task_id = _web_id(
+            "copilot-ui-test-plan-revision",
+            str(proposal["project_id"]),
+            request_id,
+            proposal_id,
         )
-        return {
-            "state": "applied",
-            "flow": self.main_change_flow(request_id),
-        }
-
-    def claim_copilot_task(self, *, workspace_root: Path, consumer_id: str) -> dict[str, object]:
         task = CopilotCodingTaskService(
             connection=self._connection,
             repository_root=self._root,
-        ).claim_next(workspace_root=workspace_root, consumer_id=consumer_id)
+        ).publish(
+            CopilotCodingTaskPublishRequest(
+                coding_task_id=coding_task_id,
+                change_request_id=request_id,
+                project_id=str(proposal["project_id"]),
+                workspace_root=Path(workspace_root),
+                task_summary=f"UI TestPlan 修正: {proposal['instruction']}",
+                actor=actor,
+                idempotency_key=f"ui-test-plan-revision:{proposal_id}",
+                task_kind="ui_test_plan_revision",
+                initial_stage="ui_test_revision",
+                plan_revision_context={
+                    "proposal_id": proposal_id,
+                    "source_orchestration_id": str(proposal["source_orchestration_id"]),
+                    "source_test_plan_id": str(proposal["source_test_plan_id"]),
+                    "instruction": str(proposal["instruction"]),
+                    "confirmed_operations_json": json.dumps(
+                        prepared["operations"],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    "selections_json": json.dumps(
+                        prepared["selections"],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                },
+            )
+        )
+        return {
+            "state": "awaiting_copilot",
+            "copilot_task": build_bridge_task_view(task),
+            "flow": self.main_change_flow(request_id),
+        }
+
+    def claim_copilot_task(
+        self,
+        *,
+        workspace_root: Path,
+        consumer_id: str,
+        change_request_id: str | None = None,
+    ) -> dict[str, object]:
+        task = CopilotCodingTaskService(
+            connection=self._connection,
+            repository_root=self._root,
+        ).claim_next(
+            workspace_root=workspace_root,
+            consumer_id=consumer_id,
+            change_request_id=change_request_id,
+        )
         return {"task": build_bridge_task_view(task) if task is not None else None}
 
     def accept_copilot_task(
@@ -530,13 +662,19 @@ class WebControlPlaneService:
         request = self._repository.get_change_request(request_id)
         project_id = str(request["project_id"])
         run_id = _web_id("change-automation", project_id, request_id, idempotency_key)
-        record = self._automation_runs.start(
-            run_id=run_id,
-            request_id=request_id,
-            project_id=project_id,
-            idempotency_key=idempotency_key,
-            actor=actor,
-        )
+        with self._connection.transaction():
+            record = self._automation_runs.start(
+                run_id=run_id,
+                request_id=request_id,
+                project_id=project_id,
+                idempotency_key=idempotency_key,
+                actor=actor,
+            )
+            for superseded_run_id in record.superseded_run_ids:
+                self._orchestration_tasks.supersede_open_for_run(
+                    automation_run_id=superseded_run_id,
+                    actor=actor,
+                )
         return self._advance_change_automation(
             run_id=record.automation_run_id, actor=actor, created=record.created
         )
@@ -602,6 +740,24 @@ class WebControlPlaneService:
                 actor=actor,
                 note=note,
             )
+        if decision == "confirmed" and checkpoint == "rag_documents":
+            if _discovery.get("status") != "ready":
+                raise RuntimeError("確認済み RAG 文書候補が ready ではありません")
+            CopilotCodingTaskService(
+                connection=self._connection,
+                repository_root=self._root,
+            ).bind_document_discovery(
+                coding_task_id=_web_id(
+                    "copilot-change-task",
+                    record.project_id,
+                    record.change_request_id,
+                    "initial",
+                ),
+                automation_run_id=run_id,
+                subject_digest=subject_digest,
+                discovery=_discovery,
+                actor=actor,
+            )
         if decision == "confirmed" and checkpoint == "code_scope":
             if workspace is None:
                 raise RuntimeError("コード範囲確認の Case workspace が失われました")
@@ -622,6 +778,18 @@ class WebControlPlaneService:
             actor=actor,
             note=note,
         )
+        if decision == "rejected" and checkpoint == "document_diff":
+            rag_subject_digest = subjects.get("rag_documents")
+            if rag_subject_digest is None:
+                raise RuntimeError("設計書再修正に必要な RAG 確認証跡が失われました")
+            self._request_document_revision(
+                record=record,
+                confirmation_id=confirmation_id,
+                actor=actor,
+                note=note,
+                discovery=_discovery,
+                rag_subject_digest=rag_subject_digest,
+            )
         advanced = self._advance_change_automation(
             run_id=run_id,
             actor=actor,
@@ -634,7 +802,7 @@ class WebControlPlaneService:
     ) -> dict[str, object]:
         record = self._automation_runs.get(run_id)
         request, diff, workspace, bundle, execution = self._automation_inputs(record)
-        decision, _discovery, _subjects, _confirmations = self._automation_decision(
+        decision, _discovery, _subjects, confirmations = self._automation_decision(
             record=record,
             request=request,
             diff=diff,
@@ -642,6 +810,42 @@ class WebControlPlaneService:
             bundle=bundle,
             execution=execution,
         )
+        rejected_document_diff = confirmations.get("document_diff")
+        review = cast_dict(request.get("document_review"))
+        if review.get("status") == "pending" and rejected_document_diff is None:
+            rejected_document_diff = self._automation_runs.latest_confirmation(
+                run_id=run_id,
+                checkpoint="document_diff",
+            )
+        if (
+            review.get("status") != "revision_requested"
+            and isinstance(rejected_document_diff, dict)
+            and rejected_document_diff.get("decision") == "rejected"
+        ):
+            rag_subject_digest = _subjects.get("rag_documents")
+            if rag_subject_digest is None:
+                raise RuntimeError("設計書再修正に必要な RAG 確認証跡が失われました")
+            self._request_document_revision(
+                record=record,
+                confirmation_id=str(rejected_document_diff["confirmation_id"]),
+                actor=str(rejected_document_diff["actor"]),
+                note=(
+                    str(rejected_document_diff["note"])
+                    if rejected_document_diff.get("note") is not None
+                    else None
+                ),
+                discovery=_discovery,
+                rag_subject_digest=rag_subject_digest,
+            )
+            request, diff, workspace, bundle, execution = self._automation_inputs(record)
+            decision, _discovery, _subjects, confirmations = self._automation_decision(
+                record=record,
+                request=request,
+                diff=diff,
+                workspace=workspace,
+                bundle=bundle,
+                execution=execution,
+            )
         if decision.next_action == "provision_execution_scope":
             decision = self._provision_execution_scope_or_block(
                 record=record,
@@ -732,7 +936,11 @@ class WebControlPlaneService:
             except Exception as error:
                 blocking_reason = (
                     "自動編成の内部処理に失敗しました。再試行または原因確認が必要です。"
-                    f" ({type(error).__name__})"
+                    + (
+                        f" ({error})"
+                        if isinstance(error, ChangeOrchestrationBlockedError)
+                        else f" ({type(error).__name__})"
+                    )
                 )
                 self._orchestration_tasks.record_result(
                     task_id=str(current_task["orchestration_task_id"]),
@@ -927,8 +1135,8 @@ class WebControlPlaneService:
             raise ValueError("Confirmed Impact and confirmation are required")
 
         packet = cast_dict(workspace["edit_packet"])
-        packet_id = packet.get("id")
-        if not isinstance(packet_id, str):
+        packet_id = _reusable_edit_packet_id(packet)
+        if packet_id is None:
             packet_id = _web_id(
                 "copilot-edit-packet",
                 record.project_id,
@@ -977,6 +1185,15 @@ class WebControlPlaneService:
         )
         if not command_refs:
             raise ValueError("Active CommandExecutionProfile has no command templates")
+        command_purposes = {
+            str(template.get("purpose")) for template in templates if isinstance(template, dict)
+        }
+        missing_purposes = sorted({"compile", "test", "coverage"} - command_purposes)
+        if missing_purposes:
+            raise ValueError(
+                "CommandExecutionProfile does not close the quality gate; "
+                f"missing purposes={missing_purposes}"
+            )
 
         workspace = self._repository.case_workspace(
             project_id=record.project_id,
@@ -1009,16 +1226,17 @@ class WebControlPlaneService:
             connection=self._connection,
             repository_root=self._root,
         )
-        task_view = task_service.latest_for_request(record.change_request_id)
+        initial_task_id = _web_id(
+            "copilot-change-task",
+            record.project_id,
+            record.change_request_id,
+            "initial",
+        )
+        task_view = self._latest_code_task(record.change_request_id)
         if task_view is None:
             task_view = task_service.publish(
                 CopilotCodingTaskPublishRequest(
-                    coding_task_id=_web_id(
-                        "copilot-change-task",
-                        record.project_id,
-                        record.change_request_id,
-                        "initial",
-                    ),
+                    coding_task_id=initial_task_id,
                     change_request_id=record.change_request_id,
                     project_id=record.project_id,
                     edit_packet_id=packet_id,
@@ -1033,15 +1251,54 @@ class WebControlPlaneService:
                 )
             )
         task_artifact = cast_dict(task_view["task"])
-        coding_task_id = str(task_artifact["coding_task_id"])
-        task_service.bind_execution_scope(
-            coding_task_id=coding_task_id,
-            analysis_case_id=case_id,
-            edit_packet_id=packet_id,
-            approval_grant_id=grant_id,
-            workspace_root=workspace_root,
-            actor=automatic_actor,
+        execution_scope = cast_dict(task_view.get("execution_scope"))
+        current_scope = (
+            execution_scope.get("edit_packet_id"),
+            execution_scope.get("approval_grant_id"),
         )
+        requested_scope = (packet_id, grant_id)
+        if current_scope != requested_scope and any(value is not None for value in current_scope):
+            previous_task_id = str(task_artifact["coding_task_id"])
+            previous_basis = self._task_code_scope_basis(previous_task_id)
+            previous_basis["impact_report_id"] = impact_report_id
+            coding_task_id = _web_id(
+                "copilot-change-task",
+                record.project_id,
+                record.change_request_id,
+                "change-execution",
+                impact_report_id,
+            )
+            task_view = task_service.publish(
+                CopilotCodingTaskPublishRequest(
+                    coding_task_id=coding_task_id,
+                    change_request_id=record.change_request_id,
+                    project_id=record.project_id,
+                    edit_packet_id=packet_id,
+                    approval_grant_id=grant_id,
+                    workspace_root=workspace_root,
+                    task_summary=str(
+                        cast_dict(request["artifact"]).get("requirement_text")
+                        or "Confirmed change request"
+                    ),
+                    actor=automatic_actor,
+                    idempotency_key=f"change-execution:{impact_report_id}",
+                    retry_of_coding_task_id=previous_task_id,
+                    attempt_number=int(str(task_view.get("attempt_number") or 1)) + 1,
+                    task_kind="change_execution",
+                    initial_stage="compile_test",
+                    execution_basis=previous_basis,
+                )
+            )
+        else:
+            coding_task_id = str(task_artifact["coding_task_id"])
+            task_service.bind_execution_scope(
+                coding_task_id=coding_task_id,
+                analysis_case_id=case_id,
+                edit_packet_id=packet_id,
+                approval_grant_id=grant_id,
+                workspace_root=workspace_root,
+                actor=automatic_actor,
+            )
         return packet_id, grant_id, coding_task_id
 
     def _automation_inputs(
@@ -1065,11 +1322,39 @@ class WebControlPlaneService:
                 project_id=record.project_id,
                 case_id=str(case_id),
             )
+            workspace["copilot_task"] = self._latest_code_task(record.change_request_id)
         bundle = self._orchestrations.latest_bundle(record.change_request_id)
         execution = (
             self.execution_management(record.change_request_id) if bundle is not None else None
         )
         return request, diff, workspace, bundle, execution
+
+    def _latest_code_task(self, request_id: str) -> dict[str, object] | None:
+        """Prefer the follow-up execution Task over the original delivery Task."""
+
+        return self._copilot_tasks.latest_for_request(
+            request_id,
+            task_kind="change_execution",
+        ) or self._copilot_tasks.latest_for_request(
+            request_id,
+            task_kind="change_delivery",
+        )
+
+    def _task_code_scope_basis(self, coding_task_id: str) -> dict[str, object]:
+        view = self._copilot_tasks.view(coding_task_id)
+        task = cast_dict(view["task"])
+        basis = task.get("execution_basis")
+        if task.get("task_kind") == "change_execution" and isinstance(basis, dict):
+            return dict(cast_dict(basis))
+        for event in reversed(cast_list(view.get("events"))):
+            payload = cast_dict(event.get("payload"))
+            if (
+                event.get("event_type") == "outputs_recorded"
+                and payload.get("output_stage") == "code_scope"
+            ):
+                payload.pop("output_stage", None)
+                return payload
+        raise ValueError("Previous Change Task has no code scope execution basis")
 
     def _automation_decision(
         self,
@@ -1104,10 +1389,7 @@ class WebControlPlaneService:
             and requirement_confirmation.get("decision") == "confirmed"
         )
         discovery = (
-            CopilotCodingTaskService(
-                connection=self._connection,
-                repository_root=self._root,
-            ).document_discovery_for_request(record.change_request_id)
+            self._rag_discovery_for_run(record)
             if requirement_confirmed
             else {
                 "status": "pending",
@@ -1146,6 +1428,25 @@ class WebControlPlaneService:
             current,
         )
 
+    def _rag_discovery_for_run(self, record: ChangeAutomationRunRecord) -> dict[str, object]:
+        persisted = self._automation_runs.rag_discovery(record.automation_run_id)
+        if persisted is not None:
+            return persisted
+        discovery = CopilotCodingTaskService(
+            connection=self._connection,
+            repository_root=self._root,
+        ).canonical_document_discovery_for_request(record.change_request_id)
+        if discovery.get("status") != "ready":
+            return discovery
+        stored = self._automation_runs.record_rag_discovery(
+            run_id=record.automation_run_id,
+            discovery=discovery,
+        )
+        value = stored.get("discovery")
+        if not isinstance(value, dict):
+            raise RuntimeError("Persisted RAG discovery lost its object shape")
+        return value
+
     def _confirm_document_diff(
         self,
         *,
@@ -1166,6 +1467,103 @@ class WebControlPlaneService:
             decision="confirmed",
             actor=actor,
             note=note or "統一確認フローで設計書差分を確認",
+        )
+
+    def _request_document_revision(
+        self,
+        *,
+        record: ChangeAutomationRunRecord,
+        confirmation_id: str,
+        actor: str,
+        note: str | None,
+        discovery: dict[str, object],
+        rag_subject_digest: str,
+    ) -> None:
+        instruction = note.strip() if isinstance(note, str) and note.strip() else None
+        if instruction is None:
+            raise ValueError("設計書差し戻しには再修正指示が必要です")
+        workspace_root_value = self._repository.project_workspace_root(record.project_id)
+        if workspace_root_value is None:
+            raise ValueError("設計書再修正 Task のコード Workspace が登録されていません")
+        service = CopilotCodingTaskService(
+            connection=self._connection,
+            repository_root=self._root,
+        )
+        revision_task_id = _web_id(
+            "copilot-change-task",
+            record.project_id,
+            record.change_request_id,
+            "document-revision",
+            confirmation_id,
+        )
+        latest = service.latest_for_request(
+            record.change_request_id,
+            task_kind="change_delivery",
+        )
+        if latest is not None:
+            latest_task = cast_dict(latest["task"])
+            latest_task_id = str(latest_task["coding_task_id"])
+            if latest_task_id != revision_task_id and latest.get("current_stage") == "code_scope":
+                service.rollback_document_change(latest_task_id)
+            if latest_task_id != revision_task_id and latest.get("state") in {
+                "pending_confirmation",
+                "accepted",
+                "in_progress",
+            }:
+                service.cancel(
+                    coding_task_id=latest_task_id,
+                    change_request_id=record.change_request_id,
+                    actor="automation:operamind",
+                    reason="設計書差し戻しにより再修正 Task へ置き換え",
+                    idempotency_key=f"document-revision:{confirmation_id}",
+                )
+            attempt_number = int(str(latest_task.get("attempt_number") or 1)) + (
+                0 if latest_task_id == revision_task_id else 1
+            )
+            retry_of = (
+                str(latest_task.get("retry_of_coding_task_id") or latest_task_id)
+                if latest_task_id == revision_task_id
+                else latest_task_id
+            )
+        else:
+            attempt_number = 1
+            retry_of = None
+        self._repository.record_document_review(
+            event_id=_web_id(
+                "document-review-revision",
+                record.project_id,
+                record.change_request_id,
+                confirmation_id,
+            ),
+            request_id=record.change_request_id,
+            project_id=record.project_id,
+            decision="revision_requested",
+            actor=actor,
+            note=instruction,
+        )
+        request = self._repository.get_change_request(record.change_request_id)
+        requirement = str(
+            cast_dict(request["artifact"]).get("requirement_text") or "Confirmed change request"
+        )
+        service.publish(
+            CopilotCodingTaskPublishRequest(
+                coding_task_id=revision_task_id,
+                change_request_id=record.change_request_id,
+                project_id=record.project_id,
+                workspace_root=Path(workspace_root_value),
+                task_summary=f"{requirement}\n設計書差し戻し指示: {instruction}",
+                actor=actor,
+                idempotency_key=f"document-revision:{confirmation_id}",
+                retry_of_coding_task_id=retry_of,
+                attempt_number=attempt_number,
+            )
+        )
+        service.bind_document_discovery(
+            coding_task_id=revision_task_id,
+            automation_run_id=record.automation_run_id,
+            subject_digest=rag_subject_digest,
+            discovery=discovery,
+            actor=actor,
         )
 
     def _confirm_impact(
@@ -1226,7 +1624,7 @@ class WebControlPlaneService:
 
     def _resume_latest_automation(self, *, request_id: str, actor: str) -> None:
         run = self._automation_runs.latest_for_request(request_id)
-        if run is not None and run["status"] != "completed":
+        if run is not None:
             self._advance_change_automation(
                 run_id=str(run["automation_run_id"]), actor=actor, created=False
             )
@@ -1241,13 +1639,29 @@ class WebControlPlaneService:
         run = self._automation_runs.latest_for_request(request_id)
         return self._decorate_automation(run) if run is not None else None
 
-    def next_change_confirmation(self, *, workspace_root: Path) -> dict[str, object]:
+    def next_change_confirmation(
+        self, *, workspace_root: Path, change_request_id: str | None = None
+    ) -> dict[str, object]:
         """Return the same pending confirmation shown by Web for one Workspace."""
         resolved = _resolved_local_directory(workspace_root, field_name="コード Workspace")
         project_id = self._repository.project_id_for_workspace(str(resolved))
         if project_id is None:
             return {"confirmation": None}
-        run = self._automation_runs.latest_confirmation_for_project(project_id)
+        if change_request_id is None:
+            run = self._automation_runs.latest_confirmation_for_project(project_id)
+        else:
+            request = self._repository.get_change_request(change_request_id)
+            artifact = cast_dict(request["artifact"])
+            if str(artifact.get("project_id")) != project_id:
+                return {"confirmation": None}
+            candidate = self._automation_runs.latest_for_request(change_request_id)
+            run = (
+                candidate
+                if candidate is not None
+                and candidate.get("status") == "waiting"
+                and str(candidate.get("next_action") or "").startswith("confirm_")
+                else None
+            )
         if run is None:
             return {"confirmation": None}
         decorated = self._decorate_automation(run)
@@ -1408,6 +1822,15 @@ class WebControlPlaneService:
             at=datetime.now(UTC),
         )
         authorization_error = cast(str | None, authorization["blocking_reason"])
+        business_coverage = cast_dict(bundle["coverage_report"])
+        business_coverage_ready = (
+            business_coverage.get("status") == "passed"
+            and business_coverage.get("coverage_percent") == 100
+        )
+        if authorization_error is None and not business_coverage_ready:
+            authorization_error = (
+                "Business coverage must be 100 before TestDataPlan or UI execution"
+            )
         if authorization_error is None and closure_stale:
             authorization_error = "Change Closure is stale for current Edit Result"
         running = execution is not None and execution["status"] == "running"
@@ -1419,10 +1842,17 @@ class WebControlPlaneService:
             target_closure=closure,
         )
         controls = {
-            "can_start": authorization["authorized"] is True and execution is None,
+            "can_start": (
+                authorization["authorized"] is True
+                and business_coverage_ready
+                and execution is None
+            ),
             "can_recover": recoverable,
             "can_rerun": (
-                authorization["authorized"] is True and execution is not None and not running
+                authorization["authorized"] is True
+                and business_coverage_ready
+                and execution is not None
+                and not running
             ),
             "is_revised_version": current_revision is not None,
             "requires_scope_confirmation": (authorization["status"] == "confirmation_required"),
@@ -1439,7 +1869,7 @@ class WebControlPlaneService:
             "test_plan": bundle["test_plan"],
             "test_data_plan": bundle["test_data_plan"],
             "test_data_execution": execution,
-            "business_coverage": bundle["coverage_report"],
+            "business_coverage": business_coverage,
             "changed_line_coverage": changed_line_coverage,
             "change_closure": closure,
             "screenshots": screenshots,
@@ -1511,6 +1941,12 @@ class WebControlPlaneService:
         if bundle is None:
             raise ValueError("Change Orchestration does not exist")
         orchestration = cast_dict(bundle["orchestration"])
+        business_coverage = cast_dict(bundle["coverage_report"])
+        if (
+            business_coverage.get("status") != "passed"
+            or business_coverage.get("coverage_percent") != 100
+        ):
+            raise ValueError("Business coverage must be 100 before TestDataPlan or UI execution")
         project_id = str(orchestration["project_id"])
         orchestration_id = str(orchestration["orchestration_id"])
         plan = cast_dict(bundle["test_data_plan"])
@@ -1730,6 +2166,15 @@ def _resolved_local_directory(value: Path, *, field_name: str) -> Path:
     return resolved
 
 
+def _reusable_edit_packet_id(packet: dict[str, object]) -> str | None:
+    """Reuse only the active Packet for the currently confirmed Impact."""
+
+    packet_id = packet.get("id")
+    if packet.get("status") != "active" or not isinstance(packet_id, str):
+        return None
+    return packet_id
+
+
 def _checkpoint_subjects(
     *,
     request: dict[str, object],
@@ -1851,6 +2296,35 @@ def _confirmation_details(
             "screenshots": management.get("screenshots", []),
         }
     raise ValueError(f"Unknown change confirmation checkpoint: {checkpoint}")
+
+
+def _initialize_managed_local_git_baseline(*, workspace_root: Path, project_id: str) -> None:
+    """Compatibility wrapper for the code-only local baseline helper."""
+
+    LocalSourceControlService().ensure(
+        root=workspace_root,
+        project_id=project_id,
+        source_kind="code",
+        position=0,
+        require_repository_root=True,
+    )
+
+
+def _safe_project_stack_context(workspace_root: Path) -> dict[str, object]:
+    """Keep one unavailable local Workspace from hiding every registered Project."""
+
+    try:
+        return detect_project_stack(workspace_root).copilot_context()
+    except (OSError, ValueError):
+        return {
+            "detection_status": "unavailable",
+            "stack_id": None,
+            "evidence": [],
+            "missing_signals": ["コード Workspace を読み取れません"],
+            "quality_readiness": "unavailable",
+            "quality_evidence": [],
+            "quality_missing_signals": ["コード Workspace を読み取れません"],
+        }
 
 
 def _web_id(prefix: str, *values: str) -> str:

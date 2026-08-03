@@ -957,6 +957,38 @@ class OrchestrationTaskRepository:
                     payload={"reason": "canonical_workflow_completed"},
                 )
 
+    def supersede_open_for_run(self, *, automation_run_id: str, actor: str) -> None:
+        """Release and retire tasks owned by a superseded automation run."""
+        with self._connection.transaction(), self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT orchestration_task_id, project_id
+                FROM orchestration_tasks
+                WHERE automation_run_id = %s
+                  AND state IN ('ready', 'claimed', 'running', 'submitted')
+                FOR UPDATE
+                """,
+                (automation_run_id,),
+            )
+            for task_id_value, project_id_value in cursor.fetchall():
+                task_id = str(task_id_value)
+                self._close_active_claim(cursor, task_id, "automation_run_superseded")
+                cursor.execute(
+                    """
+                    UPDATE orchestration_tasks SET state = 'superseded', updated_at = now()
+                    WHERE orchestration_task_id = %s
+                    """,
+                    (task_id,),
+                )
+                self._append_event(
+                    cursor,
+                    task_id=task_id,
+                    project_id=str(project_id_value),
+                    event_type="superseded",
+                    actor=actor,
+                    payload={"reason": "automation_run_superseded"},
+                )
+
     def update_priority(self, *, task_id: str, priority: int, actor: str) -> dict[str, object]:
         """Update queue priority while preserving the immutable task definition."""
         _validate_actor(actor)

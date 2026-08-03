@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
 from operamind.application.main_change_flow import (
     FLOW_STAGE_IDS,
+    _ai_execution_source,
     build_main_change_flow,
 )
 
@@ -16,9 +19,7 @@ def _request() -> dict[str, object]:
             "requirement_text": "経費一覧に差戻し状態を追加する",
             "ambiguity_status": "clear",
             "ambiguities": [],
-            "business_rules": [
-                {"business_rule_id": "rule-001", "text": "差戻しを検索できる"}
-            ],
+            "business_rules": [{"business_rule_id": "rule-001", "text": "差戻しを検索できる"}],
         },
     }
 
@@ -132,27 +133,21 @@ def test_projection_exposes_exactly_six_product_stages_and_no_internal_approval(
                         "path": "src/ExpenseService.java",
                         "language": "java",
                         "role": "production",
-                        "symbols": [
-                            {"symbol_id": "symbol-search", "name": "search"}
-                        ],
+                        "symbols": [{"symbol_id": "symbol-search", "name": "search"}],
                     },
                     {
                         "file_id": "file-repository",
                         "path": "src/ExpenseRepository.java",
                         "language": "java",
                         "role": "production",
-                        "symbols": [
-                            {"symbol_id": "symbol-find", "name": "findByStatus"}
-                        ],
+                        "symbols": [{"symbol_id": "symbol-find", "name": "findByStatus"}],
                     },
                     {
                         "file_id": "file-test",
                         "path": "test/ExpenseServiceTest.java",
                         "language": "java",
                         "role": "test",
-                        "symbols": [
-                            {"symbol_id": "symbol-test", "name": "searchReturned"}
-                        ],
+                        "symbols": [{"symbol_id": "symbol-test", "name": "searchReturned"}],
                     },
                 ],
                 "edges": [
@@ -201,9 +196,7 @@ def test_projection_exposes_exactly_six_product_stages_and_no_internal_approval(
         copilot_task={
             "coding_task_id": "copilot-001",
             "state": "completed",
-            "commands": [
-                {"command_ref": "targeted-unit", "status": "passed", "exit_code": 0}
-            ],
+            "commands": [{"command_ref": "targeted-unit", "status": "passed", "exit_code": 0}],
         },
         execution={
             "test_plan": _test_plan(),
@@ -285,9 +278,7 @@ def test_projection_exposes_exactly_six_product_stages_and_no_internal_approval(
     assert "test-case-internal-001" not in serialized
     assert "flow-internal-001" not in serialized
     assert "step-internal-001" not in serialized
-    assert result["stages"][2]["details"]["items"][0]["target_path"] == (
-        "src/ExpenseService.java"
-    )
+    assert result["stages"][2]["details"]["items"][0]["target_path"] == ("src/ExpenseService.java")
     impact_graph = result["stages"][2]["details"]["impact_graph"]
     assert [node["path"] for node in impact_graph["nodes"]] == [
         "src/ExpenseService.java",
@@ -300,17 +291,13 @@ def test_projection_exposes_exactly_six_product_stages_and_no_internal_approval(
     }
     assert impact_graph["relation_count"] == 2
     assert impact_graph["nodes"][0]["rationale"] == "状態条件を追加するため"
-    assert impact_graph["nodes"][0]["related_tests"] == [
-        "test/ExpenseServiceTest.java"
-    ]
+    assert impact_graph["nodes"][0]["related_tests"] == ["test/ExpenseServiceTest.java"]
     assert result["stages"][3]["details"]["commands"][0] == {
         "command_ref": "targeted-unit",
         "status": "passed",
         "exit_code": 0,
     }
-    assert result["stages"][3]["details"]["test_cases"][0]["title"] == (
-        "差戻し状態で検索する"
-    )
+    assert result["stages"][4]["details"]["ui_test_cases"][0]["title"] == ("差戻し状態で検索する")
     generation_flow = result["stages"][4]["details"]["generation_flows"][0]
     assert generation_flow["steps"][0]["output_variables"] == ["expense_id"]
     assert generation_flow["steps"][0]["assertions"][0]["expected"] == "RETURNED"
@@ -320,6 +307,62 @@ def test_projection_exposes_exactly_six_product_stages_and_no_internal_approval(
             "title": "差戻し状態で検索する",
             "status": "passed",
             "summary": "期待した差戻し申請を確認",
+        }
+    ]
+
+
+def test_ui_confirmation_exposes_business_coverage_with_rule_text() -> None:
+    result = build_main_change_flow(
+        request=_request(),
+        document_diff={"total": 1, "changes": [{"change_id": "doc-1"}]},
+        workspace={
+            "impact_report": {"id": "impact-001", "status": "confirmed"},
+            "confirmation": {"id": "confirmation-001"},
+            "edit_result": {
+                "id": "edit-001",
+                "status": "in_scope",
+                "validation_mode": "committed",
+                "tests_passed": True,
+                "command_evidence_status": "verified",
+                "changed_line_coverage_status": "passed",
+            },
+        },
+        automation={"current_stage": "test_plan_confirmation", "status": "waiting"},
+        copilot_task={"state": "completed", "commands": []},
+        execution={
+            "test_plan": _test_plan(),
+            "test_data_plan": _test_data_plan(),
+            "business_coverage": {
+                "status": "failed",
+                "coverage_percent": 0,
+                "items": [
+                    {
+                        "business_rule_id": "rule-001",
+                        "test_case_refs": [],
+                        "criterion_refs": [],
+                        "status": "uncovered",
+                    }
+                ],
+            },
+        },
+    )
+
+    details = result["stages"][4]["details"]
+    assert result["status"] == "blocked"
+    assert result["current_stage"] == "ui_validation"
+    assert result["stages"][4]["status"] == "blocked"
+    assert result["stages"][4]["blocking_reasons"] == [
+        "業務要件カバレッジが 100% ではないため、TestPlan を Copilot に返却します。"
+    ]
+    assert details["confirmation"] is None
+    assert details["business_coverage_status"] == "failed"
+    assert details["business_coverage_percent"] == 0
+    assert details["business_coverage_items"] == [
+        {
+            "text": "差戻しを検索できる",
+            "status": "uncovered",
+            "test_case_count": 0,
+            "criterion_count": 0,
         }
     ]
 
@@ -336,12 +379,8 @@ def test_document_stage_projects_field_level_before_and_after_values() -> None:
                     "fact_type": "screen_field",
                     "change_type": "modified",
                     "summary": "状態表示を更新",
-                    "before": {
-                        "values": {"label": "承認済", "unchanged": "same"}
-                    },
-                    "after": {
-                        "values": {"label": "差戻し", "unchanged": "same"}
-                    },
+                    "before": {"values": {"label": "承認済", "unchanged": "same"}},
+                    "after": {"values": {"label": "差戻し", "unchanged": "same"}},
                     "source_refs": ["設計書.xlsx#検索条件"],
                 }
             ]
@@ -353,9 +392,7 @@ def test_document_stage_projects_field_level_before_and_after_values() -> None:
     )
 
     change = result["stages"][1]["details"]["changes"][0]
-    assert change["field_deltas"] == [
-        {"field": "label", "before": "承認済", "after": "差戻し"}
-    ]
+    assert change["field_deltas"] == [{"field": "label", "before": "承認済", "after": "差戻し"}]
     assert "change_id" not in change
     assert "stable_key" not in change
 
@@ -381,6 +418,55 @@ def test_projection_stops_at_document_generation_without_exposing_scheduler_stat
     assert document["status"] == "waiting"
     assert document["executor"] == "vscode_github_copilot"
     assert "RAG" in document["summary"]
+
+
+def test_projection_labels_codex_fallback_without_forging_copilot_evidence() -> None:
+    result = build_main_change_flow(
+        request=_request(),
+        document_diff={"total": 1, "changes": [{"change_id": "doc-1"}]},
+        workspace={
+            "impact_report": {"id": "impact-001", "status": "confirmed"},
+            "confirmation": {"id": "confirmation-001"},
+            "edit_packet": {"editable_files": []},
+            "edit_result": {
+                "id": "edit-001",
+                "status": "no_changes",
+                "validation_mode": "committed",
+                "tests_passed": True,
+                "command_evidence_status": "verified",
+            },
+        },
+        automation={"current_stage": "test_plan_confirmation", "status": "waiting"},
+        copilot_task={
+            "state": "completed",
+            "claimed_by": "codex-fallback-r4",
+            "accepted_by": "codex:fallback",
+            "commands": [],
+            "events": [{"actor": "codex:fallback"}],
+        },
+        execution={"test_plan": _test_plan(), "test_data_plan": _test_data_plan()},
+    )
+
+    document = result["stages"][1]
+    compile_test = result["stages"][3]
+    assert document["executor"] == "codex_fallback"
+    assert document["details"]["ai_source"] == "Codex fallback"
+    assert "Codex fallback" in document["summary"]
+    assert "GitHub Copilot" not in document["summary"]
+    assert compile_test["executor"] == "codex_fallback"
+    assert compile_test["details"]["ai_source"] == "Codex fallback"
+
+
+def test_ai_source_uses_accepted_executor_instead_of_later_audit_actor() -> None:
+    assert _ai_execution_source(
+        {
+            "accepted_by": "vscode:github-copilot",
+            "events": [
+                {"event_type": "accepted", "actor": "vscode:github-copilot"},
+                {"event_type": "context_read", "actor": "codex:auditor"},
+            ],
+        }
+    ) == ("vscode_github_copilot", "VS Code GitHub Copilot")
 
 
 def test_projection_surfaces_business_blockers_on_the_relevant_product_stage() -> None:
@@ -468,3 +554,109 @@ def test_working_diff_keeps_compile_test_running_until_committed_evidence() -> N
 
     assert result["current_stage"] == "compile_test"
     assert result["stages"][3]["status"] == "running"
+
+
+def test_verification_only_no_change_result_completes_compile_test() -> None:
+    result = build_main_change_flow(
+        request=_request(),
+        document_diff={"total": 1, "changes": [{"change_id": "doc-1"}]},
+        workspace={
+            "impact_report": {"id": "impact-001", "status": "confirmed"},
+            "confirmation": {"id": "confirmation-001"},
+            "edit_packet": {
+                "id": "packet-001",
+                "status": "superseded",
+                "editable_files": [],
+            },
+            "edit_result": {
+                "id": "edit-verified",
+                "status": "no_changes",
+                "validation_mode": "committed",
+                "tests_passed": True,
+                "command_evidence_status": "verified",
+            },
+        },
+        automation={"current_stage": "test_plan_confirmation", "status": "running"},
+        copilot_task={"state": "completed", "commands": []},
+        execution={"test_plan": _test_plan(), "test_data_plan": _test_data_plan()},
+    )
+
+    assert result["stages"][3]["status"] == "completed"
+
+
+def test_future_stale_copilot_failure_does_not_override_current_confirmation() -> None:
+    result = build_main_change_flow(
+        request=_request(),
+        document_diff={"total": 0, "changes": []},
+        workspace=None,
+        automation={
+            "current_stage": "requirement_confirmation",
+            "status": "running",
+            "next_action": "confirm_requirement",
+            "pending_confirmation": {
+                "checkpoint": "requirement",
+                "subject_digest": "a" * 64,
+                "stage_label": "変更要件の確認",
+                "message": "変更要件を確認してください。",
+            },
+        },
+        copilot_task={"state": "cancelled", "commands": []},
+        execution=None,
+    )
+
+    assert result["status"] == "in_progress"
+    assert result["current_stage"] == "requirement"
+    assert result["stages"][3]["status"] == "waiting"
+    assert result["stages"][3]["blocking_reasons"] == []
+
+
+@pytest.mark.parametrize(
+    ("automation_stage", "expected_stage", "stage_index"),
+    [
+        ("test_plan_confirmation", "ui_validation", 4),
+        ("ui_test_confirmation", "ui_validation", 4),
+        ("final_report_confirmation", "final_report", 5),
+    ],
+)
+def test_rejected_confirmation_blocks_the_visible_product_stage(
+    automation_stage: str, expected_stage: str, stage_index: int
+) -> None:
+    result = build_main_change_flow(
+        request=_request(),
+        document_diff={"total": 1, "changes": [{"change_id": "doc-1"}]},
+        workspace={
+            "impact_report": {"id": "impact-001", "status": "confirmed"},
+            "confirmation": {"id": "confirmation-001"},
+            "edit_result": {
+                "id": "edit-001",
+                "status": "in_scope",
+                "validation_mode": "committed",
+                "tests_passed": True,
+                "command_evidence_status": "verified",
+            },
+        },
+        automation={
+            "current_stage": automation_stage,
+            "status": "blocked",
+            "blocking_reason": "ユーザーにより差し戻されました。",
+        },
+        copilot_task={"state": "completed", "commands": []},
+        execution={
+            "test_plan": _test_plan(),
+            "test_data_plan": _test_data_plan(),
+            "test_data_execution": {"status": "passed", "result": {}},
+            "business_coverage": {"coverage_percent": 100},
+            "changed_line_coverage": {"coverage_percent": 90},
+            "change_closure": {
+                "status": "passed",
+                "ui_status": "passed",
+                "blocking_reasons": [],
+                "test_results": [],
+            },
+        },
+    )
+
+    assert result["status"] == "blocked"
+    assert result["current_stage"] == expected_stage
+    assert result["stages"][stage_index]["status"] == "blocked"
+    assert result["stages"][stage_index]["blocking_reasons"] == ["ユーザーにより差し戻されました。"]

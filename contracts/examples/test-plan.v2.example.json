@@ -1,0 +1,26 @@
+{
+  "artifact_type": "TestPlan",
+  "schema_version": "v2",
+  "plan_kind": "ui",
+  "test_plan_id": "ui-test-plan-expense-status",
+  "change_request_id": "change-expense-status",
+  "project_id": "visiondemo",
+  "status": "ready",
+  "test_cases": [
+    {
+      "test_case_id": "ui-expense-status-search",
+      "title": "差戻し状態の経費を検索する",
+      "level": "ui",
+      "execution_mode": "browser",
+      "business_rule_refs": ["expense-status-rule"],
+      "acceptance_criteria_refs": ["expense-status-visible"],
+      "preconditions": ["差戻し状態の経費が一件登録されている"],
+      "steps": ["経費一覧を開く", "状態で差戻しを選択する", "検索を実行する"],
+      "step_ids": ["open-expense-list", "select-returned-status", "search-expenses"],
+      "expected_results": ["差戻し状態の経費だけが一覧に表示される"],
+      "test_data_refs": ["expense-returned-data"]
+    }
+  ],
+  "requirement_evidence": [],
+  "blocking_reasons": []
+}

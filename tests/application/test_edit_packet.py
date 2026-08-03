@@ -62,3 +62,75 @@ def test_edit_packet_allows_a_graph_validated_new_test_file(tmp_path: Path) -> N
     assert result.artifact["test_files"] == [
         "src/test/java/example/ExpenseListTemplateTest.java"
     ]
+
+
+def test_edit_packet_supports_review_only_verification_without_write_authority(
+    tmp_path: Path,
+) -> None:
+    service = object.__new__(EditPacketService)
+    service._contracts = MagicMock()
+    service._repository = MagicMock()
+    service._git = MagicMock()
+    service._repository.load_source.return_value = EditPacketSource(
+        project_id="project-001",
+        analysis_case_id="case-001",
+        impact_report_id="report-001",
+        confirmation_id="confirmation-001",
+        repository_id="repository-001",
+        repository_revision_id="revision-001",
+        commit_sha="a" * 40,
+        remote_url="https://example.invalid/repository.git",
+        workspace_root=str(tmp_path),
+        business_summary="Verify the existing expense status search.",
+        required_ui_scenario_refs=("expense-status-search",),
+        approved_item_ids=("service", "test"),
+        items=(
+            ConfirmedImpactItem(
+                impact_item_id="service",
+                target_path="src/main/java/example/ExpenseService.java",
+                target_symbols=("search",),
+                recommended_action="review_only",
+                test_file_refs=("src/test/java/example/ExpenseServiceTest.java",),
+            ),
+            ConfirmedImpactItem(
+                impact_item_id="test",
+                target_path="src/test/java/example/ExpenseServiceTest.java",
+                target_symbols=("searchWithoutStatusReturnsAll",),
+                recommended_action="review_only",
+                test_file_refs=("src/test/java/example/ExpenseServiceTest.java",),
+            ),
+        ),
+    )
+    service._git.inspect.return_value = GitRevisionEvidence(
+        workspace_root=tmp_path,
+        head_sha="a" * 40,
+        remote_url="https://example.invalid/repository.git",
+        tracked_paths=frozenset(
+            {
+                "src/main/java/example/ExpenseService.java",
+                "src/test/java/example/ExpenseServiceTest.java",
+            }
+        ),
+    )
+    service._repository.publish.return_value = MagicMock()
+
+    result = service.run(
+        EditPacketRequest(
+            edit_packet_id="packet-001",
+            project_id="project-001",
+            analysis_case_id="case-001",
+            impact_report_id="report-001",
+            confirmation_id="confirmation-001",
+            workspace_root=tmp_path,
+            forbidden_globs=("**/.env",),
+        )
+    )
+
+    assert result.artifact["editable_files"] == []
+    assert result.artifact["allowed_items"] == []
+    assert result.artifact["read_only_files"] == [
+        "src/main/java/example/ExpenseService.java"
+    ]
+    assert result.artifact["test_files"] == [
+        "src/test/java/example/ExpenseServiceTest.java"
+    ]

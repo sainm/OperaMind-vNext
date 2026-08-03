@@ -5,12 +5,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from operamind.application.project_stack import (
     SPRINGBOOT15_THYMELEAF_GRADLE,
     ProjectProfileBootstrapper,
     _gradle_wrapper,
     detect_project_stack,
 )
+from operamind.application.web_control_plane import _safe_project_stack_context
 from operamind.infrastructure.postgres import ActiveProfileBinding
 from operamind.profiles import ProfileCatalog
 
@@ -157,6 +160,22 @@ def test_bootstrap_leaves_unrecognized_project_unchanged(tmp_path: Path) -> None
     assert repository.activation_calls == []
 
 
+def test_bootstrap_blocks_supported_stack_without_coverage_prerequisites(
+    tmp_path: Path,
+) -> None:
+    _write_supported_project(tmp_path, with_coverage=False)
+
+    with pytest.raises(ValueError, match="JaCoCo plugin"):
+        ProjectProfileBootstrapper(
+            profiles=ProfileCatalog.load(ROOT / "profiles"),
+            repository=_ProfileRepository(),
+        ).ensure(
+            project_id="project-1",
+            repository_id="repository-1",
+            workspace_root=tmp_path,
+        )
+
+
 def test_bootstrap_upgrades_only_an_older_binding_of_the_same_builtin_profile(
     tmp_path: Path,
 ) -> None:
@@ -216,15 +235,28 @@ def test_gradle_wrapper_detection_accepts_windows_batch_wrapper(tmp_path: Path) 
     assert _gradle_wrapper(tmp_path, platform_name="nt") == batch
 
 
-def _write_supported_project(root: Path) -> None:
+def test_project_list_stack_context_reports_a_missing_local_workspace(tmp_path: Path) -> None:
+    context = _safe_project_stack_context(tmp_path / "missing-workspace")
+
+    assert context["detection_status"] == "unavailable"
+    assert context["quality_readiness"] == "unavailable"
+    assert context["missing_signals"] == ["コード Workspace を読み取れません"]
+
+
+def _write_supported_project(root: Path, *, with_coverage: bool = True) -> None:
     (root / "gradle" / "wrapper").mkdir(parents=True)
     (root / "gradlew").write_text("#!/bin/sh\n", encoding="utf-8")
     (root / "gradle" / "wrapper" / "gradle-wrapper.properties").write_text(
         "distributionUrl=https://services.gradle.org/distributions/gradle-4.10.3-bin.zip\n",
         encoding="utf-8",
     )
-    (root / "build.gradle").write_text(
-        """
+    coverage_configuration = (
+        "apply plugin: 'jacoco'\n"
+        "jacocoTestReport { reports { xml.enabled true } }"
+        if with_coverage
+        else ""
+    )
+    build_text = """
 buildscript {
     ext {
         springBootVersion = '1.5.22.RELEASE'
@@ -234,10 +266,13 @@ buildscript {
     }
 }
 apply plugin: 'org.springframework.boot'
+__COVERAGE_CONFIGURATION__
 dependencies {
     compile 'org.springframework.boot:spring-boot-starter-thymeleaf'
 }
-""",
+""".replace("__COVERAGE_CONFIGURATION__", coverage_configuration)
+    (root / "build.gradle").write_text(
+        build_text,
         encoding="utf-8",
     )
     template = root / "app" / "src" / "main" / "resources" / "templates" / "expense"
@@ -246,3 +281,7 @@ dependencies {
         '<html xmlns:th="http://www.thymeleaf.org"></html>',
         encoding="utf-8",
     )
+    if with_coverage:
+        test = root / "src" / "test" / "java" / "example" / "SmokeTest.java"
+        test.parent.mkdir(parents=True)
+        test.write_text("class SmokeTest {}\n", encoding="utf-8")

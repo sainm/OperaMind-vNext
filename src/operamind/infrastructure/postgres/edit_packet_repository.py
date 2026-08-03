@@ -569,7 +569,9 @@ def _validate_packet_semantics(*, artifact: dict[str, Any], source: EditPacketSo
     actionable = tuple(
         item for item in approved_items if item.recommended_action in {"modify", "add", "delete"}
     )
-    test_files = sorted({path for item in actionable for path in item.test_file_refs})
+    verification_only = not actionable
+    test_sources = approved_items if verification_only else actionable
+    test_files = sorted({path for item in test_sources for path in item.test_file_refs})
     expected_files = (
         sorted({item.target_path for item in actionable if item.target_path not in test_files}),
         sorted(
@@ -577,6 +579,7 @@ def _validate_packet_semantics(*, artifact: dict[str, Any], source: EditPacketSo
                 item.target_path
                 for item in approved_items
                 if item.recommended_action == "review_only"
+                and item.target_path not in test_files
             }
         ),
         test_files,

@@ -26,6 +26,7 @@ _FULLWIDTH_DIGITS = str.maketrans(
     "\uff10\uff11\uff12\uff13\uff14\uff15\uff16\uff17\uff18\uff19",
     "0123456789",
 )
+_ANALYZER_IDENTITY_VERSION = "v2-whole-plan-regeneration"
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,8 +70,12 @@ class TestCaseChangeAnalyzer:
         for sequence, statement in enumerate(statements, start=1):
             intent = _parse_statement(statement)
             if intent is None:
-                blockers.append(
-                    f"{sequence} 行目を解釈できません。対応する変更形式で書き直してください。"
+                operations.append(
+                    _whole_plan_regeneration_operation(
+                        sequence=sequence,
+                        instruction=statement,
+                        test_plan=test_plan,
+                    )
                 )
                 continue
             case_hint = _case_hint(statement)
@@ -124,6 +129,7 @@ class TestCaseChangeAnalyzer:
             status = "deterministic"
         proposal_id = _id(
             "test-case-proposal",
+            _ANALYZER_IDENTITY_VERSION,
             str(orchestration["orchestration_id"]),
             value,
         )
@@ -197,6 +203,66 @@ class TestCaseRevisionPlanner:
             stale_closure_result_ids=stale_closure_result_ids,
         )
 
+    def validate_regenerated_operation_effects(
+        self,
+        *,
+        source_bundle: dict[str, Any],
+        operations: list[dict[str, Any]],
+        test_plan: dict[str, Any],
+        test_data_plan: dict[str, Any],
+    ) -> None:
+        """Prove that complete AI output implements every confirmed operation."""
+
+        expected_plan = copy.deepcopy(cast(dict[str, Any], source_bundle["test_plan"]))
+        expected_acceptance = copy.deepcopy(
+            cast(dict[str, Any], source_bundle["acceptance_criteria"])
+        )
+        expected_data = copy.deepcopy(cast(dict[str, Any], source_bundle["test_data_plan"]))
+        bounded_operations = [
+            operation for operation in operations if operation["field"] != "plan_structure"
+        ]
+        structural_operations = [
+            operation for operation in operations if operation["field"] == "plan_structure"
+        ]
+        for operation in bounded_operations:
+            _apply_operation(
+                operation=operation,
+                test_plan=expected_plan,
+                acceptance=expected_acceptance,
+                test_data=expected_data,
+            )
+        for operation in bounded_operations:
+            try:
+                expected = _operation_target(
+                    operation=operation,
+                    test_plan=expected_plan,
+                    test_data=expected_data,
+                )
+                actual = _operation_target(
+                    operation=operation,
+                    test_plan=test_plan,
+                    test_data=test_data_plan,
+                )
+            except (KeyError, StopIteration, TypeError, IndexError) as error:
+                raise ValueError(
+                    "Regenerated UI TestPlan is missing a confirmed operation target: "
+                    f"{operation.get('operation_id')}"
+                ) from error
+            if actual != expected:
+                raise ValueError(
+                    "Regenerated UI TestPlan did not apply confirmed operation: "
+                    f"{operation.get('operation_id')}"
+                )
+        if structural_operations and not _planning_content_changed(
+            source_bundle=source_bundle,
+            test_plan=test_plan,
+            test_data_plan=test_data_plan,
+        ):
+            raise ValueError(
+                "Regenerated UI TestPlan did not change planning content for the confirmed "
+                "whole-plan instruction"
+            )
+
     def restore(
         self,
         *,
@@ -221,6 +287,43 @@ class TestCaseRevisionPlanner:
             test_data=copy.deepcopy(cast(dict[str, Any], restore_bundle["test_data_plan"])),
             applied_by=applied_by,
             selections={},
+            stale_run_ids=stale_run_ids,
+            stale_artifact_refs=stale_artifact_refs,
+            stale_evidence_refs=stale_evidence_refs,
+            stale_closure_result_ids=stale_closure_result_ids,
+        )
+
+    def plan_regenerated(
+        self,
+        *,
+        source_bundle: dict[str, Any],
+        proposal: dict[str, Any],
+        operations: list[dict[str, Any]],
+        test_plan: dict[str, Any],
+        test_data_plan: dict[str, Any],
+        applied_by: str,
+        selections: dict[str, str] | None = None,
+        stale_run_ids: list[str] | None = None,
+        stale_artifact_refs: list[str] | None = None,
+        stale_evidence_refs: list[str] | None = None,
+        stale_closure_result_ids: list[str] | None = None,
+    ) -> TestCaseRevisionPlan:
+        """Create a new immutable version from complete AI-regenerated UI plans."""
+
+        acceptance = copy.deepcopy(cast(dict[str, Any], source_bundle["acceptance_criteria"]))
+        _bind_regenerated_cases_to_acceptance(
+            acceptance=acceptance,
+            test_plan=test_plan,
+        )
+        return self._finalize(
+            source_bundle=source_bundle,
+            proposal=proposal,
+            operations=operations,
+            acceptance=acceptance,
+            test_plan=copy.deepcopy(test_plan),
+            test_data=copy.deepcopy(test_data_plan),
+            applied_by=applied_by,
+            selections=selections,
             stale_run_ids=stale_run_ids,
             stale_artifact_refs=stale_artifact_refs,
             stale_evidence_refs=stale_evidence_refs,
@@ -427,6 +530,79 @@ def build_undo_proposal(
 
 
 def _parse_statement(statement: str) -> dict[str, Any] | None:
+    variable_patterns = (
+        re.compile(
+            r"変数"
+            + _QUOTED.format(name="variable")
+            + r"の(?:取得元|出力元|参照先)を"
+            + _QUOTED.format(name="after")
+            + r"(?:に変更|へ変更|に修正)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"(?:将)?变量"
+            + _QUOTED.format(name="variable")
+            + r"的(?:来源|取值路径|输出路径|引用路径)(?:修改|更改)为"
+            + _QUOTED.format(name="after"),
+            re.IGNORECASE,
+        ),
+    )
+    for pattern in variable_patterns:
+        match = pattern.search(statement)
+        if match:
+            return {
+                "field": "variable_bindings",
+                "action": "replace",
+                **match.groupdict(),
+            }
+    process_step_patterns = (
+        (
+            "generation_steps",
+            re.compile(
+                r"(?:生成ステップ|データ生成ステップ)"
+                + _QUOTED.format(name="before")
+                + r"(?:を)?"
+                + _QUOTED.format(name="after")
+                + r"(?:に変更|へ変更|に修正)",
+                re.IGNORECASE,
+            ),
+        ),
+        (
+            "generation_steps",
+            re.compile(
+                r"(?:将)?(?:生成步骤|数据生成步骤)"
+                + _QUOTED.format(name="before")
+                + r"(?:修改|更改)为"
+                + _QUOTED.format(name="after"),
+                re.IGNORECASE,
+            ),
+        ),
+        (
+            "cleanup_steps",
+            re.compile(
+                r"(?:クリーンアップステップ|後始末ステップ)"
+                + _QUOTED.format(name="before")
+                + r"(?:を)?"
+                + _QUOTED.format(name="after")
+                + r"(?:に変更|へ変更|に修正)",
+                re.IGNORECASE,
+            ),
+        ),
+        (
+            "cleanup_steps",
+            re.compile(
+                r"(?:将)?(?:清理步骤|清除步骤)"
+                + _QUOTED.format(name="before")
+                + r"(?:修改|更改)为"
+                + _QUOTED.format(name="after"),
+                re.IGNORECASE,
+            ),
+        ),
+    )
+    for field, pattern in process_step_patterns:
+        match = pattern.search(statement)
+        if match:
+            return {"field": field, "action": "replace", **match.groupdict()}
     indexed_step_patterns = (
         re.compile(
             r"(?:第)?(?P<index>[0-9\uFF10-\uFF19]+)(?:番目)?のステップ(?:を)?"
@@ -773,6 +949,69 @@ def _resolve_intent(
             if len(assertion_choices) == 1
             else ([], assertion_choices, None)
         )
+    if field in {"generation_steps", "cleanup_steps"}:
+        list_name = "steps" if field == "generation_steps" else "cleanup_steps"
+        before = intent.get("before")
+        after = intent.get("after")
+        step_matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for flow in cast(list[dict[str, Any]], bundle["test_data_plan"]["generation_flows"]):
+            if case_id not in cast(list[str], flow["test_case_refs"]):
+                continue
+            for step in cast(list[dict[str, Any]], flow[list_name]):
+                if str(step.get("business_action")) == str(before):
+                    step_matches.append((flow, step))
+        if not step_matches:
+            label = "生成ステップ" if field == "generation_steps" else "クリーンアップ"
+            return [], [], f"{case['title']} に{label}「{before}」がありません。"
+        choices: list[tuple[str, list[dict[str, Any]]]] = []
+        for flow, step in step_matches:
+            operation = _operation(
+                sequence=sequence,
+                case=case,
+                field=field,
+                action="replace",
+                before=before,
+                after=after,
+            )
+            operation["flow_id"] = flow["flow_id"]
+            operation["step_id"] = step["step_id"]
+            choices.append((f"{case['title']}: {flow['title']} / {before}", [operation]))
+        return (choices[0][1], [], None) if len(choices) == 1 else ([], choices, None)
+    if field == "variable_bindings":
+        variable = str(intent["variable"])
+        binding_matches: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+        for flow in cast(list[dict[str, Any]], bundle["test_data_plan"]["generation_flows"]):
+            if case_id not in cast(list[str], flow["test_case_refs"]):
+                continue
+            for step in [
+                *cast(list[dict[str, Any]], flow["steps"]),
+                *cast(list[dict[str, Any]], flow["cleanup_steps"]),
+            ]:
+                for binding in cast(list[dict[str, Any]], step["output_bindings"]):
+                    if str(binding.get("variable")) == variable:
+                        binding_matches.append((flow, step, binding))
+        if not binding_matches:
+            return [], [], f"{case['title']} に変数「{variable}」がありません。"
+        choices = []
+        for flow, step, binding in binding_matches:
+            operation = _operation(
+                sequence=sequence,
+                case=case,
+                field=field,
+                action="replace",
+                before=binding.get("path"),
+                after=intent["after"],
+            )
+            operation["flow_id"] = flow["flow_id"]
+            operation["step_id"] = step["step_id"]
+            operation["variable"] = variable
+            choices.append(
+                (
+                    f"{case['title']}: {variable} ({step['business_action']})",
+                    [operation],
+                )
+            )
+        return (choices[0][1], [], None) if len(choices) == 1 else ([], choices, None)
     return [], [], "対応していない変更対象です。"
 
 
@@ -791,6 +1030,9 @@ def _operation(
         "test_data_values": "テストデータ項目",
         "expected_results": "期待結果",
         "business_assertions": "業務アサーション",
+        "generation_steps": "データ生成手順",
+        "cleanup_steps": "クリーンアップ手順",
+        "variable_bindings": "変数の取得元",
     }
     operation: dict[str, Any] = {
         "operation_id": _id(
@@ -814,6 +1056,55 @@ def _operation(
     if after is not None:
         operation["after"] = after
     return operation
+
+
+def _whole_plan_regeneration_operation(
+    *,
+    sequence: int,
+    instruction: str,
+    test_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep free-form structural changes auditable without pretending to parse them locally."""
+
+    cases = cast(list[dict[str, Any]], test_plan["test_cases"])
+    return {
+        "operation_id": _id(
+            "test-case-operation",
+            str(sequence),
+            "whole-plan",
+            instruction,
+        ),
+        "test_case_id": "whole-ui-test-plan",
+        "case_title": "UI TestPlan / TestDataPlan 全体",
+        "field": "plan_structure",
+        "action": "regenerate",
+        "before": {
+            "test_case_count": len(cases),
+            "test_case_titles": [str(case["title"]) for case in cases],
+        },
+        "after": instruction,
+        "summary_before": f"現在の計画: {len(cases)} Test Case",
+        "summary_after": f"自然言語要求: {instruction}",
+    }
+
+
+def _planning_content_changed(
+    *,
+    source_bundle: dict[str, Any],
+    test_plan: dict[str, Any],
+    test_data_plan: dict[str, Any],
+) -> bool:
+    source = {
+        "test_cases": source_bundle["test_plan"]["test_cases"],
+        "data_sets": source_bundle["test_data_plan"]["data_sets"],
+        "generation_flows": source_bundle["test_data_plan"]["generation_flows"],
+    }
+    regenerated = {
+        "test_cases": test_plan["test_cases"],
+        "data_sets": test_data_plan["data_sets"],
+        "generation_flows": test_data_plan["generation_flows"],
+    }
+    return _canonical_bytes(source) != _canonical_bytes(regenerated)
 
 
 def _linked_criteria(bundle: dict[str, Any], case_id: str) -> list[dict[str, Any]]:
@@ -874,6 +1165,8 @@ def _apply_operation(
     acceptance: dict[str, Any],
     test_data: dict[str, Any],
 ) -> None:
+    if operation["field"] == "plan_structure":
+        raise ValueError("Whole-plan Test Case changes require Copilot regeneration")
     case = next(
         item
         for item in cast(list[dict[str, Any]], test_plan["test_cases"])
@@ -883,16 +1176,25 @@ def _apply_operation(
     action = str(operation["action"])
     if field in {"steps", "expected_results", "test_data_refs"}:
         values = cast(list[Any], case[field])
+        step_ids = cast(list[Any], case.get("step_ids", [])) if field == "steps" else []
         before = operation.get("before")
         after = operation.get("after")
         if action == "replace":
             values[values.index(before)] = after
         elif action == "remove":
+            removed_index = values.index(before)
             values.remove(before)
+            if step_ids:
+                step_ids.pop(removed_index)
         elif action == "insert_after":
-            values.insert(values.index(before) + 1, after)
+            insert_at = values.index(before) + 1
+            values.insert(insert_at, after)
+            if step_ids:
+                step_ids.insert(insert_at, _id("test-step", str(case["test_case_id"]), str(after)))
         elif action == "append":
             values.append(after)
+            if step_ids:
+                step_ids.append(_id("test-step", str(case["test_case_id"]), str(after)))
         if not values:
             raise ValueError(f"Test Case {field} must not become empty")
         if field == "expected_results":
@@ -927,6 +1229,103 @@ def _apply_operation(
         assertion["expected"] = operation["after"]
         _update_acceptance(operation, case, acceptance)
         return
+    if field in {"generation_steps", "cleanup_steps"}:
+        flow = next(
+            item
+            for item in cast(list[dict[str, Any]], test_data["generation_flows"])
+            if item["flow_id"] == operation["flow_id"]
+        )
+        list_name = "steps" if field == "generation_steps" else "cleanup_steps"
+        step = next(
+            item
+            for item in cast(list[dict[str, Any]], flow[list_name])
+            if item["step_id"] == operation["step_id"]
+        )
+        step["business_action"] = operation["after"]
+        return
+    if field == "variable_bindings":
+        flow = next(
+            item
+            for item in cast(list[dict[str, Any]], test_data["generation_flows"])
+            if item["flow_id"] == operation["flow_id"]
+        )
+        step = next(
+            item
+            for item in [
+                *cast(list[dict[str, Any]], flow["steps"]),
+                *cast(list[dict[str, Any]], flow["cleanup_steps"]),
+            ]
+            if item["step_id"] == operation["step_id"]
+        )
+        binding = next(
+            item
+            for item in cast(list[dict[str, Any]], step["output_bindings"])
+            if item["variable"] == operation["variable"]
+        )
+        binding["path"] = operation["after"]
+        return
+    raise ValueError(f"Unsupported Test Case operation field: {field}")
+
+
+def _operation_target(
+    *,
+    operation: dict[str, Any],
+    test_plan: dict[str, Any],
+    test_data: dict[str, Any],
+) -> object:
+    case = next(
+        item
+        for item in cast(list[dict[str, Any]], test_plan["test_cases"])
+        if item["test_case_id"] == operation["test_case_id"]
+    )
+    field = str(operation["field"])
+    if field in {"steps", "expected_results", "test_data_refs"}:
+        return copy.deepcopy(case[field])
+    if field == "test_data_values":
+        data_set = next(
+            item
+            for item in cast(list[dict[str, Any]], test_data["data_sets"])
+            if item["test_data_id"] == operation["data_set_id"]
+        )
+        target: object = data_set
+        for part in cast(list[str | int], operation["json_path"]):
+            target = target[part]  # type: ignore[index]
+        return copy.deepcopy(target)
+    flow = next(
+        item
+        for item in cast(list[dict[str, Any]], test_data["generation_flows"])
+        if item["flow_id"] == operation["flow_id"]
+    )
+    if field == "business_assertions":
+        assertion = next(
+            item
+            for item in cast(list[dict[str, Any]], flow["final_assertions"])
+            if item["assertion_id"] == operation["assertion_id"]
+        )
+        return copy.deepcopy(assertion["expected"])
+    if field in {"generation_steps", "cleanup_steps"}:
+        collection = "steps" if field == "generation_steps" else "cleanup_steps"
+        step = next(
+            item
+            for item in cast(list[dict[str, Any]], flow[collection])
+            if item["step_id"] == operation["step_id"]
+        )
+        return copy.deepcopy(step["business_action"])
+    if field == "variable_bindings":
+        step = next(
+            item
+            for item in [
+                *cast(list[dict[str, Any]], flow["steps"]),
+                *cast(list[dict[str, Any]], flow["cleanup_steps"]),
+            ]
+            if item["step_id"] == operation["step_id"]
+        )
+        binding = next(
+            item
+            for item in cast(list[dict[str, Any]], step["output_bindings"])
+            if item["variable"] == operation["variable"]
+        )
+        return copy.deepcopy(binding["path"])
     raise ValueError(f"Unsupported Test Case operation field: {field}")
 
 
@@ -1051,6 +1450,47 @@ def _update_test_data_refs(
     ]
 
 
+def _bind_regenerated_cases_to_acceptance(
+    *, acceptance: dict[str, Any], test_plan: dict[str, Any]
+) -> None:
+    criteria = cast(list[dict[str, Any]], acceptance["criteria"])
+    cases = cast(list[dict[str, Any]], test_plan["test_cases"])
+    criterion_ids = {str(item["criterion_id"]) for item in criteria}
+    referenced = {
+        str(reference)
+        for case in cases
+        for reference in cast(list[object], case["acceptance_criteria_refs"])
+    }
+    if not referenced or not referenced.issubset(criterion_ids):
+        raise ValueError("Regenerated UI TestPlan must reference only current acceptance criteria")
+    known_rules = {
+        str(reference)
+        for criterion in criteria
+        for reference in cast(list[object], criterion["business_rule_refs"])
+    }
+    for case in cases:
+        case_rules = {str(value) for value in cast(list[object], case["business_rule_refs"])}
+        if not case_rules.issubset(known_rules):
+            raise ValueError(
+                "Regenerated UI TestPlan references an unknown business rule: "
+                f"{case['test_case_id']}"
+            )
+    for criterion in criteria:
+        criterion_id = str(criterion["criterion_id"])
+        test_refs = sorted(
+            str(case["test_case_id"])
+            for case in cases
+            if criterion_id
+            in {str(value) for value in cast(list[object], case["acceptance_criteria_refs"])}
+        )
+        if not test_refs:
+            raise ValueError(
+                f"Regenerated UI TestPlan leaves an acceptance criterion uncovered: {criterion_id}"
+            )
+        criterion["test_case_refs"] = test_refs
+        criterion["assertion_type"] = "ui"
+
+
 def _coverage(
     *,
     source_bundle: dict[str, Any],
@@ -1076,12 +1516,26 @@ def _coverage(
             for item in criteria
             if rule_id in cast(list[str], item["business_rule_refs"])
         )
+        verification_sources = [
+            {
+                "source_kind": "ui_test",
+                "source_refs": [str(item["test_case_id"]), *criterion_refs],
+                "assertion": " / ".join(
+                    str(value) for value in cast(list[object], item.get("expected_results", []))
+                ),
+            }
+            for item in tests
+            if rule_id in cast(list[str], item["business_rule_refs"])
+            and criterion_refs
+            and cast(list[object], item.get("expected_results", []))
+        ]
         items.append(
             {
                 "business_rule_id": rule_id,
                 "test_case_refs": test_refs,
                 "criterion_refs": criterion_refs,
-                "status": "covered" if test_refs and criterion_refs else "uncovered",
+                "verification_sources": verification_sources,
+                "status": "covered" if verification_sources else "uncovered",
             }
         )
     covered = sum(item["status"] == "covered" for item in items)

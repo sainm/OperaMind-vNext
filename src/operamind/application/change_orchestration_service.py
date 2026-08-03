@@ -52,6 +52,13 @@ class ChangeOrchestrationService:
                 copilot_coding_task_id=getattr(evidence, "copilot_coding_task_id", None),
                 generated_test_plan=generated_test_plan,
                 generated_test_data_plan=generated_test_data_plan,
+                scoped_test_files=getattr(evidence, "scoped_test_files", frozenset()),
+                passed_command_refs=getattr(evidence, "passed_command_refs", frozenset()),
+                canonical_artifact_refs=getattr(
+                    evidence,
+                    "canonical_artifact_refs",
+                    frozenset(),
+                ),
             )
         )
         record = self._repository.persist(result=result, created_by=actor)

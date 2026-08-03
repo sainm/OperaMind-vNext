@@ -451,6 +451,7 @@ class TestDataExecutionRepository:
             if record.status != "running" and write.event_type not in {
                 "recovered",
                 "closure_generated",
+                "downstream_publication_failed",
             }:
                 raise ValueError("Completed Test data Run does not accept progress events")
             cursor.execute(
@@ -803,18 +804,21 @@ class TestDataExecutionRepository:
         actual_steps = cursor.fetchall()
         expected_steps = sorted(
             (
-                flow["flow_id"],
-                step["phase"],
-                step["step_id"],
-                step["sequence"],
-                step["channel"],
-                step["status"],
-                step["output_variables"],
-                step["evidence_refs"],
-                step.get("failure_reason"),
-            )
-            for flow in cast(list[dict[str, Any]], artifact["flow_results"])
-            for step in _flow_steps(flow)
+                (
+                    flow["flow_id"],
+                    step["phase"],
+                    step["step_id"],
+                    step["sequence"],
+                    step["channel"],
+                    step["status"],
+                    step["output_variables"],
+                    step["evidence_refs"],
+                    step.get("failure_reason"),
+                )
+                for flow in cast(list[dict[str, Any]], artifact["flow_results"])
+                for step in _flow_steps(flow)
+            ),
+            key=lambda value: (value[0], value[1], value[3]),
         )
         if actual_steps != expected_steps:
             return False

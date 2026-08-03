@@ -57,7 +57,7 @@ class TestDataUiVerificationService:
                  AND orchestration.analysis_case_id = packet.analysis_case_id
                 WHERE orchestration.orchestration_id = %s
                   AND result.validation_mode = 'committed'
-                  AND result.status = 'in_scope'
+                  AND result.status IN ('in_scope', 'no_changes')
                   AND result.result_repository_revision IS NOT NULL
                 ORDER BY result.recorded_at DESC, result.edit_result_id DESC
                 LIMIT 1
@@ -66,7 +66,9 @@ class TestDataUiVerificationService:
             )
             edit_row = cursor.fetchone()
         if edit_row is None:
-            raise ValueError("UI verification requires a committed in-scope Edit Result")
+            raise ValueError(
+                "UI verification requires a committed in-scope or no-changes Edit Result"
+            )
         edit_packet_id = str(edit_row[0])
         revision = str(edit_row[1])
         case_id = str(orchestration["analysis_case_id"])

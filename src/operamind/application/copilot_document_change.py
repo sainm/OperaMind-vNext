@@ -19,6 +19,7 @@ from operamind.application.document_diff import (
     DocumentDiffService,
     DocumentSnapshotBuildResult,
 )
+from operamind.application.local_source_control import LocalSourceControlService
 from operamind.contracts import ContractCatalog
 from operamind.domain import (
     CanonicalDocumentNodeBuilder,
@@ -296,6 +297,66 @@ class CopilotDocumentChangeService:
             for item in staged:
                 item.replacement.unlink(missing_ok=True)
                 item.backup.unlink(missing_ok=True)
+
+    def rollback_materialized(
+        self,
+        *,
+        project_id: str,
+        source_snapshot_id: str,
+        target_snapshot_id: str,
+        document_ids: tuple[str, ...],
+    ) -> tuple[Path, ...]:
+        """Restore a rejected structured draft without overwriting later user edits."""
+
+        if not document_ids or len(document_ids) != len(set(document_ids)):
+            raise ValueError("Rollback document IDs must be non-empty and unique")
+        source_documents = {
+            document_id: self._required_source(
+                project_id=project_id,
+                source_snapshot_id=source_snapshot_id,
+                document_id=document_id,
+            )
+            for document_id in sorted(document_ids)
+        }
+        target_documents = {
+            document_id: self._required_source(
+                project_id=project_id,
+                source_snapshot_id=target_snapshot_id,
+                document_id=document_id,
+            )
+            for document_id in sorted(document_ids)
+        }
+        restore_paths: list[Path] = []
+        expected_digests: dict[Path, str] = {}
+        all_paths: list[Path] = []
+        for document_id in sorted(document_ids):
+            source = source_documents[document_id]
+            target = target_documents[document_id]
+            source_path = _trusted_file_path(source.source_ref).resolve(strict=True)
+            target_path = _trusted_file_path(target.source_ref).resolve(strict=True)
+            if source_path != target_path:
+                raise ValueError(
+                    "Rejected document draft changed its trusted source path: "
+                    f"{document_id}"
+                )
+            current_digest = _file_digest(source_path)
+            if current_digest == source.content_digest:
+                all_paths.append(source_path)
+                continue
+            if current_digest != target.content_digest:
+                raise ValueError(
+                    "Rejected document changed after materialization; manual review is required: "
+                    f"{document_id}"
+                )
+            restore_paths.append(source_path)
+            expected_digests[source_path] = source.content_digest
+            all_paths.append(source_path)
+        if restore_paths:
+            LocalSourceControlService().restore_tracked_files(
+                paths=tuple(restore_paths),
+                expected_digests=expected_digests,
+            )
+        return tuple(all_paths)
 
     def _stage_xlsx_edits(
         self,

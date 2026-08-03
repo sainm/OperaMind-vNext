@@ -1,0 +1,285 @@
+{
+  "artifact_type": "TestDataPlan",
+  "schema_version": "v2",
+  "test_data_plan_id": "test-data-expense-status-ui",
+  "test_plan_id": "ui-test-plan-expense-status",
+  "project_id": "visiondemo",
+  "status": "ready",
+  "data_sets": [
+    {
+      "test_data_id": "expense-returned-data",
+      "test_case_refs": ["ui-expense-status-search"],
+      "setup_actions": [],
+      "cleanup_policy": "isolated_environment"
+    }
+  ],
+  "generation_flows": [
+    {
+      "flow_id": "expense-status-ui-flow",
+      "title": "差戻し経費を作成して一覧で確認する",
+      "test_data_refs": ["expense-returned-data"],
+      "test_case_refs": ["ui-expense-status-search"],
+      "steps": [
+        {
+          "step_id": "open-expense-create",
+          "sequence": 1,
+          "channel": "ui",
+          "business_action": "経費登録画面を開く",
+          "test_step_refs": [],
+          "screen_ref": "expense-create",
+          "ui_action_ref": "open",
+          "playwright": {
+            "mask_locators": [],
+            "action": "goto",
+            "path": "/expense/new",
+            "observations": [{"key": "create_page_title", "kind": "title"}]
+          },
+          "inputs": {},
+          "depends_on": [],
+          "output_bindings": [],
+          "postconditions": [
+            {
+              "assertion_id": "expense-create-opened",
+              "observe_via": "ui",
+              "subject": "create_page_title",
+              "operator": "contains",
+              "expected": "経費"
+            }
+          ]
+        },
+        {
+          "step_id": "enter-expense-title",
+          "sequence": 2,
+          "channel": "ui",
+          "business_action": "件名を入力する",
+          "test_step_refs": [],
+          "screen_ref": "expense-create",
+          "ui_action_ref": "enter-title",
+          "playwright": {
+            "mask_locators": [],
+            "action": "fill",
+            "locator": {"by": "label", "value": "件名"},
+            "value": "差戻し確認用経費",
+            "observations": [
+              {
+                "key": "expense_title",
+                "kind": "value",
+                "locator": {"by": "label", "value": "件名"}
+              }
+            ]
+          },
+          "inputs": {},
+          "depends_on": ["open-expense-create"],
+          "output_bindings": [],
+          "postconditions": [
+            {
+              "assertion_id": "expense-title-entered",
+              "observe_via": "ui",
+              "subject": "expense_title",
+              "operator": "equals",
+              "expected": "差戻し確認用経費"
+            }
+          ]
+        },
+        {
+          "step_id": "select-created-expense-status",
+          "sequence": 3,
+          "channel": "ui",
+          "business_action": "状態で差戻しを選択する",
+          "test_step_refs": [],
+          "screen_ref": "expense-create",
+          "ui_action_ref": "select-status",
+          "playwright": {
+            "mask_locators": [],
+            "action": "select_option",
+            "locator": {"by": "label", "value": "状態"},
+            "value": "RETURNED",
+            "observations": [
+              {
+                "key": "created_expense_status",
+                "kind": "value",
+                "locator": {"by": "label", "value": "状態"}
+              }
+            ]
+          },
+          "inputs": {},
+          "depends_on": ["enter-expense-title"],
+          "output_bindings": [],
+          "postconditions": [
+            {
+              "assertion_id": "created-expense-status-selected",
+              "observe_via": "ui",
+              "subject": "created_expense_status",
+              "operator": "equals",
+              "expected": "RETURNED"
+            }
+          ]
+        },
+        {
+          "step_id": "save-returned-expense",
+          "sequence": 4,
+          "channel": "ui",
+          "business_action": "経費を登録する",
+          "data_effect": "creates",
+          "test_step_refs": [],
+          "screen_ref": "expense-create",
+          "ui_action_ref": "save",
+          "playwright": {
+            "mask_locators": [],
+            "action": "click",
+            "locator": {"by": "role", "value": "button", "name": "登録"},
+            "observations": [
+              {"key": "saved_page_title", "kind": "title"},
+              {
+                "key": "saved_expense_id",
+                "kind": "attribute",
+                "locator": {"by": "css", "value": "[data-expense-id]"},
+                "attribute_name": "data-expense-id"
+              }
+            ]
+          },
+          "inputs": {},
+          "depends_on": ["select-created-expense-status"],
+          "output_bindings": [
+            {
+              "variable": "expense_id",
+              "source": "ui",
+              "path": "saved_expense_id",
+              "required": true
+            }
+          ],
+          "postconditions": [
+            {
+              "assertion_id": "returned-expense-saved",
+              "observe_via": "ui",
+              "subject": "saved_page_title",
+              "operator": "contains",
+              "expected": "経費"
+            }
+          ]
+        },
+        {
+          "step_id": "open-expense-list",
+          "sequence": 5,
+          "channel": "ui",
+          "business_action": "経費一覧を開く",
+          "test_step_refs": ["open-expense-list"],
+          "screen_ref": "expense-list",
+          "ui_action_ref": "open",
+          "playwright": {
+            "mask_locators": [],
+            "action": "goto",
+            "path": "/expense",
+            "observations": [
+              {"key": "page_title", "kind": "title"}
+            ]
+          },
+          "inputs": {},
+          "depends_on": ["save-returned-expense"],
+          "output_bindings": [],
+          "postconditions": [
+            {
+              "assertion_id": "expense-list-title",
+              "observe_via": "ui",
+              "subject": "page_title",
+              "operator": "contains",
+              "expected": "経費"
+            }
+          ]
+        },
+        {
+          "step_id": "select-returned-status-action",
+          "sequence": 6,
+          "channel": "ui",
+          "business_action": "状態で差戻しを選択する",
+          "test_step_refs": ["select-returned-status"],
+          "screen_ref": "expense-list",
+          "ui_action_ref": "select-status",
+          "playwright": {
+            "mask_locators": [],
+            "action": "select_option",
+            "locator": {"by": "label", "value": "状態"},
+            "value": "RETURNED",
+            "observations": [
+              {
+                "key": "selected_status",
+                "kind": "value",
+                "locator": {"by": "label", "value": "状態"}
+              }
+            ]
+          },
+          "inputs": {},
+          "depends_on": ["open-expense-list"],
+          "output_bindings": [],
+          "postconditions": [
+            {
+              "assertion_id": "returned-status-selected",
+              "observe_via": "ui",
+              "subject": "selected_status",
+              "operator": "equals",
+              "expected": "RETURNED"
+            }
+          ]
+        },
+        {
+          "step_id": "search-expenses-action",
+          "sequence": 7,
+          "channel": "ui",
+          "business_action": "検索を実行する",
+          "test_step_refs": ["search-expenses"],
+          "screen_ref": "expense-list",
+          "ui_action_ref": "search",
+          "playwright": {
+            "mask_locators": [],
+            "action": "click",
+            "locator": {"by": "role", "value": "button", "name": "検索"},
+            "observations": [
+              {
+                "key": "returned_rows",
+                "kind": "count",
+                "locator": {"by": "css", "value": "[data-status='RETURNED']"}
+              }
+            ]
+          },
+          "computer_use_fallback": {
+            "reason": "virtualized_ui",
+            "objective": "検索ボタンがアクセシビリティツリーから操作できない場合だけ、画面上の検索ボタンを一度選択する",
+            "max_actions": 3,
+            "requires_confirmation": true,
+            "observations": [
+              {
+                "key": "returned_rows",
+                "kind": "count",
+                "locator": {"by": "css", "value": "[data-status='RETURNED']"}
+              }
+            ]
+          },
+          "inputs": {},
+          "depends_on": ["select-returned-status-action"],
+          "output_bindings": [],
+          "postconditions": [
+            {
+              "assertion_id": "only-returned-expenses",
+              "observe_via": "ui",
+              "subject": "returned_rows",
+              "operator": "count_equals",
+              "expected": 1
+            }
+          ]
+        }
+      ],
+      "final_assertions": [
+        {
+          "assertion_id": "expense-status-ui-case",
+          "observe_via": "test",
+          "subject": "ui-expense-status-search",
+          "operator": "satisfies",
+          "expected": "passed"
+        }
+      ],
+      "cleanup_policy": "isolated_environment",
+      "cleanup_steps": []
+    }
+  ],
+  "blocking_reasons": []
+}

@@ -43,6 +43,8 @@ class ProjectInitializationRecord:
     workspace_root: str
     document_roots: tuple[str, ...]
     source_control_kind: str
+    test_base_url: str | None
+    source_git_baselines: tuple[dict[str, object], ...]
     created: bool
 
 
@@ -124,6 +126,8 @@ class WebControlPlaneRepository:
         source_control_kind: str,
         document_roots: tuple[str, ...],
         configured_by: str,
+        test_base_url: str | None = None,
+        source_git_baselines: tuple[dict[str, object], ...] = (),
     ) -> ProjectInitializationRecord:
         if not all(
             value.strip()
@@ -161,7 +165,8 @@ class WebControlPlaneRepository:
 
             cursor.execute(
                 """
-                SELECT project.name, workspace.workspace_root, workspace.source_control_kind
+                SELECT project.name, workspace.workspace_root, workspace.source_control_kind,
+                       workspace.test_base_url
                 FROM project_workspaces AS workspace
                 JOIN projects AS project ON project.project_id = workspace.project_id
                 WHERE workspace.project_id = %s
@@ -170,8 +175,10 @@ class WebControlPlaneRepository:
             )
             workspace_row = cursor.fetchone()
             if workspace_row is not None and (
-                str(workspace_row[1]), str(workspace_row[2])
-            ) != (workspace_root, source_control_kind):
+                str(workspace_row[1]),
+                str(workspace_row[2]),
+                str(workspace_row[3]) if workspace_row[3] is not None else None,
+            ) != (workspace_root, source_control_kind, test_base_url):
                 raise PersistenceConflictError(
                     "同じプロジェクト ID が別の Workspace 設定で登録されています"
                 )
@@ -195,10 +202,17 @@ class WebControlPlaneRepository:
                 cursor.execute(
                     """
                     INSERT INTO project_workspaces (
-                        project_id, workspace_root, source_control_kind, configured_by
-                    ) VALUES (%s, %s, %s, %s)
+                        project_id, workspace_root, source_control_kind, configured_by,
+                        test_base_url
+                    ) VALUES (%s, %s, %s, %s, %s)
                     """,
-                    (project_id, workspace_root, source_control_kind, configured_by),
+                    (
+                        project_id,
+                        workspace_root,
+                        source_control_kind,
+                        configured_by,
+                        test_base_url,
+                    ),
                 )
             if not stored_roots:
                 cursor.executemany(
@@ -217,6 +231,62 @@ class WebControlPlaneRepository:
                         for position, root in enumerate(document_roots)
                     ],
                 )
+            if source_git_baselines:
+                cursor.executemany(
+                    """
+                    INSERT INTO project_source_git_baselines (
+                        source_binding_id, project_id, source_kind, configured_root,
+                        repository_root, repository_identity, baseline_revision,
+                        management_kind, position
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    [
+                        (
+                            _project_source_binding_id(
+                                project_id,
+                                str(item["source_kind"]),
+                                str(item["configured_root"]),
+                            ),
+                            project_id,
+                            item["source_kind"],
+                            item["configured_root"],
+                            item["repository_root"],
+                            item["repository_identity"],
+                            item["baseline_revision"],
+                            item["management_kind"],
+                            item["position"],
+                        )
+                        for item in source_git_baselines
+                    ],
+                )
+
+            cursor.execute(
+                """
+                SELECT source_kind, configured_root, repository_root,
+                       repository_identity, baseline_revision, management_kind, position
+                FROM project_source_git_baselines
+                WHERE project_id = %s
+                ORDER BY CASE source_kind WHEN 'code' THEN 0 ELSE 1 END, position
+                """,
+                (project_id,),
+            )
+            stored_baselines = tuple(
+                {
+                    "source_kind": str(row[0]),
+                    "configured_root": str(row[1]),
+                    "repository_root": str(row[2]),
+                    "repository_identity": str(row[3]),
+                    "baseline_revision": str(row[4]),
+                    "management_kind": str(row[5]),
+                    "position": int(row[6]),
+                }
+                for row in cursor.fetchall()
+            )
+            if source_git_baselines and stored_baselines != source_git_baselines:
+                raise PersistenceConflictError(
+                    "同じプロジェクト ID が別の Git 基線で登録されています"
+                )
 
         return ProjectInitializationRecord(
             project_id=project_id,
@@ -224,6 +294,8 @@ class WebControlPlaneRepository:
             workspace_root=workspace_root,
             document_roots=document_roots,
             source_control_kind=source_control_kind,
+            test_base_url=test_base_url,
+            source_git_baselines=stored_baselines,
             created=created,
         )
 
@@ -235,10 +307,11 @@ class WebControlPlaneRepository:
                        request.submitted_by, request.submitted_at,
                        review.decision AS document_review_status,
                        review.actor AS document_reviewed_by,
+                       review.note AS document_review_note,
                        review.created_at AS document_reviewed_at
                 FROM change_requests AS request
                 LEFT JOIN LATERAL (
-                    SELECT decision, actor, created_at
+                    SELECT decision, actor, note, created_at
                     FROM change_request_review_events
                     WHERE change_request_id = request.change_request_id
                       AND project_id = request.project_id
@@ -276,6 +349,11 @@ class WebControlPlaneRepository:
                     if row["document_reviewed_by"] is not None
                     else None
                 ),
+                "note": (
+                    str(row["document_review_note"])
+                    if row["document_review_note"] is not None
+                    else None
+                ),
                 "reviewed_at": (
                     row["document_reviewed_at"].isoformat()
                     if row["document_reviewed_at"] is not None
@@ -294,6 +372,7 @@ class WebControlPlaneRepository:
                        count(DISTINCT analysis_case.analysis_case_id) AS case_count,
                        count(DISTINCT request.change_request_id) AS request_count,
                        workspace.workspace_root, workspace.source_control_kind,
+                       workspace.test_base_url,
                        COALESCE(
                            (
                                SELECT jsonb_agg(root.root_path ORDER BY root.position)
@@ -301,7 +380,28 @@ class WebControlPlaneRepository:
                                WHERE root.project_id = project.project_id
                            ),
                            '[]'::jsonb
-                       ) AS document_roots
+                       ) AS document_roots,
+                       COALESCE(
+                           (
+                               SELECT jsonb_agg(
+                                   jsonb_build_object(
+                                       'source_kind', source.source_kind,
+                                       'configured_root', source.configured_root,
+                                       'repository_root', source.repository_root,
+                                       'repository_identity', source.repository_identity,
+                                       'baseline_revision', source.baseline_revision,
+                                       'management_kind', source.management_kind,
+                                       'position', source.position
+                                   )
+                                   ORDER BY CASE source.source_kind
+                                       WHEN 'code' THEN 0 ELSE 1 END,
+                                       source.position
+                               )
+                               FROM project_source_git_baselines AS source
+                               WHERE source.project_id = project.project_id
+                           ),
+                           '[]'::jsonb
+                       ) AS source_git_baselines
                 FROM projects AS project
                 LEFT JOIN project_workspaces AS workspace
                   ON workspace.project_id = project.project_id
@@ -310,7 +410,8 @@ class WebControlPlaneRepository:
                 LEFT JOIN change_requests AS request
                   ON request.project_id = project.project_id
                 GROUP BY project.project_id, project.name,
-                         workspace.workspace_root, workspace.source_control_kind
+                         workspace.workspace_root, workspace.source_control_kind,
+                         workspace.test_base_url
                 ORDER BY project.name, project.project_id
                 LIMIT %s
                 """,
@@ -325,7 +426,9 @@ class WebControlPlaneRepository:
                 "change_request_count": int(row[3]),
                 "workspace_root": str(row[4]) if row[4] is not None else None,
                 "source_control_kind": str(row[5]) if row[5] is not None else None,
-                "document_roots": [str(value) for value in row[6]],
+                "test_base_url": str(row[6]) if row[6] is not None else None,
+                "document_roots": [str(value) for value in row[7]],
+                "source_git_baselines": [dict(value) for value in row[8]],
             }
             for row in rows
         )
@@ -353,7 +456,9 @@ class WebControlPlaneRepository:
             )
         return unique[0]
 
-    def project_workspace_registration(self, project_id: str) -> dict[str, str] | None:
+    def project_workspace_registration(
+        self, project_id: str
+    ) -> dict[str, str | None] | None:
         """Return the initialized Workspace and its source-control mode."""
 
         if not project_id.strip():
@@ -361,7 +466,8 @@ class WebControlPlaneRepository:
         with self._connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT project.name, workspace.workspace_root, workspace.source_control_kind
+                SELECT project.name, workspace.workspace_root, workspace.source_control_kind,
+                       workspace.test_base_url
                 FROM project_workspaces AS workspace
                 JOIN projects AS project ON project.project_id = workspace.project_id
                 WHERE workspace.project_id = %s
@@ -375,7 +481,13 @@ class WebControlPlaneRepository:
             "project_name": str(row[0]),
             "workspace_root": str(row[1]),
             "source_control_kind": str(row[2]),
+            "test_base_url": str(row[3]) if row[3] is not None else None,
         }
+
+    def project_test_base_url(self, project_id: str) -> str | None:
+        registration = self.project_workspace_registration(project_id)
+        value = registration["test_base_url"] if registration is not None else None
+        return str(value) if value is not None else None
 
     def register_repository(
         self,
@@ -535,16 +647,45 @@ class WebControlPlaneRepository:
         with self._connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT artifact_id
-                FROM artifact_records
-                WHERE project_id = %s AND analysis_case_id = %s
-                  AND artifact_type = 'StructuredChange'
-                ORDER BY created_at, artifact_id
-                LIMIT %s
+                SELECT event.payload -> 'document_change_refs'
+                FROM copilot_coding_tasks AS task
+                JOIN LATERAL (
+                    SELECT payload
+                    FROM copilot_coding_task_events
+                    WHERE coding_task_id = task.coding_task_id
+                      AND event_type = 'outputs_recorded'
+                      AND payload ->> 'output_stage' = 'document_change'
+                    ORDER BY event_sequence DESC
+                    LIMIT 1
+                ) AS event ON true
+                WHERE task.change_request_id = %s
+                ORDER BY task.attempt_number DESC, task.created_at DESC,
+                         task.coding_task_id DESC
+                LIMIT 1
                 """,
-                (project_id, case_id, limit),
+                (request_id,),
             )
-            artifact_ids = tuple(str(row[0]) for row in cursor.fetchall())
+            latest_output = cursor.fetchone()
+            latest_refs = (
+                latest_output[0]
+                if latest_output is not None and isinstance(latest_output[0], list)
+                else None
+            )
+            if latest_refs:
+                artifact_ids = tuple(str(value) for value in latest_refs[:limit])
+            else:
+                cursor.execute(
+                    """
+                    SELECT artifact_id
+                    FROM artifact_records
+                    WHERE project_id = %s AND analysis_case_id = %s
+                      AND artifact_type = 'StructuredChange'
+                    ORDER BY created_at, artifact_id
+                    LIMIT %s
+                    """,
+                    (project_id, case_id, limit),
+                )
+                artifact_ids = tuple(str(row[0]) for row in cursor.fetchall())
         changes: list[dict[str, Any]] = []
         for artifact_id in artifact_ids:
             artifact = self._artifacts.get(artifact_id)
@@ -645,12 +786,14 @@ class WebControlPlaneRepository:
                        report.impact_report_id, report.status AS report_status,
                        confirmation.confirmation_id, confirmation.confirmed_by,
                        packet.edit_packet_id, packet.status AS packet_status,
+                       packet.editable_files AS packet_editable_files,
                        grant_record.approval_grant_id, grant_record.expires_at,
                        edit_result.edit_result_id, edit_result.status AS edit_status,
                        edit_result.validation_mode AS edit_validation_mode,
                        edit_result.tests_passed AS edit_tests_passed,
                        edit_result.result_repository_revision,
-                       edit_result.command_evidence_status
+                       edit_result.command_evidence_status,
+                       edit_result.changed_line_coverage_status
                 FROM analysis_cases AS analysis_case
                 JOIN repository_revisions AS revision
                   ON revision.repository_revision_id = analysis_case.repository_revision_id
@@ -697,7 +840,10 @@ class WebControlPlaneRepository:
                 "id": _optional(row["confirmation_id"]),
                 "confirmed_by": _optional(row["confirmed_by"]),
             },
-            "edit_packet": _entity(row, "edit_packet_id", "packet_status"),
+            "edit_packet": {
+                **_entity(row, "edit_packet_id", "packet_status"),
+                "editable_files": list(row["packet_editable_files"] or []),
+            },
             "approval_grant": {
                 "id": _optional(row["approval_grant_id"]),
                 "expires_at": (
@@ -711,6 +857,9 @@ class WebControlPlaneRepository:
                 "tests_passed": row["edit_tests_passed"],
                 "result_revision": _optional(row["result_repository_revision"]),
                 "command_evidence_status": _optional(row["command_evidence_status"]),
+                "changed_line_coverage_status": _optional(
+                    row["changed_line_coverage_status"]
+                ),
             },
         }
 
@@ -742,6 +891,15 @@ def _json(value: object) -> str:
 def _project_document_root_id(project_id: str, root_path: str) -> str:
     digest = hashlib.sha256(f"{project_id}\0{root_path}".encode()).hexdigest()[:24]
     return f"project-document-root-{digest}"
+
+
+def _project_source_binding_id(
+    project_id: str, source_kind: str, configured_root: str
+) -> str:
+    digest = hashlib.sha256(
+        f"{project_id}\0{source_kind}\0{configured_root}".encode()
+    ).hexdigest()[:24]
+    return f"project-source-git-{digest}"
 
 
 def _optional(value: object) -> str | None:

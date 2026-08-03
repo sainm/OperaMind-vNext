@@ -40,18 +40,16 @@ test("dashboard displays Bridge, Workspace, Coding Task, and Japanese execution 
   assert.match(status.children[3].tooltip, /経費状態検索/);
 });
 
-test("dashboard exposes shared confirmations and task operations", () => {
+test("dashboard keeps confirmation inputs in Web and exposes only bounded task operations", () => {
   const {actions} = sections(dashboardState({connectionStatus: "token_missing"}));
 
   assert.equal(actions.expanded, true);
   assert.deepEqual(
     actions.children.map((item) => item.command.command),
     [
-      "operamind.confirmCurrentCheckpoint",
-      "operamind.rejectCurrentCheckpoint",
+      "operamind.openWeb",
       "operamind.openCurrentTask",
       "operamind.resumeCurrentTask",
-      "operamind.cancelCurrentTask",
       "operamind.refreshDashboard",
       "operamind.diagnoseLocalEnvironment",
       "operamind.configureBridgeToken",
@@ -61,11 +59,9 @@ test("dashboard exposes shared confirmations and task operations", () => {
   assert.deepEqual(
     actions.children.map((item) => item.label),
     [
-      "現在の工程を確認",
-      "現在の工程を差戻し",
+      "OperaMind Web で工程を確認",
       "確認して Copilot を開く",
       "現在のタスクを再開",
-      "現在のタスクを取消",
       "最新状態に更新",
       "ローカル環境を診断",
       "Bridge Token を復旧設定",
@@ -75,6 +71,7 @@ test("dashboard exposes shared confirmations and task operations", () => {
 });
 
 test("manifest contributes the OperaMind Activity Bar control panel", () => {
+  assert.ok(manifest.activationEvents.includes("onUri"));
   assert.deepEqual(manifest.contributes.viewsContainers.activitybar, [
     {
       id: "operamind",
@@ -84,6 +81,7 @@ test("manifest contributes the OperaMind Activity Bar control panel", () => {
   ]);
   assert.equal(manifest.contributes.views.operamind[0].id, "operamind.controlPanel");
   assert.equal(manifest.contributes.views.operamind[0].name, "コントロール");
+  assert.equal(manifest.contributes.views.operamind[0].type, "webview");
   assert.deepEqual(manifest.contributes.mcpServerDefinitionProviders, [
     {id: "operamind.local", label: "OperaMind Local"},
   ]);

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -13,6 +14,9 @@ from operamind.application.local_environment_diagnostics import (
 from operamind.mcp.server import TOOLS
 
 ROOT = Path(__file__).parents[2]
+VSIX_VERSION = str(
+    json.loads((ROOT / "vscode-extension" / "package.json").read_text(encoding="utf-8"))["version"]
+)
 
 
 def report(
@@ -22,7 +26,7 @@ def report(
         consumer_id="vscode-test",
         observed_at=observed_at,
         workspace_fingerprint="a" * 64,
-        vsix_version="0.4.0",
+        vsix_version=VSIX_VERSION,
         bridge_url_loopback=True,
         bridge_token_configured=True,
         workspace_trusted=True,

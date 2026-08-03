@@ -125,9 +125,14 @@ class ApprovalGrantService:
         unknown_refs = sorted(set(request.allowed_test_command_refs) - available_refs)
         if unknown_refs:
             raise ValueError(f"Approval Grant references unknown command templates: {unknown_refs}")
-        actions = ["read", "modify", "record_result"]
+        actions = ["read"]
+        if source.editable_files:
+            actions.append("modify")
+        actions.append("record_result")
         if source.test_files:
-            actions.extend(("add_test", "run_test"))
+            if source.editable_files:
+                actions.append("add_test")
+            actions.append("run_test")
         if source.required_ui_scenario_refs:
             actions.extend(("execute_ui", "record_evidence"))
         artifact: dict[str, Any] = {

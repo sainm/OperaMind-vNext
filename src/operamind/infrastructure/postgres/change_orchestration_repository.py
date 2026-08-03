@@ -10,6 +10,9 @@ from psycopg import Connection
 
 from operamind.contracts import ContractCatalog
 from operamind.infrastructure.postgres.artifact_repository import ArtifactRepository
+from operamind.infrastructure.postgres.copilot_coding_task_repository import (
+    CopilotCodingTaskRepository,
+)
 from operamind.infrastructure.postgres.errors import PersistenceConflictError
 
 if TYPE_CHECKING:
@@ -28,6 +31,9 @@ class CanonicalOrchestrationEvidence:
     copilot_coding_task_id: str | None = None
     generated_test_plan: dict[str, Any] | None = None
     generated_test_data_plan: dict[str, Any] | None = None
+    scoped_test_files: frozenset[str] = frozenset()
+    passed_command_refs: frozenset[str] = frozenset()
+    canonical_artifact_refs: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +49,7 @@ class ChangeOrchestrationRepository:
 
     def __init__(self, connection: Connection[Any], contracts: ContractCatalog) -> None:
         self._connection = connection
+        self._contracts = contracts
         self._artifacts = ArtifactRepository(connection, contracts)
 
     def load_evidence(self, change_request_id: str) -> CanonicalOrchestrationEvidence:
@@ -161,6 +168,9 @@ class ChangeOrchestrationRepository:
         coding_task_id: str | None = None
         generated_test_plan: dict[str, Any] | None = None
         generated_test_data_plan: dict[str, Any] | None = None
+        scoped_test_files: frozenset[str] = frozenset()
+        passed_command_refs: frozenset[str] = frozenset()
+        canonical_artifact_refs: frozenset[str] = frozenset()
         if output_row is not None:
             coding_task_id = str(output_row[0])
             output_refs = cast(dict[str, Any], output_row[1])
@@ -180,6 +190,27 @@ class ChangeOrchestrationRepository:
                 str(output_refs.get("test_data_plan_id") or ""),
                 "TestDataPlan",
             )
+            task_repository = CopilotCodingTaskRepository(
+                self._connection,
+                self._contracts,
+            )
+            task = task_repository.get(coding_task_id)
+            if task.approval_grant_id is None:
+                raise PersistenceConflictError(
+                    "Copilot planning output has no bound Approval Grant"
+                )
+            approval = self._required_artifact(task.approval_grant_id, "ApprovalGrant")
+            task_view = task_repository.view(coding_task_id)
+            scoped_test_files = frozenset(
+                str(value)
+                for value in cast(list[object], approval.get("test_files", []))
+            )
+            passed_command_refs = frozenset(
+                str(command["command_ref"])
+                for command in cast(list[dict[str, Any]], task_view["commands"])
+                if command.get("status") == "passed" and command.get("exit_code") == 0
+            )
+            canonical_artifact_refs = _canonical_artifact_refs_from_output(output_refs)
         return CanonicalOrchestrationEvidence(
             change_request=request,
             analysis_case_id=case_id,
@@ -193,6 +224,9 @@ class ChangeOrchestrationRepository:
             copilot_coding_task_id=coding_task_id,
             generated_test_plan=generated_test_plan,
             generated_test_data_plan=generated_test_data_plan,
+            scoped_test_files=scoped_test_files,
+            passed_command_refs=passed_command_refs,
+            canonical_artifact_refs=canonical_artifact_refs,
         )
 
     def persist(
@@ -331,6 +365,27 @@ class ChangeOrchestrationRepository:
                 f"Required {artifact_type} Artifact is missing: {artifact_id}"
             )
         return artifact
+
+
+def _canonical_artifact_refs_from_output(
+    output_refs: dict[str, Any],
+) -> frozenset[str]:
+    refs = {
+        str(output_refs[key])
+        for key in (
+            "source_document_snapshot_id",
+            "target_document_snapshot_id",
+            "search_index_build_id",
+            "impact_report_id",
+        )
+        if isinstance(output_refs.get(key), str) and str(output_refs[key]).strip()
+    }
+    refs.update(
+        str(value)
+        for value in cast(list[object], output_refs.get("document_change_refs", []))
+        if str(value).strip()
+    )
+    return frozenset(refs)
 
 
 def _artifact_id(artifact: dict[str, Any]) -> str:

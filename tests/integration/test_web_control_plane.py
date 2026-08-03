@@ -1,6 +1,7 @@
 import os
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import psycopg
@@ -32,6 +33,7 @@ pytestmark = pytest.mark.integration
 @pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
 def test_project_initialization_accepts_local_code_and_document_directories(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert DATABASE_URL is not None
     suffix = uuid4().hex
@@ -42,6 +44,21 @@ def test_project_initialization_accepts_local_code_and_document_directories(
     workspace.mkdir()
     documents.mkdir()
     shared_documents.mkdir()
+    (workspace / "README.md").write_text("local project\n", encoding="utf-8")
+    (documents / "screen-design.md").write_text("screen design\n", encoding="utf-8")
+    (shared_documents / "api-design.md").write_text("api design\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "operamind.application.web_control_plane.ProjectDocumentBaselineService",
+        lambda **_values: SimpleNamespace(
+            ensure=lambda **_arguments: SimpleNamespace(
+                snapshot_id="snapshot-local",
+                document_count=1,
+                index_build_id="index-local",
+                generated_vector_count=1,
+                embedding_profile_binding_key="embedding:document_search",
+            )
+        ),
+    )
 
     with psycopg.connect(DATABASE_URL) as connection:
         MigrationRunner(connection, MigrationCatalog.load(ROOT / "migrations")).apply()
@@ -66,16 +83,26 @@ def test_project_initialization_accepts_local_code_and_document_directories(
 
         assert created["created"] is True
         assert replay["created"] is False
-        assert created["project"] == {
-            "project_id": project_id,
-            "name": "Local files project",
-            "workspace_root": str(workspace.resolve()),
-            "document_roots": [
-                str(documents.resolve()),
-                str(shared_documents.resolve()),
-            ],
-            "source_control_kind": "local_files",
+        project = created["project"]
+        assert project["project_id"] == project_id
+        assert project["name"] == "Local files project"
+        assert project["workspace_root"] == str(workspace.resolve())
+        assert project["document_roots"] == [
+            str(documents.resolve()),
+            str(shared_documents.resolve()),
+        ]
+        assert project["source_control_kind"] == "local_files"
+        assert project["test_base_url"] is None
+        source_baselines = project["source_git_baselines"]
+        assert len(source_baselines) == 3
+        assert {item["source_kind"] for item in source_baselines} == {
+            "code",
+            "document",
         }
+        assert all(len(item["baseline_revision"]) == 40 for item in source_baselines)
+        assert (workspace / ".git").is_dir()
+        assert (documents / ".git").is_dir()
+        assert (shared_documents / ".git").is_dir()
         assert listed["workspace_root"] == str(workspace.resolve())
         assert listed["document_roots"] == [
             str(documents.resolve()),
@@ -85,17 +112,31 @@ def test_project_initialization_accepts_local_code_and_document_directories(
 
 
 @pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
-def test_local_files_project_rejects_change_before_digest_baseline(
+def test_local_files_project_creates_internal_digest_baseline(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert DATABASE_URL is not None
     suffix = uuid4().hex
     project_id = f"local-project-{suffix}"
-    request_id = f"local-request-{suffix}"
     workspace = tmp_path / "code"
     documents = tmp_path / "design"
     workspace.mkdir()
     documents.mkdir()
+    (workspace / "README.md").write_text("local project\n", encoding="utf-8")
+    (documents / "design.md").write_text("design\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "operamind.application.web_control_plane.ProjectDocumentBaselineService",
+        lambda **_values: SimpleNamespace(
+            ensure=lambda **_arguments: SimpleNamespace(
+                snapshot_id="snapshot-local",
+                document_count=1,
+                index_build_id="index-local",
+                generated_vector_count=1,
+                embedding_profile_binding_key="embedding:document_search",
+            )
+        ),
+    )
 
     with psycopg.connect(DATABASE_URL) as connection:
         MigrationRunner(connection, MigrationCatalog.load(ROOT / "migrations")).apply()
@@ -109,29 +150,13 @@ def test_local_files_project_rejects_change_before_digest_baseline(
                 configured_by="local-user",
             )
         )
-        request = ChangeRequestInput(
-            change_request_id=request_id,
-            project_id=project_id,
-            analysis_case_id=None,
-            input_mode="natural_language",
-            requirement_text="検索結果を変更する",
-            source_document_ref=None,
-            target_document_ref=None,
-            business_rules=(
-                BusinessRuleInput("rule-local", "変更結果を確認できること", ()),
-            ),
-            ambiguity_status="clear",
-            ambiguities=(),
-            submitted_by="local-user",
-        )
-
-        with pytest.raises(ValueError, match="ファイル Digest 基線"):
-            service.submit_change_request(request)
-        with pytest.raises(ValueError, match="does not exist"):
-            WebControlPlaneRepository(
-                connection,
-                ContractCatalog.load(ROOT / "contracts"),
-            ).get_change_request(request_id)
+        registration = WebControlPlaneRepository(
+            connection,
+            ContractCatalog.load(ROOT / "contracts"),
+        ).project_workspace_registration(project_id)
+        assert registration is not None
+        assert registration["source_control_kind"] == "local_files"
+        assert (workspace / ".git").is_dir()
         connection.rollback()
 
 
@@ -326,6 +351,42 @@ def test_change_request_diff_waits_for_shared_human_confirmation() -> None:
             run_id=run_id,
             subject_digests={"requirement": "b" * 64},
         ) == {}
+        assert automation_repository.latest_confirmation(
+            run_id=run_id,
+            checkpoint="requirement",
+        )["subject_digest"] == "a" * 64
+        discovery = {
+            "status": "ready",
+            "mode": "requirement_hybrid_rag",
+            "candidates": [{"document_id": "document-1", "summary": "対象設計書"}],
+            "blocking_reason": None,
+        }
+        stored_discovery = automation_repository.record_rag_discovery(
+            run_id=run_id,
+            discovery=discovery,
+        )
+        replayed_discovery = automation_repository.record_rag_discovery(
+            run_id=run_id,
+            discovery=discovery,
+        )
+        assert stored_discovery["created"] is True
+        assert replayed_discovery["created"] is False
+        assert automation_repository.rag_discovery(run_id) == discovery
+
+        replacement = service.start_change_automation(
+            request_id=request_id,
+            idempotency_key="revised-test-plan",
+            actor="integration-reviewer",
+        )
+        assert automation_repository.view(run_id)["status"] == "superseded"
+        assert (
+            automation_repository.latest_for_request(request_id)["automation_run_id"]
+            == replacement["run"]["automation_run_id"]
+        )
+        assert all(
+            task["state"] == "superseded"
+            for task in OrchestrationTaskRepository(connection).list_for_run(run_id)
+        )
         assert first["copilot_task"] is None
         assert first["task_blocker"]
         connection.rollback()
@@ -388,6 +449,8 @@ buildscript {
     }
 }
 apply plugin: 'org.springframework.boot'
+apply plugin: 'jacoco'
+jacocoTestReport { reports { xml.enabled true } }
 dependencies {
     compile 'org.springframework.boot:spring-boot-starter-thymeleaf'
 }
@@ -398,6 +461,9 @@ dependencies {
         '<html xmlns:th="http://www.thymeleaf.org"></html>\n',
         encoding="utf-8",
     )
+    test = workspace / "src" / "test" / "java" / "example" / "SmokeTest.java"
+    test.parent.mkdir(parents=True)
+    test.write_text("class SmokeTest {}\n", encoding="utf-8")
     remote_url = f"https://example.invalid/{suffix}.git"
     _git(workspace, "init", "-q")
     _git(workspace, "remote", "add", "origin", remote_url)

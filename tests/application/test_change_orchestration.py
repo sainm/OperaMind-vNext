@@ -67,10 +67,45 @@ def test_orchestration_requires_complete_copilot_planning_outputs(
         ChangeOrchestrationPlanner(repository_root=ROOT).plan(value)
 
 
+def test_orchestration_blocks_incomplete_business_rule_coverage_before_review() -> None:
+    value = _input()
+    request = deepcopy(value.change_request)
+    request["business_rules"].append(
+        {
+            "business_rule_id": "rule-status-options-remain",
+            "text": "ステータス選択肢を維持する",
+            "source_refs": [],
+        }
+    )
+    impact = deepcopy(value.impact_report)
+    impact["required_ui_scenario_refs"].append("expense-filter-status-options")
+
+    with pytest.raises(
+        ChangeOrchestrationBlockedError,
+        match=r"Business coverage must be 100.*rule-status-options-remain",
+    ):
+        ChangeOrchestrationPlanner(repository_root=ROOT).plan(
+            replace(value, change_request=request, impact_report=impact)
+        )
+
+
+def test_orchestration_rejects_unknown_business_rule_reference() -> None:
+    value = _input()
+    test_plan = deepcopy(value.generated_test_plan)
+    assert test_plan is not None
+    test_plan["test_cases"][0]["business_rule_refs"].append("unknown-rule")
+
+    with pytest.raises(ChangeOrchestrationBlockedError, match=r"unknown.*unknown-rule"):
+        ChangeOrchestrationPlanner(repository_root=ROOT).plan(
+            replace(value, generated_test_plan=test_plan)
+        )
+
+
 def _input() -> ChangeOrchestrationInput:
     request: dict[str, Any] = {
         "artifact_type": "ChangeRequest",
-        "schema_version": "v1",
+        "schema_version": "v2",
+        "plan_kind": "ui",
         "change_request_id": "visiondemo-web-control-plane-e2e",
         "project_id": "visiondemo",
         "input_mode": "documents",
@@ -162,11 +197,12 @@ def _input() -> ChangeOrchestrationInput:
                 "test_case_id": "expense-filter-default-all",
                 "title": "既定値ですべての経費を表示する",
                 "level": "ui",
-                "execution_mode": "deterministic",
+                "execution_mode": "browser",
                 "business_rule_refs": ["rule-expense-status-change"],
                 "acceptance_criteria_refs": ["criterion-expense-status"],
                 "preconditions": ["既定データが存在する"],
                 "steps": ["経費一覧を開く"],
+                "step_ids": ["open-expense-list"],
                 "expected_results": ["すべての経費が表示される"],
                 "test_data_refs": ["expense-default-seed"],
             }
@@ -174,7 +210,7 @@ def _input() -> ChangeOrchestrationInput:
     }
     test_data_plan = {
         "artifact_type": "TestDataPlan",
-        "schema_version": "v1",
+        "schema_version": "v2",
         "test_data_plan_id": "test-data-expense-status",
         "test_plan_id": test_plan["test_plan_id"],
         "project_id": request["project_id"],
@@ -219,7 +255,40 @@ def _input() -> ChangeOrchestrationInput:
                                 "expected": 4,
                             }
                         ],
-                    }
+                    },
+                    {
+                        "step_id": "open-expense-list-action",
+                        "sequence": 2,
+                        "channel": "ui",
+                        "business_action": "経費一覧を開く",
+                        "test_step_refs": ["open-expense-list"],
+                        "screen_ref": "expense-list",
+                        "ui_action_ref": "open",
+                        "playwright": {
+                            "action": "goto",
+                            "path": "/expense",
+                            "mask_locators": [],
+                            "observations": [
+                                {
+                                    "key": "expense_rows",
+                                    "kind": "count",
+                                    "locator": {"by": "css", "value": "tbody tr"},
+                                }
+                            ],
+                        },
+                        "inputs": {},
+                        "depends_on": ["load-default-seed"],
+                        "output_bindings": [],
+                        "postconditions": [
+                            {
+                                "assertion_id": "expense-rows-visible",
+                                "observe_via": "ui",
+                                "subject": "expense_rows",
+                                "operator": "count_equals",
+                                "expected": 4,
+                            }
+                        ],
+                    },
                 ],
                 "final_assertions": [
                     {

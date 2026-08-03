@@ -85,21 +85,49 @@ def test_document_only_change_does_not_require_line_coverage() -> None:
     assert report["coverage_percent"] == 100
 
 
-def test_rejects_coverage_from_outside_the_edit_result() -> None:
-    with pytest.raises(ValueError, match="outside the Edit Result"):
-        evaluate_changed_line_coverage(
-            edit_result_id="edit-1",
-            project_id="demo",
-            base_repository_revision="base",
-            result_repository_revision="result",
-            changed_lines=(("src/service.py", (1,)),),
-            changed_paths=("src/service.py",),
-            evidence=ChangedLineCoverageEvidence(
-                evidence_refs=("command-coverage-1",),
-                executable_lines=(("src/other.py", (1,)),),
-                covered_lines=(("src/other.py", (1,)),),
-            ),
-        )
+def test_test_sources_do_not_count_as_production_changed_line_coverage() -> None:
+    report = evaluate_changed_line_coverage(
+        edit_result_id="edit-1",
+        project_id="demo",
+        base_repository_revision="base",
+        result_repository_revision="result",
+        changed_lines=(
+            ("src/test/java/com/example/ServiceTest.java", (10, 11)),
+            ("src/main/resources/mapper/ServiceMapper.xml", (20,)),
+        ),
+        changed_paths=(
+            "src/test/java/com/example/ServiceTest.java",
+            "src/main/resources/mapper/ServiceMapper.xml",
+        ),
+        evidence=ChangedLineCoverageEvidence(
+            evidence_refs=("command-coverage-1",),
+            executable_lines=(),
+            covered_lines=(),
+        ),
+    )
+
+    assert report["status"] == "not_required"
+    assert report["changed_line_count"] == 0
+    assert report["coverage_percent"] == 100
+
+
+def test_ignores_coverage_from_unchanged_files() -> None:
+    report = evaluate_changed_line_coverage(
+        edit_result_id="edit-1",
+        project_id="demo",
+        base_repository_revision="base",
+        result_repository_revision="result",
+        changed_lines=(("src/service.py", (1,)),),
+        changed_paths=("src/service.py",),
+        evidence=ChangedLineCoverageEvidence(
+            evidence_refs=("command-coverage-1",),
+            executable_lines=(("src/service.py", (1,)), ("src/other.py", (1,))),
+            covered_lines=(("src/service.py", (1,)), ("src/other.py", (1,))),
+        ),
+    )
+
+    assert report["status"] == "passed"
+    assert [item["path"] for item in report["files"]] == ["src/service.py"]
 
 
 def test_fails_when_one_changed_source_file_is_absent_from_coverage_evidence() -> None:

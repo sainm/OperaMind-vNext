@@ -89,10 +89,16 @@
             "test_data_refs",
             "test_data_values",
             "expected_results",
-            "business_assertions"
+            "business_assertions",
+            "generation_steps",
+            "cleanup_steps",
+            "variable_bindings",
+            "plan_structure"
           ]
         },
-        "action": {"enum": ["replace", "append", "insert_after", "remove", "restore"]},
+        "action": {
+          "enum": ["replace", "append", "insert_after", "remove", "restore", "regenerate"]
+        },
         "before": {},
         "after": {},
         "anchor": {},
@@ -104,6 +110,8 @@
         },
         "criterion_id": {"$ref": "#/$defs/nonBlank"},
         "flow_id": {"$ref": "#/$defs/nonBlank"},
+        "step_id": {"$ref": "#/$defs/nonBlank"},
+        "variable": {"$ref": "#/$defs/nonBlank"},
         "assertion_id": {"$ref": "#/$defs/nonBlank"},
         "summary_before": {"$ref": "#/$defs/nonBlank"},
         "summary_after": {"$ref": "#/$defs/nonBlank"}

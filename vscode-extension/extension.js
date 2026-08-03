@@ -2,9 +2,16 @@
 
 const crypto = require("node:crypto");
 const vscode = require("vscode");
-const {BridgeClient, assertLoopbackUrl, buildCopilotPrompt} = require("./bridgeClient");
-const {buildDashboardTree, dashboardState} = require("./dashboardModel");
+const {
+  BridgeClient,
+  assertLoopbackUrl,
+  buildCopilotPrompt,
+  isMissingBridgeResource,
+} = require("./bridgeClient");
+const {dashboardState} = require("./dashboardModel");
+const {ALLOWED_COMMANDS, renderDashboardHtml} = require("./dashboardView");
 const {loadRuntimeManifest, readBridgeToken} = require("./runtimeManifest");
+const {parseOpenUri, sameWorkspacePath} = require("./uriHandler");
 const {
   formatDiagnosticReport,
   formatLocalDiagnostic,
@@ -15,41 +22,42 @@ const {
 
 const SECRET_KEY = "operamind.bridge.token";
 const ACTIVE_TASK_KEY = "operamind.bridge.activeTask";
+const PENDING_WEB_OPEN_KEY = "operamind.bridge.pendingWebOpen";
+const PENDING_WEB_OPEN_MAX_AGE_MS = 5 * 60 * 1000;
 const TERMINAL_STATES = new Set(["completed", "failed", "reanalysis_required", "cancelled"]);
 
-class DashboardTreeProvider {
+class DashboardWebviewProvider {
   constructor(initialState) {
     this.state = dashboardState(initialState);
-    this.changeEmitter = new vscode.EventEmitter();
-    this.onDidChangeTreeData = this.changeEmitter.event;
+    this.view = undefined;
+    this.messageSubscription = undefined;
   }
 
   update(values) {
     this.state = {...this.state, ...values};
-    this.changeEmitter.fire(undefined);
+    this.render();
   }
 
-  getTreeItem(element) {
-    const collapsibleState = element.children
-      ? element.expanded
-        ? vscode.TreeItemCollapsibleState.Expanded
-        : vscode.TreeItemCollapsibleState.Collapsed
-      : vscode.TreeItemCollapsibleState.None;
-    const item = new vscode.TreeItem(element.label, collapsibleState);
-    item.id = element.id;
-    item.description = element.description;
-    item.tooltip = element.tooltip;
-    item.iconPath = element.icon ? new vscode.ThemeIcon(element.icon) : undefined;
-    item.command = element.command;
-    return item;
+  resolveWebviewView(view) {
+    this.view = view;
+    view.webview.options = {enableScripts: true};
+    this.messageSubscription?.dispose();
+    this.messageSubscription = view.webview.onDidReceiveMessage(async (message) => {
+      if (!message || !ALLOWED_COMMANDS.includes(message.command)) return;
+      await vscode.commands.executeCommand(message.command);
+    });
+    this.render();
   }
 
-  getChildren(element) {
-    return element ? element.children || [] : buildDashboardTree(this.state);
+  render() {
+    if (!this.view) return;
+    const nonce = crypto.randomBytes(18).toString("base64url");
+    this.view.webview.html = renderDashboardHtml(this.state, nonce);
   }
 
   dispose() {
-    this.changeEmitter.dispose();
+    this.messageSubscription?.dispose();
+    this.view = undefined;
   }
 }
 
@@ -87,13 +95,13 @@ async function activate(context) {
     await context.globalState.update("operamind.bridge.consumerId", consumerId);
   }
   const notified = new Set();
-  let currentConfirmation;
   const diagnosticOutput = vscode.window.createOutputChannel("OperaMind ローカル環境診断");
-  const dashboard = new DashboardTreeProvider({workspaceRoot: workspaceRoot()});
-  const dashboardView = vscode.window.createTreeView("operamind.controlPanel", {
-    treeDataProvider: dashboard,
-    showCollapseAll: false,
-  });
+  const dashboard = new DashboardWebviewProvider({workspaceRoot: workspaceRoot()});
+  const dashboardView = vscode.window.registerWebviewViewProvider(
+    "operamind.controlPanel",
+    dashboard,
+    {webviewOptions: {retainContextWhenHidden: true}},
+  );
   const mcpDefinitionsChanged = new vscode.EventEmitter();
   let runtime;
   let runtimeFingerprint;
@@ -170,6 +178,7 @@ async function activate(context) {
     await context.workspaceState.update(ACTIVE_TASK_KEY, {
       codingTaskId: taskId,
       workspaceRoot: root,
+      requestId: view.task.change_request_id,
     });
     if (interactive) notified.delete(taskId);
     if (notified.has(taskId)) return;
@@ -185,27 +194,8 @@ async function activate(context) {
           : "この変更を VS Code GitHub Copilot で開きます。",
       },
       openAction,
-      "タスクを取消",
       "後で",
     );
-    if (action === "タスクを取消") {
-      const cancelled = await bridge.cancelTask(
-        taskId,
-        root,
-        consumerId,
-        acceptedBy,
-        "VS Code でユーザーがタスクを取り消しました",
-      );
-      await clearActive(taskId);
-      dashboard.update({
-        task: {codingTaskId: taskId, summary: view.task.task_summary},
-        taskState: "cancelled",
-      });
-      void vscode.window.showInformationMessage(
-        `OperaMind タスクを取り消しました: ${cancelled.task.coding_task_id}`,
-      );
-      return;
-    }
     if (action !== openAction) return;
     const accepted = continuing
       ? view
@@ -217,66 +207,13 @@ async function activate(context) {
     await context.workspaceState.update(ACTIVE_TASK_KEY, {
       codingTaskId: taskId,
       workspaceRoot: root,
+      requestId: view.task.change_request_id,
     });
     const prompt = buildCopilotPrompt(accepted, root);
     await vscode.commands.executeCommand("workbench.action.chat.open", {query: prompt});
   }
 
-  async function decideCurrentConfirmation(decision) {
-    const root = workspaceRoot();
-    if (!root || !currentConfirmation) {
-      void vscode.window.showInformationMessage("現在、確認待ちの工程はありません。");
-      return;
-    }
-    const token = await tokenFor(true);
-    if (!token) return;
-    let note;
-    if (decision === "rejected") {
-      note = await vscode.window.showInputBox({
-        title: "OperaMind 工程を差戻し",
-        prompt: "監査履歴に残す差戻し理由を入力してください",
-        ignoreFocusOut: true,
-        validateInput: (value) => (value.trim() ? undefined : "差戻し理由は必須です"),
-      });
-      if (!note) return;
-    }
-    const selected = currentConfirmation;
-    try {
-      const {client, acceptedBy} = clientConfiguration(token, refreshRuntime());
-      await client.decideConfirmation(
-        selected.change_request_id,
-        selected.checkpoint,
-        decision,
-        acceptedBy,
-        [consumerId, selected.subject_digest, decision].join(":"),
-        note && note.trim(),
-      );
-      currentConfirmation = undefined;
-      dashboard.update({confirmation: undefined});
-      void vscode.window.showInformationMessage(
-        decision === "confirmed"
-          ? "工程を確認しました。確定処理を自動で継続します。"
-          : "工程を差し戻しました。OperaMind Web と状態を共有しました。",
-      );
-      await checkForTasks();
-    } catch (error) {
-      void vscode.window.showErrorMessage(`工程の確認を保存できません: ${error.message}`);
-    }
-  }
-
-  async function presentConfirmation(confirmation) {
-    const action = await vscode.window.showInformationMessage(
-      `OperaMind: ${confirmation.stage_label}`,
-      {modal: true, detail: confirmation.message},
-      "確認して進む",
-      "差し戻す",
-      "後で",
-    );
-    if (action === "確認して進む") await decideCurrentConfirmation("confirmed");
-    if (action === "差し戻す") await decideCurrentConfirmation("rejected");
-  }
-
-  async function checkForTasks({interactive = false} = {}) {
+  async function checkForTasks({interactive = false, requestId} = {}) {
     const root = workspaceRoot();
     if (!root) {
       dashboard.update({
@@ -320,45 +257,63 @@ async function activate(context) {
     });
     try {
       const {client, acceptedBy} = clientConfiguration(token, refreshRuntime());
-      const confirmationResponse = await client.nextConfirmation(root);
-      currentConfirmation = confirmationResponse.confirmation || undefined;
+      const confirmationResponse = await client.nextConfirmation(root, requestId);
+      const currentConfirmation = confirmationResponse.confirmation || undefined;
       dashboard.update({confirmation: currentConfirmation});
       if (currentConfirmation) {
         dashboard.update({
           connectionStatus: "connected",
           connectionDetail: "Web と共通の人工確認を待っています。",
         });
-        if (interactive) await presentConfirmation(currentConfirmation);
+        if (interactive) {
+          const action = await vscode.window.showInformationMessage(
+            `OperaMind: ${currentConfirmation.stage_label}`,
+            {modal: true, detail: "この工程の判断と入力は OperaMind Web で行います。"},
+            "OperaMind Web を開く",
+            "後で",
+          );
+          if (action === "OperaMind Web を開く") await openWeb();
+        }
         return;
       }
       const active = context.workspaceState.get(ACTIVE_TASK_KEY);
-      if (active && active.workspaceRoot === root) {
-        const resumed = await client.resumeTask(active.codingTaskId, root, consumerId);
-        dashboard.update({
-          connectionStatus: "connected",
-          connectionDetail: "loopback OperaMind Bridge に接続しています。",
-        });
-        if (TERMINAL_STATES.has(resumed.state)) {
-          dashboard.update({
-            task: {
-              codingTaskId: active.codingTaskId,
-              summary: resumed.task && resumed.task.task_summary,
-            },
-            taskState: resumed.state,
-          });
+      const activeMatchesRequest = !requestId || (active && active.requestId === requestId);
+      if (active && active.workspaceRoot === root && activeMatchesRequest) {
+        let resumed;
+        try {
+          resumed = await client.resumeTask(active.codingTaskId, root, consumerId);
+        } catch (error) {
+          if (!isMissingBridgeResource(error)) throw error;
           await clearActive(active.codingTaskId);
-          if (interactive || resumed.state === "completed") {
-            void vscode.window.showInformationMessage(
-              `OperaMind タスクは ${resumed.state} です: ${active.codingTaskId}`,
-            );
-          }
-          return;
+          dashboard.update({task: undefined, taskState: "idle"});
         }
-        await presentTask(resumed, root, client, acceptedBy, {interactive});
-        return;
+        if (resumed) {
+          dashboard.update({
+            connectionStatus: "connected",
+            connectionDetail: "loopback OperaMind Bridge に接続しています。",
+          });
+          if (TERMINAL_STATES.has(resumed.state)) {
+            dashboard.update({
+              task: {
+                codingTaskId: active.codingTaskId,
+                summary: resumed.task && resumed.task.task_summary,
+              },
+              taskState: resumed.state,
+            });
+            await clearActive(active.codingTaskId);
+            if (interactive || resumed.state === "completed") {
+              void vscode.window.showInformationMessage(
+                `OperaMind タスクは ${resumed.state} です: ${active.codingTaskId}`,
+              );
+            }
+          } else {
+            await presentTask(resumed, root, client, acceptedBy, {interactive});
+            return;
+          }
+        }
       }
       if (active && active.workspaceRoot !== root) await clearActive(active.codingTaskId);
-      const response = await client.nextTask(root, consumerId);
+      const response = await client.nextTask(root, consumerId, requestId);
       dashboard.update({
         connectionStatus: "connected",
         connectionDetail: "loopback OperaMind Bridge に接続しています。",
@@ -367,6 +322,11 @@ async function activate(context) {
         await presentTask(response.task, root, client, acceptedBy, {interactive});
       } else {
         dashboard.update({task: undefined, taskState: "idle"});
+        if (interactive && requestId && active && active.workspaceRoot === root) {
+          void vscode.window.showWarningMessage(
+            "別の OperaMind タスクがこの Workspace で実行中です。完了または取消後に選択した変更を開いてください。",
+          );
+        }
       }
     } catch (error) {
       dashboard.update({
@@ -374,49 +334,6 @@ async function activate(context) {
         connectionDetail: `OperaMind Bridge に接続できません: ${error.message}`,
       });
       if (interactive) void vscode.window.showErrorMessage(`OperaMind Bridge: ${error.message}`);
-    }
-  }
-
-  async function cancelCurrentTask() {
-    const root = workspaceRoot();
-    if (!vscode.workspace.isTrusted) {
-      void vscode.window.showWarningMessage(
-        "Workspace が未信頼です。OperaMind タスク操作は実行しません。",
-      );
-      return;
-    }
-    const active = context.workspaceState.get(ACTIVE_TASK_KEY);
-    if (!root || !active || active.workspaceRoot !== root) {
-      void vscode.window.showWarningMessage("この Workspace に再開可能な OperaMind タスクはありません。");
-      return;
-    }
-    const reason = await vscode.window.showInputBox({
-      title: "OperaMind タスクを取消",
-      prompt: "監査履歴に残す取消理由を入力してください",
-      ignoreFocusOut: true,
-      validateInput: (value) => (value.trim() ? undefined : "取消理由は必須です"),
-    });
-    if (!reason) return;
-    const token = await tokenFor(true);
-    if (!token) return;
-    try {
-      const {client, acceptedBy} = clientConfiguration(token, refreshRuntime());
-      await client.resumeTask(active.codingTaskId, root, consumerId);
-      await client.cancelTask(
-        active.codingTaskId,
-        root,
-        consumerId,
-        acceptedBy,
-        reason.trim(),
-      );
-      await clearActive(active.codingTaskId);
-      dashboard.update({
-        task: {codingTaskId: active.codingTaskId},
-        taskState: "cancelled",
-      });
-      void vscode.window.showInformationMessage("OperaMind タスクを取り消しました。");
-    } catch (error) {
-      void vscode.window.showErrorMessage(`OperaMind タスクを取り消せません: ${error.message}`);
     }
   }
 
@@ -507,6 +424,43 @@ async function activate(context) {
     }
   }
 
+  async function handleWebOpenUri(uri) {
+    let target;
+    try {
+      target = parseOpenUri(uri);
+    } catch (error) {
+      void vscode.window.showErrorMessage(`OperaMind Web から開けません: ${error.message}`);
+      return;
+    }
+    const pending = {...target, createdAt: Date.now()};
+    await context.globalState.update(PENDING_WEB_OPEN_KEY, pending);
+    const root = workspaceRoot();
+    if (root && sameWorkspacePath(root, target.workspaceRoot)) {
+      await context.globalState.update(PENDING_WEB_OPEN_KEY, undefined);
+      await checkForTasks({interactive: true, requestId: target.requestId});
+      return;
+    }
+    await vscode.commands.executeCommand(
+      "vscode.openFolder",
+      vscode.Uri.file(target.workspaceRoot),
+      false,
+    );
+  }
+
+  async function resumeWebOpen() {
+    const pending = context.globalState.get(PENDING_WEB_OPEN_KEY);
+    if (!pending) return false;
+    if (!pending.createdAt || Date.now() - pending.createdAt > PENDING_WEB_OPEN_MAX_AGE_MS) {
+      await context.globalState.update(PENDING_WEB_OPEN_KEY, undefined);
+      return false;
+    }
+    const root = workspaceRoot();
+    if (!root || !sameWorkspacePath(root, pending.workspaceRoot)) return false;
+    await context.globalState.update(PENDING_WEB_OPEN_KEY, undefined);
+    await checkForTasks({interactive: true, requestId: pending.requestId});
+    return true;
+  }
+
   context.subscriptions.push(
     vscode.commands.registerCommand("operamind.checkForTasks", () =>
       checkForTasks({interactive: true}),
@@ -516,13 +470,6 @@ async function activate(context) {
     ),
     vscode.commands.registerCommand("operamind.resumeCurrentTask", () =>
       checkForTasks({interactive: true}),
-    ),
-    vscode.commands.registerCommand("operamind.cancelCurrentTask", cancelCurrentTask),
-    vscode.commands.registerCommand("operamind.confirmCurrentCheckpoint", () =>
-      decideCurrentConfirmation("confirmed"),
-    ),
-    vscode.commands.registerCommand("operamind.rejectCurrentCheckpoint", () =>
-      decideCurrentConfirmation("rejected"),
     ),
     vscode.commands.registerCommand("operamind.configureBridgeToken", async () => {
       if (await configureToken(context)) {
@@ -535,6 +482,7 @@ async function activate(context) {
     }),
     vscode.commands.registerCommand("operamind.refreshDashboard", () => checkForTasks()),
     vscode.commands.registerCommand("operamind.openWeb", openWeb),
+    vscode.window.registerUriHandler({handleUri: handleWebOpenUri}),
     vscode.commands.registerCommand(
       "operamind.diagnoseLocalEnvironment",
       diagnoseLocalEnvironment,
@@ -556,7 +504,9 @@ async function activate(context) {
       void checkForTasks();
     }),
   );
-  void checkForTasks();
+  void resumeWebOpen().then((resumed) => {
+    if (!resumed) void checkForTasks();
+  });
 }
 
 function deactivate() {}

@@ -44,10 +44,10 @@ def build_main_change_flow(
 
     stages = [
         _requirement_stage(request, automation),
-        _document_stage(document_diff, automation),
+        _document_stage(document_diff, automation, copilot_task),
         _code_scope_stage(workspace, automation),
         _compile_test_stage(workspace, copilot_task, execution, automation),
-        _ui_stage(execution, automation),
+        _ui_stage(execution, automation, request),
         _report_stage(execution, automation),
     ]
     current_index = next(
@@ -58,10 +58,18 @@ def build_main_change_flow(
         ),
         len(stages) - 1,
     )
+    stages = [
+        stage
+        if index <= current_index
+        else {
+            **stage,
+            "status": "waiting",
+            "blocking_reasons": [],
+        }
+        for index, stage in enumerate(stages)
+    ]
     blockers = [
-        blocker
-        for stage in stages
-        for blocker in _string_list(stage.get("blocking_reasons"))
+        blocker for stage in stages for blocker in _string_list(stage.get("blocking_reasons"))
     ]
     completed = sum(stage["status"] in {"completed", "not_required"} for stage in stages)
     request_artifact = _dict(request.get("artifact"))
@@ -73,11 +81,7 @@ def build_main_change_flow(
         "change_request_id": request_id,
         "project_id": project_id,
         "status": (
-            "blocked"
-            if blockers
-            else "completed"
-            if completed == len(stages)
-            else "in_progress"
+            "blocked" if blockers else "completed" if completed == len(stages) else "in_progress"
         ),
         "current_stage": stages[current_index]["stage_id"],
         "progress_percent": round(completed * 100 / len(stages)),
@@ -103,9 +107,7 @@ def _requirement_stage(
         "blocked" if blocked else "waiting" if waiting else "completed",
         requirement or "登録済みの業務ルールを変更要件として使用します。",
         "user",
-        blocking_reasons=(
-            ambiguities or ["変更要件が差し戻されました。"] if blocked else []
-        ),
+        blocking_reasons=(ambiguities or ["変更要件が差し戻されました。"] if blocked else []),
         details={
             "requirement_text": requirement or None,
             "business_rules": [rule.get("text") for rule in rules if rule.get("text")],
@@ -117,6 +119,7 @@ def _requirement_stage(
 def _document_stage(
     document_diff: dict[str, object],
     automation: dict[str, object] | None,
+    copilot_task: dict[str, object] | None,
 ) -> dict[str, object]:
     changes = _dict_list(document_diff.get("changes"))
     automation_stage = str((automation or {}).get("current_stage") or "")
@@ -143,24 +146,24 @@ def _document_stage(
         status = "completed"
     else:
         status = "waiting"
+    ai_executor, ai_source = _ai_execution_source(copilot_task)
     return _stage(
         "document_change",
         "設計書差分",
         status,
         (
-            f"VS Code GitHub Copilot が作成した設計書差分は {len(changes)} 件です。"
+            f"{ai_source} が作成した設計書差分は {len(changes)} 件です。"
             if changes
-            else "RAG で対象設計書を特定し、VS Code GitHub Copilot が修正します。"
+            else f"RAG で対象設計書を特定し、{ai_source} が修正します。"
         ),
-        "vscode_github_copilot",
+        ai_executor,
         blocking_reasons=blockers,
         details={
             "change_count": len(changes),
+            "ai_source": ai_source,
             "changes": [_document_change_summary(change) for change in changes],
             "rag_documents": _rag_document_summaries(automation),
-            "confirmation": _pending_confirmation(
-                automation, {"rag_documents", "document_diff"}
-            ),
+            "confirmation": _pending_confirmation(automation, {"rag_documents", "document_diff"}),
         },
     )
 
@@ -180,11 +183,7 @@ def _code_scope_stage(
     blockers = _automation_blockers(automation, {"impact_analysis", "impact_confirmation"})
     if impact_status in _FAILED_STATES or blockers:
         status = "blocked"
-    elif (
-        impact_id is not None
-        and impact_status == "confirmed"
-        and confirmation_id is not None
-    ):
+    elif impact_id is not None and impact_status == "confirmed" and confirmation_id is not None:
         status = "completed"
     elif automation_stage in {"impact_analysis", "impact_confirmation"}:
         status = "running" if automation_status == "running" else "waiting"
@@ -235,36 +234,31 @@ def _compile_test_stage(
     edit_status = str(edit.get("status") or "pending")
     edit_validation_mode = str(edit.get("validation_mode") or "pending")
     command_evidence_status = str(edit.get("command_evidence_status") or "pending")
+    verification_only = not bool(
+        _dict((workspace or {}).get("edit_packet")).get("editable_files", ["pending"])
+    )
     task_state = str((copilot_task or {}).get("state") or "pending")
     commands = _dict_list((copilot_task or {}).get("commands"))
-    test_plan = _dict((execution or {}).get("test_plan"))
-    test_plan_status = str(test_plan.get("status") or "pending")
-    confirmation_waiting = (
-        str((automation or {}).get("current_stage") or "")
-        == "test_plan_confirmation"
-    )
-    plan_blockers = _string_list(test_plan.get("blocking_reasons"))
-    if confirmation_waiting:
-        status = "waiting"
-    elif (
+    ai_executor, ai_source = _ai_execution_source(copilot_task)
+    if (
         edit.get("id") is not None
-        and edit_status == "in_scope"
+        and (edit_status == "in_scope" or (verification_only and edit_status == "no_changes"))
         and edit_validation_mode == "committed"
         and edit.get("tests_passed") is True
         and command_evidence_status == "verified"
         and task_state == "completed"
-        and test_plan_status == "ready"
     ):
         status = "completed"
     elif (
-        edit_status in _FAILED_STATES | {"no_changes", "out_of_scope"}
+        edit_status in _FAILED_STATES | {"out_of_scope"}
+        or (edit_status == "no_changes" and not verification_only)
         or task_state in _FAILED_STATES
-        or test_plan_status == "blocked"
         or (
             edit_validation_mode == "committed"
             and edit.get("id") is not None
             and (
-                edit_status != "in_scope"
+                edit_status
+                not in ({"in_scope", "no_changes"} if verification_only else {"in_scope"})
                 or edit.get("tests_passed") is not True
                 or command_evidence_status != "verified"
             )
@@ -275,9 +269,9 @@ def _compile_test_stage(
         status = "running"
     else:
         status = "waiting"
-    blockers = plan_blockers
+    blockers: list[str] = []
     if status == "blocked" and not blockers:
-        blockers = [f"VS Code GitHub Copilot の変更タスクが {task_state} で停止しました。"]
+        blockers = [f"{ai_source} の変更タスクが {task_state} で停止しました。"]
     return _stage(
         "compile_test",
         "コード変更・コンパイル・テスト",
@@ -286,18 +280,17 @@ def _compile_test_stage(
             "コード変更、コンパイル、設定されたテストが完了しました。"
             if status == "completed"
             else (
-                "VS Code GitHub Copilot がコードとテスト計画を更新し、"
-                "コンパイルとテストを実行します。"
+                f"{ai_source} がコードを更新し、"
+                "コンパイル、コードテスト、カバレッジ確認を実行します。"
             )
         ),
-        "vscode_github_copilot",
+        ai_executor,
         blocking_reasons=blockers,
         details={
+            "ai_source": ai_source,
             "copilot_task_state": task_state,
             "edit_status": edit_status,
             "edit_validation_mode": edit_validation_mode,
-            "test_plan_status": test_plan_status,
-            "test_cases": _test_case_summaries(test_plan),
             "result_revision": edit.get("result_revision"),
             "command_evidence_status": command_evidence_status,
             "commands": [
@@ -308,33 +301,64 @@ def _compile_test_stage(
                 }
                 for command in commands
             ],
-            "confirmation": _pending_confirmation(automation, {"test_plan"}),
         },
     )
+
+
+def _ai_execution_source(
+    copilot_task: dict[str, object] | None,
+) -> tuple[str, str]:
+    """Project the accepted AI executor without relabelling fallback Evidence."""
+
+    task = copilot_task or {}
+    accepted_by = str(task.get("accepted_by") or "").strip().lower()
+    claimed_by = str(task.get("claimed_by") or "").strip().lower()
+    accepted_event_actors = [
+        str(event.get("actor") or "").strip().lower()
+        for event in _dict_list(task.get("events"))
+        if event.get("event_type") == "accepted"
+    ]
+    authoritative_actor = accepted_by or next(
+        (actor for actor in reversed(accepted_event_actors) if actor),
+        claimed_by,
+    )
+    if authoritative_actor.startswith("codex"):
+        return "codex_fallback", "Codex fallback"
+    return "vscode_github_copilot", "VS Code GitHub Copilot"
 
 
 def _ui_stage(
     execution: dict[str, object] | None,
     automation: dict[str, object] | None,
+    request: dict[str, object],
 ) -> dict[str, object]:
     execution = execution or {}
     data_run = _dict(execution.get("test_data_execution"))
     data_plan = _dict(execution.get("test_data_plan"))
+    test_plan = _dict(execution.get("test_plan"))
+    test_plan_status = str(test_plan.get("status") or "pending")
     data_plan_status = str(data_plan.get("status") or "pending")
     data_status = str(data_run.get("status") or "pending")
     closure = _dict(execution.get("change_closure"))
     closure_ui_status = str(closure.get("ui_status") or "")
-    passed = data_plan_status == "ready" and (
-        closure_ui_status in {"passed", "not_impacted"}
+    coverage = _dict(execution.get("business_coverage"))
+    coverage_gate_failed = bool(coverage) and (
+        coverage.get("coverage_percent") != 100
+        or ("status" in coverage and coverage.get("status") != "passed")
     )
-    failed = data_plan_status == "blocked" or data_status in _FAILED_STATES
+    passed = data_plan_status == "ready" and (closure_ui_status in {"passed", "not_impacted"})
+    failed = coverage_gate_failed or data_plan_status == "blocked" or data_status in _FAILED_STATES
     running = data_status in _ACTIVE_STATES
-    confirmation_waiting = (
-        str((automation or {}).get("current_stage") or "") == "ui_test_confirmation"
+    confirmation_waiting = str((automation or {}).get("current_stage") or "") in {
+        "test_plan_confirmation",
+        "ui_test_confirmation",
+    }
+    confirmation_blockers = _automation_blockers(
+        automation, {"test_plan_confirmation", "ui_test_confirmation"}
     )
     status = (
         "blocked"
-        if failed
+        if failed or confirmation_blockers
         else "waiting"
         if confirmation_waiting
         else "completed"
@@ -343,16 +367,21 @@ def _ui_stage(
         if running
         else "waiting"
     )
-    blockers = (
-        _string_list(data_plan.get("blocking_reasons"))
-        + _string_list(closure.get("blocking_reasons"))
-        if status == "blocked"
-        else []
-    )
+    blockers = []
+    if status == "blocked":
+        if coverage_gate_failed:
+            blockers.append(
+                "業務要件カバレッジが 100% ではないため、TestPlan を Copilot に返却します。"
+            )
+        blockers.extend(confirmation_blockers)
+        blockers.extend(_string_list(data_plan.get("blocking_reasons")))
+        blockers.extend(_string_list(closure.get("blocking_reasons")))
     if status == "blocked" and not blockers:
         blockers = ["テストデータ生成または UI 検証が合格していません。"]
     screenshots = _dict_list(execution.get("screenshots"))
     execution_result = _dict(data_run.get("result"))
+    failure_management = _dict(execution.get("failure_management"))
+    execution_actions = _dict(failure_management.get("actions"))
     return _stage(
         "ui_validation",
         "テストデータ・UI 検証",
@@ -365,10 +394,22 @@ def _ui_stage(
         "operamind",
         blocking_reasons=blockers,
         details={
+            "ui_test_plan_status": test_plan_status,
+            "ui_test_cases": _test_case_summaries(test_plan),
+            "business_coverage_status": coverage.get("status"),
+            "business_coverage_percent": coverage.get("coverage_percent"),
+            "business_coverage_items": _business_coverage_summaries(
+                coverage=coverage,
+                request=request,
+            ),
             "test_data_plan_status": data_plan_status,
             "test_data_status": data_status,
             "ui_status": closure_ui_status or "pending",
             "cleanup_status": execution_result.get("cleanup_status"),
+            "execution_actions": {
+                "can_rerun": execution_actions.get("can_rerun") is True,
+                "rerun_run_id": execution_actions.get("rerun_run_id"),
+            },
             "generation_flows": _generation_flow_summaries(
                 data_plan=data_plan,
                 execution_result=execution_result,
@@ -380,9 +421,35 @@ def _ui_stage(
                 }
                 for item in screenshots
             ],
-            "confirmation": _pending_confirmation(automation, {"ui_test"}),
+            "confirmation": (
+                None
+                if coverage_gate_failed
+                else _pending_confirmation(automation, {"test_plan", "ui_test"})
+            ),
         },
     )
+
+
+def _business_coverage_summaries(
+    *,
+    coverage: dict[str, object],
+    request: dict[str, object],
+) -> list[dict[str, object]]:
+    request_artifact = _dict(request.get("artifact"))
+    rule_texts = {
+        str(rule["business_rule_id"]): str(rule.get("text") or "業務ルール")
+        for rule in _dict_list(request_artifact.get("business_rules"))
+        if rule.get("business_rule_id") is not None
+    }
+    return [
+        {
+            "text": rule_texts.get(str(item.get("business_rule_id")), "業務ルール"),
+            "status": item.get("status"),
+            "test_case_count": len(_string_list(item.get("test_case_refs"))),
+            "criterion_count": len(_string_list(item.get("criterion_refs"))),
+        }
+        for item in _dict_list(coverage.get("items"))
+    ]
 
 
 def _report_stage(
@@ -394,10 +461,12 @@ def _report_stage(
     status_value = str(closure.get("status") or "pending")
     blockers = _string_list(closure.get("blocking_reasons"))
     confirmation_waiting = (
-        str((automation or {}).get("current_stage") or "")
-        == "final_report_confirmation"
+        str((automation or {}).get("current_stage") or "") == "final_report_confirmation"
     )
-    if confirmation_waiting:
+    confirmation_blockers = _automation_blockers(automation, {"final_report_confirmation"})
+    if confirmation_blockers:
+        status = "blocked"
+    elif confirmation_waiting:
         status = "waiting"
     elif status_value in _SUCCESS_STATES:
         status = "completed"
@@ -418,7 +487,7 @@ def _report_stage(
             else "すべての検証完了後に最終レポートを生成します。"
         ),
         "operamind",
-        blocking_reasons=blockers,
+        blocking_reasons=confirmation_blockers or blockers,
         details={
             "closure_status": status_value,
             "ui_status": closure.get("ui_status"),
@@ -548,10 +617,21 @@ def _generation_step_summary(
     results: dict[str, dict[str, Any]],
 ) -> dict[str, object]:
     result = results.get(str(step.get("step_id")), {})
+    fallback = _dict(step.get("computer_use_fallback"))
     return {
         "sequence": step.get("sequence"),
         "channel": step.get("channel"),
         "business_action": step.get("business_action"),
+        "mapped_test_step_count": len(_string_list(step.get("test_step_refs"))),
+        "computer_use_fallback": (
+            {
+                "reason": fallback.get("reason"),
+                "objective": fallback.get("objective"),
+                "max_actions": fallback.get("max_actions"),
+            }
+            if fallback
+            else None
+        ),
         "status": result.get("status"),
         "input_variables": sorted(_dict(step.get("inputs"))),
         "output_variables": [
@@ -560,8 +640,7 @@ def _generation_step_summary(
             if binding.get("variable")
         ],
         "assertions": [
-            _assertion_summary(assertion)
-            for assertion in _dict_list(step.get("postconditions"))
+            _assertion_summary(assertion) for assertion in _dict_list(step.get("postconditions"))
         ],
         "failure_reason": result.get("failure_reason"),
     }
@@ -596,9 +675,7 @@ def _test_result_summaries(
     ]
 
 
-def _automation_blockers(
-    automation: dict[str, object] | None, stages: set[str]
-) -> list[str]:
+def _automation_blockers(automation: dict[str, object] | None, stages: set[str]) -> list[str]:
     if not automation or automation.get("current_stage") not in stages:
         return []
     if automation.get("status") != "blocked":
@@ -642,9 +719,7 @@ def _impact_graph(
     }
     direct_paths = set(item_by_path)
     test_paths = {
-        value
-        for item in impact_items
-        for value in _string_list(item.get("test_file_refs"))
+        value for item in impact_items for value in _string_list(item.get("test_file_refs"))
     }
     seed_paths = direct_paths | test_paths
     edge_candidates: list[dict[str, object]] = []
@@ -695,9 +770,7 @@ def _impact_graph(
             if isinstance(relations, list) and relation not in relations:
                 relations.append(relation)
     edges = list(edges_by_pair.values())
-    existing_pairs = {
-        frozenset((str(edge["from_path"]), str(edge["to_path"]))) for edge in edges
-    }
+    existing_pairs = {frozenset((str(edge["from_path"]), str(edge["to_path"]))) for edge in edges}
     for target_path, item in item_by_path.items():
         if target_path not in visible_paths:
             continue
@@ -755,9 +828,7 @@ def _impact_graph(
     }
 
 
-def _dependency_reason(
-    *, path: str, edges: list[dict[str, object]], direct_paths: set[str]
-) -> str:
+def _dependency_reason(*, path: str, edges: list[dict[str, object]], direct_paths: set[str]) -> str:
     relation = next(
         (
             str(edge.get("relation") or "depends_on")

@@ -96,6 +96,92 @@ def test_copilot_code_scope_allows_a_safe_new_graph_path() -> None:
     assert result[0]["recommended_action"] == "add"
 
 
+def test_copilot_code_scope_completes_resolved_graph_impact_closure() -> None:
+    graph = _graph()
+    files = graph["files"]
+    assert isinstance(files, list)
+    files[0]["file_id"] = "file-service"
+    files[1]["file_id"] = "file-test"
+    files.append(
+        {
+            "file_id": "file-repository",
+            "path": "src/main/java/example/ExpenseRepository.java",
+            "role": "production",
+            "symbols": [{"symbol_id": "repository-search", "name": "search"}],
+        }
+    )
+    graph["edges"] = [
+        {
+            "edge_id": "edge-call-repository",
+            "edge_type": "calls",
+            "from_ref": "example.ExpenseService#search(String)",
+            "to_ref": "repository-search",
+            "resolution_status": "resolved",
+            "confidence": "high",
+        }
+    ]
+
+    result = _validate_code_scope(
+        _scope(),
+        graph=graph,
+        document_change_refs=("change-1",),
+    )
+
+    assert result[0]["related_code_paths"] == [
+        "src/main/java/example/ExpenseRepository.java"
+    ]
+    assert result[0]["graph_path_refs"] == ["edge-call-repository"]
+    assert result[1] == {
+        "target_path": "src/main/java/example/ExpenseRepository.java",
+        "target_symbols": [],
+        "recommended_action": "review_only",
+        "test_file_refs": ["src/test/java/example/ExpenseServiceTest.java"],
+        "rationale": (
+            "OperaMind added this file as a review-only member of the "
+            "resolved two-hop Code Graph impact closure."
+        ),
+        "ui_impact": False,
+        "related_code_paths": [],
+        "graph_path_refs": ["edge-call-repository"],
+    }
+
+
+def test_copilot_code_scope_accepts_file_level_symbolless_sources() -> None:
+    graph = _graph()
+    files = graph["files"]
+    assert isinstance(files, list)
+    files.append(
+        {
+            "file_id": "file-template",
+            "path": "src/main/resources/templates/expense-list.html",
+            "role": "production",
+            "symbols": [
+                {
+                    "symbol_id": "template:expense-list:select-1",
+                    "name": "select-1",
+                }
+            ],
+        }
+    )
+
+    result = _validate_code_scope(
+        (
+            {
+                "target_path": "src/main/resources/templates/expense-list.html",
+                "target_symbols": ["status-filter"],
+                "recommended_action": "modify",
+                "test_file_refs": ["src/test/java/example/ExpenseServiceTest.java"],
+                "rationale": "The status selector is rendered in this template.",
+                "ui_impact": True,
+            },
+        ),
+        graph=graph,
+        document_change_refs=("change-1",),
+    )
+
+    assert result[0]["target_symbols"] == []
+
+
 class _Contracts:
     def __init__(self) -> None:
         self.validated: list[dict[str, object]] = []
@@ -127,6 +213,17 @@ class _Requests:
         commit_sha: str,
     ) -> str | None:
         return self.revision_id
+
+    def get_change_request(self, change_request_id: str) -> dict[str, object]:
+        return {
+            "artifact": {
+                "change_request_id": change_request_id,
+                "business_rules": [
+                    {"business_rule_id": "rule-all", "text": "すべてを表示する"},
+                    {"business_rule_id": "rule-status", "text": "状態検索を維持する"},
+                ],
+            }
+        }
 
 
 class _Artifacts:
@@ -221,18 +318,140 @@ def test_publish_creates_graph_validated_context_and_impact_report(
             "recommended_action": "modify",
             "test_file_refs": ["src/test/java/example/ExpenseServiceTest.java"],
             "rationale": "The changed status rule is implemented by search.",
-            "ui_impact": True,
-        }
+                "ui_impact": True,
+                "related_code_paths": [],
+                "graph_path_refs": [],
+            }
     ]
     assert len(service._contracts.validated) == 2
     context, report = service._contracts.validated
     assert context["artifact_type"] == "CopilotImpactContext"
     assert report["artifact_type"] == "ImpactReport"
     assert report["ui_impact_status"] == "impacted"
+    assert len(report["required_ui_scenario_refs"]) == 2
+    assert all(
+        str(value).startswith("ui-scenario-")
+        for value in report["required_ui_scenario_refs"]
+    )
     assert report["repository_revision"] == "abc123"
     assert report["items"][0]["structured_change_refs"] == ["structured-change-1"]
     assert len(service._artifacts.stored) == 1
     assert len(service._impacts.published) == 1
+
+
+def test_revised_scope_gets_new_artifact_ids_on_the_same_coding_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    monkeypatch.setattr(
+        "operamind.application.copilot_impact.GitWorkspaceInspector",
+        lambda: SimpleNamespace(
+            inspect=lambda root: SimpleNamespace(
+                remote_url="git@example.test:operamind/repository.git",
+                head_sha="abc123",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_build_graph",
+        lambda **values: (_graph(), ("src/main", "src/test"), ("java",)),
+    )
+
+    first = service.publish(
+        project_id="project-1",
+        analysis_case_id="analysis-1",
+        change_request_id="change-request-1",
+        coding_task_id="coding-task-1",
+        workspace_root=tmp_path,
+        source_document_snapshot_id="document-before",
+        target_document_snapshot_id="document-after",
+        search_index_build_id="index-1",
+        document_change_refs=("structured-change-1",),
+        code_scope=_scope(),
+    )
+    revised_scope = (
+        {
+            **_scope()[0],
+            "recommended_action": "review_only",
+            "rationale": "The current implementation already satisfies the design change.",
+        },
+    )
+    revised = service.publish(
+        project_id="project-1",
+        analysis_case_id="analysis-1",
+        change_request_id="change-request-1",
+        coding_task_id="coding-task-1",
+        workspace_root=tmp_path,
+        source_document_snapshot_id="document-before",
+        target_document_snapshot_id="document-after",
+        search_index_build_id="index-1",
+        document_change_refs=("structured-change-1",),
+        code_scope=revised_scope,
+    )
+
+    assert revised["context_id"] != first["context_id"]
+    assert revised["impact_report_id"] != first["impact_report_id"]
+
+
+def test_impact_identity_and_context_record_revision_and_fallback_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    head = {"sha": "revision-before"}
+    monkeypatch.setattr(
+        "operamind.application.copilot_impact.GitWorkspaceInspector",
+        lambda: SimpleNamespace(
+            inspect=lambda root: SimpleNamespace(
+                remote_url="git@example.test:operamind/repository.git",
+                head_sha=head["sha"],
+            )
+        ),
+    )
+    service._requests.revision_id = "revision-1"
+    monkeypatch.setattr(
+        service,
+        "_build_graph",
+        lambda **values: (_graph(), ("src/main", "src/test"), ("java",)),
+    )
+
+    first = service.publish(
+        project_id="project-1",
+        analysis_case_id="analysis-1",
+        change_request_id="change-request-1",
+        coding_task_id="coding-task-1",
+        workspace_root=tmp_path,
+        source_document_snapshot_id="document-before",
+        target_document_snapshot_id="document-after",
+        search_index_build_id="index-1",
+        document_change_refs=("structured-change-1",),
+        code_scope=_scope(),
+        actor="codex:fallback",
+        provider_id="codex_fallback",
+    )
+    context = service._contracts.validated[-2]
+    assert context["generated_by"] == "codex:fallback"
+    assert context["generator_provider"] == "codex_fallback"
+
+    head["sha"] = "revision-after"
+    revised = service.publish(
+        project_id="project-1",
+        analysis_case_id="analysis-1",
+        change_request_id="change-request-1",
+        coding_task_id="coding-task-1",
+        workspace_root=tmp_path,
+        source_document_snapshot_id="document-before",
+        target_document_snapshot_id="document-after",
+        search_index_build_id="index-1",
+        document_change_refs=("structured-change-1",),
+        code_scope=_scope(),
+        actor="codex:fallback",
+        provider_id="codex_fallback",
+    )
+
+    assert revised["impact_report_id"] != first["impact_report_id"]
 
 
 def test_publish_rejects_missing_scope_or_repository_registration(

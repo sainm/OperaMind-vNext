@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -19,6 +20,7 @@ class ProjectCreate(StrictModel):
     name: str = Field(min_length=1, max_length=300)
     workspace_root: str = Field(min_length=1, max_length=4000)
     document_roots: list[str] = Field(min_length=1, max_length=20)
+    test_base_url: str | None = Field(default=None, min_length=1, max_length=2000)
 
     @field_validator("document_roots")
     @classmethod
@@ -28,6 +30,20 @@ class ProjectCreate(StrictModel):
         if len(value) != len(set(value)):
             raise ValueError("document_roots must be unique")
         return value
+
+    @field_validator("test_base_url")
+    @classmethod
+    def validate_test_base_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("test_base_url must be an absolute HTTP(S) URL")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError(
+                "test_base_url must not contain credentials, a query, or a fragment"
+            )
+        return value.rstrip("/")
 
 
 class LocalEnvironmentExtensionDiagnostic(StrictModel):

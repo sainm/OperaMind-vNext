@@ -64,8 +64,24 @@ def test_springboot15_thymeleaf_gradle_profiles_are_valid_and_use_wrapper() -> N
     } == {
         "springboot15-compile": ["./gradlew", "classes", "testClasses", "--no-daemon"],
         "springboot15-test": ["./gradlew", "test", "--no-daemon"],
+        "springboot15-coverage": [
+            "./gradlew",
+            "test",
+            "jacocoTestReport",
+            "--no-daemon",
+        ],
         "springboot15-build": ["./gradlew", "build", "--no-daemon"],
     }
+
+
+def test_generic_gradle_command_profile_closes_compile_test_coverage_gate() -> None:
+    profile = load_example("command-execution-profile.example.json")
+    templates = {value["purpose"]: value for value in profile["templates"]}
+
+    assert {"compile", "test", "coverage"}.issubset(templates)
+    coverage = templates["coverage"]
+    assert coverage["argv"][:3] == ["./gradlew", "test", "jacocoTestReport"]
+    assert coverage["coverage_report"]["format"] == "jacoco_xml"
 
 
 def test_embedding_dimensions_must_be_positive() -> None:

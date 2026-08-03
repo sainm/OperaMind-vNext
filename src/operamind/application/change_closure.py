@@ -22,6 +22,9 @@ class ChangeClosureInput:
     ui_result: dict[str, Any] | None
     changed_line_coverage: dict[str, Any] | None = None
     ui_test_case_refs: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    verification_only: bool = False
+    workspace_evidence_current: bool = True
+    workspace_evidence_reason: str | None = None
 
 
 class ChangeClosureEvaluator:
@@ -318,13 +321,18 @@ def _unresolved_items(
     else:
         if value.edit_result.get("validation_mode") != "committed":
             items.add("Edit Result is not committed")
-        if value.edit_result.get("status") != "in_scope":
+        if not _edit_result_status_is_accepted(value):
             items.add("Edit Result is not in scope")
         if value.edit_result.get("command_evidence_status") != "verified":
             items.add("Edit Result command evidence is not verified")
         items.update(
             f"Out-of-scope file: {path}"
             for path in cast(list[object], value.edit_result.get("out_of_scope_files", []))
+        )
+    if not value.workspace_evidence_current:
+        items.add(
+            value.workspace_evidence_reason
+            or "Code workspace no longer matches committed Edit Result"
         )
     if value.changed_line_coverage is None:
         items.add("Changed-line coverage evidence is missing")
@@ -400,6 +408,7 @@ def _closure_status(
     if (
         value.orchestration["status"] != "ready"
         or value.edit_result is None
+        or not value.workspace_evidence_current
         or value.edit_result.get("validation_mode") != "committed"
         or value.edit_result.get("command_evidence_status") != "verified"
         or _changed_line_coverage_status(value) in {"missing", "failed"}
@@ -414,7 +423,7 @@ def _closure_status(
     ):
         return "blocked"
     if (
-        value.edit_result.get("status") != "in_scope"
+        not _edit_result_status_is_accepted(value)
         or value.edit_result.get("tests_passed") is not True
         or (value.test_data_result is not None and value.test_data_result["status"] != "passed")
         or (
@@ -426,6 +435,13 @@ def _closure_status(
     ):
         return "failed"
     return "passed" if not unresolved else "blocked"
+
+
+def _edit_result_status_is_accepted(value: ChangeClosureInput) -> bool:
+    if value.edit_result is None:
+        return False
+    status = str(value.edit_result.get("status"))
+    return status == "in_scope" or (value.verification_only and status == "no_changes")
 
 
 def _changed_line_coverage_status(value: ChangeClosureInput) -> str:

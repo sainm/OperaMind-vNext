@@ -200,6 +200,9 @@ SQL 命名使用 `snake_case`；外键字段使用 `<entity>_id`；时间使用 
 - Locator 优先级：role/label/text -> stable business attribute -> test id -> CSS fallback。
 - 禁止依赖脆弱的深层 CSS、随机 sleep 和固定等待时间。
 - 使用可观察条件等待网络、页面状态或业务结果。
+- 确定性操作优先使用受限 Playwright DSL；导航、输入、选择、键盘、hover、focus、scroll、drag、等待及同源 iframe 不得降级给 AI。
+- 只有 Canvas、非 DOM 控件、Native Dialog 等明确能力缺口可以声明 `computer_use_fallback`；必须预先确认目标、原因、最大操作数和观测项。AI 只提供操作轨迹，最终 URL、观测值与截图必须由同一个受控 Playwright Session 独立读取，且仍受同源、断言与清理约束。
+- 未配置 AI Computer Use Provider 时必须阻断，不允许把普通 Playwright 失败伪装为通过。
 - 每个场景声明数据前置条件、环境、步骤、可见结果和证据。
 - 失败必须分类为 business、environment、test_data、locator、authentication 或 blocked。
 - 测试不得依赖执行顺序；数据由 Data Recipe 创建并清理。

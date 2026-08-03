@@ -37,6 +37,7 @@ def create_project(
                 workspace_root=Path(body.workspace_root),
                 document_roots=tuple(Path(root) for root in body.document_roots),
                 configured_by=actor,
+                test_base_url=body.test_base_url,
             )
         ),
     )
@@ -54,6 +55,13 @@ def list_projects(service: Service) -> dict[str, object]:
             "workspace_root": item.get("workspace_root"),
             "document_roots": item.get("document_roots"),
             "source_control_kind": item.get("source_control_kind"),
+            "source_git_baselines": item.get("source_git_baselines") or [],
+            "test_base_url": item.get("test_base_url"),
+            **(
+                {"target_project": item["target_project"]}
+                if isinstance(item.get("target_project"), dict)
+                else {}
+            ),
         }
         for item in projects
         if isinstance(item, dict) and isinstance(item.get("project_id"), str)

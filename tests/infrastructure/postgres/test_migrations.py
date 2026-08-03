@@ -73,8 +73,25 @@ def test_repository_migrations_are_sequential_and_transaction_free() -> None:
         "0060",
         "0061",
         "0062",
+        "0063",
+        "0064",
+        "0065",
+        "0066",
+        "0067",
+        "0068",
+        "0069",
     ]
     assert all(len(migration.checksum) == 64 for migration in catalog.migrations)
+
+
+def test_verification_only_scope_allows_empty_edit_authority() -> None:
+    migration = (ROOT / "migrations/0069_verification_only_execution_scope.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "jsonb_array_length(editable_files) = 0" in migration
+    assert "jsonb_array_length(allowed_items) = 0" in migration
+    assert "DROP CONSTRAINT approval_grants_arrays_valid" in migration
 
 
 def test_ui_verification_closure_binding_uses_current_artifact_store() -> None:
@@ -98,6 +115,47 @@ def test_project_local_sources_allow_version_control_optional_paths() -> None:
     assert "CREATE TABLE project_document_roots" in migration
     assert "UNIQUE (project_id, root_path)" in migration
     assert "migration:0061" in migration
+
+
+def test_project_source_git_baselines_bind_code_and_documents_to_commits() -> None:
+    migration = (ROOT / "migrations/0066_project_source_git_baselines.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "CREATE TABLE project_source_git_baselines" in migration
+    assert "source_kind IN ('code', 'document')" in migration
+    assert "management_kind IN ('existing_git', 'operamind_local_git')" in migration
+    assert "baseline_revision text NOT NULL" in migration
+
+
+def test_change_automation_recovery_persists_rag_and_supersedes_old_runs() -> None:
+    migration = (ROOT / "migrations/0063_change_automation_recovery.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "'superseded'" in migration
+    assert "row_number() OVER" in migration
+    assert "CREATE TABLE change_automation_rag_discoveries" in migration
+    assert "discovery ->> 'status' = 'ready'" in migration
+
+
+def test_ui_test_plan_revision_task_adds_a_bounded_copilot_stage() -> None:
+    migration = (ROOT / "migrations/0064_ui_test_plan_revision_task.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "'ui_test_revision'" in migration
+    assert "copilot_coding_tasks_current_stage_valid" in migration
+
+
+def test_project_test_environment_and_post_commit_planning_are_persisted() -> None:
+    migration = (ROOT / "migrations/0065_project_test_environment.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "ADD COLUMN test_base_url" in migration
+    assert "^https?://" in migration
+    assert "'test_planning'" in migration
 
 
 def test_migration_cannot_control_its_own_transaction(tmp_path: Path) -> None:

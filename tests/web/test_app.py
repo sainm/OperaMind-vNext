@@ -105,6 +105,17 @@ class FakeService:
             }
         }
 
+    def start_test_data_run(self, **values: object) -> dict[str, object]:
+        self.calls.append(("test-data-rerun", values))
+        return {
+            "created": True,
+            "run_id": "run-replayed-001",
+            "execution_result_id": "result-replayed-001",
+            "status": "running",
+            "replay_of_run_id": values["replay_of_run_id"],
+            "background_required": True,
+        }
+
     def get_change_request(self, request_id: str) -> dict[str, object]:
         return {"change_request_id": request_id, "project_id": "demo"}
 
@@ -162,7 +173,10 @@ class FakeService:
 
     def confirm_test_case_revision(self, **values: object) -> dict[str, object]:
         self.calls.append(("revision-confirm", values))
-        return {"state": "applied", "flow": self.main_change_flow(str(values["request_id"]))}
+        return {
+            "state": "awaiting_copilot",
+            "flow": self.main_change_flow(str(values["request_id"])),
+        }
 
     def decide_change_checkpoint(self, **values: object) -> dict[str, object]:
         self.calls.append(("checkpoint-decision", values))
@@ -262,6 +276,8 @@ def test_local_web_exposes_only_project_selection_and_six_stage_flow() -> None:
                 "workspace_root": "/workspace/demo",
                 "document_roots": ["/documents/demo"],
                 "source_control_kind": "local_files",
+                "source_git_baselines": [],
+                "test_base_url": None,
             }
         ],
         "count": 1,
@@ -331,6 +347,28 @@ def test_project_is_initialized_from_local_paths_without_git_or_sql_steps() -> N
     assert initialized.workspace_root == Path("/local/code")
 
 
+def test_project_rejects_test_base_url_query_before_initialization() -> None:
+    client, fake = client_with_fake()
+
+    response = client.post(
+        "/api/v1/projects",
+        json={
+            "project_id": "local-demo",
+            "name": "ローカル資料プロジェクト",
+            "workspace_root": "/local/code",
+            "document_roots": ["/local/design"],
+            "test_base_url": "http://127.0.0.1:8080/app?tenant=demo",
+        },
+        headers={
+            "X-OperaMind-Actor": "local-user",
+            "Idempotency-Key": "project-init-query",
+        },
+    )
+
+    assert response.status_code == 422
+    assert fake.calls == []
+
+
 def test_change_request_starts_internal_flow_without_user_authentication() -> None:
     client, fake = client_with_fake()
     body = {
@@ -361,6 +399,39 @@ def test_change_request_starts_internal_flow_without_user_authentication() -> No
     assert submitted.analysis_case_id is None
     assert submitted.input_mode == "natural_language"
     assert submitted.business_rules[0].text == body["requirement_text"]
+
+
+def test_change_request_preserves_each_atomic_business_change_point() -> None:
+    client, fake = client_with_fake()
+    body = {
+        "change_request_id": "change-multi-point",
+        "project_id": "demo",
+        "requirement_text": (
+            "初期状態を「すべて」に変更し、差戻し状態でも検索できるようにする。"
+            "検索後は対象件数を表示する。并且选中的状态必须保持。"
+        ),
+    }
+
+    response = client.post(
+        "/api/v1/change-requests",
+        json=body,
+        headers={
+            "X-OperaMind-Actor": "local-user",
+            "Idempotency-Key": "request-multi-point",
+        },
+    )
+
+    assert response.status_code == 201
+    submitted = next(value for name, value in fake.calls if name == "submit")
+    assert [rule.text for rule in submitted.business_rules] == [
+        "初期状態を「すべて」に変更",
+        "差戻し状態でも検索できるようにする",
+        "検索後は対象件数を表示する",
+        "选中的状态必须保持",
+    ]
+    assert [rule.business_rule_id for rule in submitted.business_rules] == [
+        f"change-multi-point-change-point-{position}" for position in range(1, 5)
+    ]
 
 
 def test_old_management_and_manual_approval_routes_are_absent() -> None:
@@ -406,13 +477,46 @@ def test_test_case_revision_is_previewed_then_confirmed_in_the_same_change_flow(
     }
     assert "test_case_id" not in repr(preview.json())
     assert applied.status_code == 200
-    assert applied.json()["state"] == "applied"
+    assert applied.json()["state"] == "awaiting_copilot"
     assert [name for name, _value in fake.calls] == [
         "command",
         "revision-propose",
         "command",
         "revision-confirm",
     ]
+
+
+def test_failed_test_data_run_can_be_replayed_from_web(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    client, fake = client_with_fake()
+    background_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "operamind.web.routers.change_requests.execute_reserved_test_data_run",
+        lambda **values: background_calls.append(values),
+    )
+
+    response = client.post(
+        "/api/v1/change-requests/change-1/test-data-runs/run-failed-001/rerun",
+        json={},
+        headers={
+            "X-OperaMind-Actor": "local-user",
+            "Idempotency-Key": "rerun-1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["replay_of_run_id"] == "run-failed-001"
+    assert fake.calls[-1] == (
+        "test-data-rerun",
+        {
+            "request_id": "change-1",
+            "idempotency_key": "rerun-1",
+            "actor": "local-user",
+            "replay_of_run_id": "run-failed-001",
+        },
+    )
+    assert background_calls[0]["run_id"] == "run-replayed-001"
 
 
 def test_openapi_contains_only_six_stage_web_and_token_protected_bridge_routes() -> None:
@@ -427,6 +531,7 @@ def test_openapi_contains_only_six_stage_web_and_token_protected_bridge_routes()
         "/api/v1/change-requests/{request_id}/confirmations/{checkpoint}",
         "/api/v1/change-requests/{request_id}/test-case-revisions",
         ("/api/v1/change-requests/{request_id}/test-case-revisions/{proposal_id}/confirm"),
+        "/api/v1/change-requests/{request_id}/test-data-runs/{run_id}/rerun",
         "/api/v1/change-requests/{request_id}/screenshots/{evidence_id}",
         "/api/v1/local-bridge/tasks/next",
         "/api/v1/local-bridge/confirmations/next",
@@ -462,11 +567,20 @@ def test_web_and_vscode_use_the_same_checkpoint_command() -> None:
     assert bridge.status_code == 200
     decisions = [value for name, value in fake.calls if name == "checkpoint-decision"]
     assert [value["surface"] for value in decisions] == ["web", "vscode_copilot"]
+    commands = [value for name, value in fake.calls if name == "command"]
+    assert len(commands) == 2
+    assert commands[1]["command_scope"] == "change-confirmation:change-1:requirement"
+    assert commands[1]["idempotency_key"] == "vscode-confirm-1"
+    assert commands[1]["actor"] == "vscode-user"
 
 
 def test_loopback_bridge_remains_token_protected() -> None:
     client, fake = client_with_fake(bridge_token="bridge-secret")
-    params = {"workspace_root": "/workspace/linked", "consumer_id": "vscode-1"}
+    params = {
+        "workspace_root": "/workspace/linked",
+        "consumer_id": "vscode-1",
+        "change_request_id": "change-1",
+    }
 
     assert client.get("/api/v1/local-bridge/tasks/next", params=params).status_code == 401
     response = client.get(
@@ -476,7 +590,32 @@ def test_loopback_bridge_remains_token_protected() -> None:
     )
 
     assert response.status_code == 200
-    assert fake.calls[-1][0] == "bridge-next"
+    assert fake.calls[-1] == (
+        "bridge-next",
+        {
+            "workspace_root": Path("/workspace/linked"),
+            "consumer_id": "vscode-1",
+            "change_request_id": "change-1",
+        },
+    )
+
+    confirmation = client.get(
+        "/api/v1/local-bridge/confirmations/next",
+        params={
+            "workspace_root": "/workspace/linked",
+            "change_request_id": "change-1",
+        },
+        headers={"Authorization": "Bearer bridge-secret"},
+    )
+
+    assert confirmation.status_code == 200
+    assert fake.calls[-1] == (
+        "bridge-confirmation-next",
+        {
+            "workspace_root": Path("/workspace/linked"),
+            "change_request_id": "change-1",
+        },
+    )
 
 
 def test_screenshot_content_is_scoped_by_change_request(tmp_path: Path) -> None:
@@ -534,7 +673,7 @@ def test_change_request_dialog_guides_submission_without_changing_the_api_flow()
     assert "データ生成、UI 検証、レポート" in page
 
     assert 'elements.requirementText.addEventListener("input", updateRequirementCount)' in script
-    assert 'setRequestSubmitting(true)' in script
+    assert "setRequestSubmitting(true)" in script
     assert 'setRequestFormStatus(error.message, "error")' in script
     assert 'api("/api/v1/change-requests"' in script
 
@@ -551,6 +690,6 @@ def test_project_dialog_keeps_long_rag_initialization_status_visible() -> None:
 
     assert 'id="projectFormStatus"' in page
     assert 'id="submitProjectButton"' in page
-    assert 'setProjectSubmitting(true)' in script
+    assert "setProjectSubmitting(true)" in script
     assert "RAG 基線を準備しています" in script
     assert 'setProjectFormStatus(error.message, "error")' in script

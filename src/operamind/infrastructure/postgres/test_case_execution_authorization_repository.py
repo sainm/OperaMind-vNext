@@ -184,16 +184,14 @@ class TestCaseExecutionAuthorizationRepository:
             ui_scenario_ids=_ui_scenario_ids(target_bundle),
             at=at,
         )
-        if len(grants) != 1:
-            raise ValueError(
-                "Deterministic Test Case scope authorization requires exactly one "
-                f"eligible Approval Grant (found {len(grants)})"
-            )
+        if not grants:
+            raise ValueError("No active Approval Grant permits TestDataPlan execution")
+        grant_id = grants[0]
         comparison = self._comparison(revision, target_bundle)
         existing = self._authorization_for_grant(
             revision=revision,
             comparison=comparison,
-            grant_id=grants[0],
+            grant_id=grant_id,
         )
         if existing is not None:
             return existing
@@ -201,14 +199,14 @@ class TestCaseExecutionAuthorizationRepository:
             return self._persist(
                 revision=revision,
                 comparison=comparison,
-                grant_id=grants[0],
+                grant_id=grant_id,
                 decision="reused",
                 actor=actor,
             )
         return self._persist(
             revision=revision,
             comparison=comparison,
-            grant_id=grants[0],
+            grant_id=grant_id,
             decision="reconfirmed",
             actor=actor,
         )

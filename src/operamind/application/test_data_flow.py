@@ -7,6 +7,10 @@ from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
 _VARIABLE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+_HTTP_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
+_HTTP_MUTATION_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_HTTP_GENERATION_METHODS = frozenset({"POST", "PUT", "PATCH"})
+_DATA_GENERATION_EFFECTS = frozenset({"creates", "updates"})
 
 
 class TestDataFlowSource(Protocol):
@@ -64,8 +68,10 @@ def validate_test_data_plan_flows(
             dependencies = {str(value) for value in cast(list[object], step.get("depends_on", []))}
             if not dependencies.issubset(available_steps):
                 reasons.append(f"{flow_id}/{step_id}: depends_on must reference earlier steps")
-            referenced_variables = _variables_in(step.get("inputs", {})) | _variables_in(
-                step.get("target", "")
+            referenced_variables = (
+                _variables_in(step.get("inputs", {}))
+                | _variables_in(step.get("target", ""))
+                | _variables_in(step.get("playwright", {}))
             )
             missing_variables = referenced_variables - available_variables
             if missing_variables:
@@ -110,8 +116,10 @@ def validate_test_data_plan_flows(
             dependencies = {str(value) for value in cast(list[object], step.get("depends_on", []))}
             if not dependencies.issubset(available_steps | cleanup_step_ids):
                 reasons.append(f"{flow_id}/{step_id}: cleanup depends_on references unknown steps")
-            referenced_variables = _variables_in(step.get("inputs", {})) | _variables_in(
-                step.get("target", "")
+            referenced_variables = (
+                _variables_in(step.get("inputs", {}))
+                | _variables_in(step.get("target", ""))
+                | _variables_in(step.get("playwright", {}))
             )
             missing_variables = referenced_variables - available_variables
             if missing_variables:
@@ -161,9 +169,35 @@ def validate_test_data_plan_artifact(plan: dict[str, Any]) -> list[str]:
         data_sets=data_sets,
         test_cases=[{"test_case_id": value} for value in test_ids],
     )
-    return validate_test_data_plan_flows(
+    reasons = validate_test_data_plan_flows(
         source,
         cast(list[dict[str, Any]], plan.get("generation_flows", [])),
+    )
+    channels = {
+        str(step.get("channel") or "")
+        for flow in cast(list[dict[str, Any]], plan.get("generation_flows", []))
+        for collection in ("steps", "cleanup_steps")
+        for step in cast(list[dict[str, Any]], flow.get(collection, []))
+    }
+    unavailable = sorted(channels - {"http", "ui"})
+    reasons.extend(
+        f"Test data channel has no project-bound executor: {channel}" for channel in unavailable
+    )
+    if plan.get("schema_version") == "v2":
+        reasons.extend(
+            _validate_v2_generation_contract(
+                cast(list[dict[str, Any]], plan.get("generation_flows", []))
+            )
+        )
+    return sorted(set(reasons))
+
+
+def test_data_plan_channels(plan: dict[str, Any]) -> frozenset[str]:
+    return frozenset(
+        str(step.get("channel") or "")
+        for flow in cast(list[dict[str, Any]], plan.get("generation_flows", []))
+        for collection in ("steps", "cleanup_steps")
+        for step in cast(list[dict[str, Any]], flow.get(collection, []))
     )
 
 
@@ -175,3 +209,165 @@ def _variables_in(value: object) -> set[str]:
     if isinstance(value, dict):
         return set().union(*(_variables_in(item) for item in value.values()), set())
     return set()
+
+
+def _validate_v2_generation_contract(flows: list[dict[str, Any]]) -> list[str]:
+    """Reject UI plans that merely assume target-system data already exists."""
+
+    reasons: list[str] = []
+    for flow in flows:
+        flow_id = str(flow.get("flow_id", "<unknown>"))
+        steps = cast(list[dict[str, Any]], flow.get("steps", []))
+        if not any(_is_explicit_data_generation_step(step) for step in steps):
+            reasons.append(
+                f"{flow_id}: v2 UI flow requires an explicit target-system data generation "
+                "step; unproved existing data is not executable test data"
+            )
+        for collection in ("steps", "cleanup_steps"):
+            for step in cast(list[dict[str, Any]], flow.get(collection, [])):
+                if step.get("channel") == "http":
+                    reasons.extend(
+                        _validate_http_step(
+                            flow_id,
+                            step,
+                            cleanup=collection == "cleanup_steps",
+                        )
+                    )
+    return reasons
+
+
+def _is_explicit_data_generation_step(step: dict[str, Any]) -> bool:
+    if cast(list[object], step.get("test_step_refs", [])):
+        return False
+    if step.get("data_effect") not in _DATA_GENERATION_EFFECTS:
+        return False
+    postconditions = cast(list[dict[str, Any]], step.get("postconditions", []))
+    if not any(
+        value.get("observe_via") in {"response", "api", "database", "ui"}
+        for value in postconditions
+    ):
+        return False
+    bindings = cast(list[dict[str, Any]], step.get("output_bindings", []))
+    if step.get("channel") == "http":
+        method, _path = _planned_http_target(step)
+        return method in _HTTP_GENERATION_METHODS and any(
+            value.get("source") == "response" and value.get("required") is True
+            for value in bindings
+        )
+    if step.get("channel") != "ui":
+        return False
+    observations = {
+        str(value.get("key") or "")
+        for value in cast(
+            list[dict[str, Any]],
+            cast(dict[str, Any], step.get("playwright") or {}).get("observations", []),
+        )
+    }
+    return any(
+        value.get("source") == "ui"
+        and value.get("required") is True
+        and str(value.get("path") or "") in observations
+        for value in bindings
+    )
+
+
+def _validate_http_step(
+    flow_id: str,
+    step: dict[str, Any],
+    *,
+    cleanup: bool,
+) -> list[str]:
+    step_id = str(step.get("step_id", "<unknown>"))
+    prefix = f"{flow_id}/{step_id}"
+    try:
+        method, path = _planned_http_target(step)
+    except ValueError as error:
+        return [f"{prefix}: {error}"]
+    effect = step.get("data_effect")
+    if method == "DELETE" and not cleanup:
+        return [f"{prefix}: HTTP setup cannot use DELETE as test data generation"]
+    if method == "GET" and effect not in {None, "none"}:
+        return [f"{prefix}: GET must declare data_effect=none"]
+    if method in _HTTP_GENERATION_METHODS and effect not in _DATA_GENERATION_EFFECTS:
+        return [f"{prefix}: mutating HTTP setup must declare creates or updates"]
+    if method == "DELETE" and effect != "deletes":
+        return [f"{prefix}: DELETE cleanup must declare data_effect=deletes"]
+    if cleanup and effect == "creates":
+        return [f"{prefix}: cleanup cannot declare data_effect=creates"]
+    postconditions = cast(list[dict[str, Any]], step.get("postconditions", []))
+    if not any(
+        value.get("observe_via") == "api"
+        and value.get("subject") == "status_code"
+        and value.get("operator") == "equals"
+        and isinstance(value.get("expected"), int)
+        and 200 <= cast(int, value["expected"]) < 300
+        for value in postconditions
+    ):
+        return [f"{prefix}: HTTP step must assert an exact successful status_code"]
+    if method not in _HTTP_MUTATION_METHODS or method == "DELETE":
+        return []
+    unbound_reference_paths = _literal_nested_identity_paths(
+        cast(dict[str, Any], step.get("inputs", {})).get("json")
+    )
+    if unbound_reference_paths:
+        return [
+            f"{prefix}: mutating HTTP setup must resolve nested identity fields from earlier "
+            f"verified output bindings: {unbound_reference_paths}"
+        ]
+    response_assertions = [
+        value for value in postconditions if value.get("observe_via") == "response"
+    ]
+    if not response_assertions:
+        return [f"{prefix}: mutating HTTP setup must assert returned business fields"]
+    output_bindings = cast(list[dict[str, Any]], step.get("output_bindings", []))
+    if not any(
+        value.get("source") == "response" and value.get("required") is True
+        for value in output_bindings
+    ):
+        return [f"{prefix}: mutating HTTP setup must bind a required response identity"]
+    if not path.startswith("/") or path.startswith("//"):
+        return [f"{prefix}: HTTP path must be origin-relative"]
+    return []
+
+
+def _literal_nested_identity_paths(value: object, *, path: str = "") -> list[str]:
+    """Reject hard-coded nested object IDs such as employee.id in setup payloads."""
+
+    if isinstance(value, list):
+        return [
+            nested
+            for index, item in enumerate(value)
+            for nested in _literal_nested_identity_paths(item, path=f"{path}[{index}]")
+        ]
+    if not isinstance(value, dict):
+        return []
+    paths: list[str] = []
+    for key, item in value.items():
+        current = f"{path}.{key}" if path else str(key)
+        if (
+            key == "id"
+            and path
+            and not (isinstance(item, str) and _VARIABLE.fullmatch(item.strip()) is not None)
+        ):
+            paths.append(current)
+        paths.extend(_literal_nested_identity_paths(item, path=current))
+    return paths
+
+
+def _planned_http_target(step: dict[str, Any]) -> tuple[str, str]:
+    inputs = step.get("inputs")
+    if not isinstance(inputs, dict):
+        raise ValueError("HTTP inputs must be an object")
+    parts = str(step.get("target") or "").split(maxsplit=1)
+    if len(parts) != 2:
+        raise ValueError("HTTP target must contain the reviewed method and path")
+    target_method, target_path = parts[0].upper(), parts[1]
+    method = str(inputs.get("method") or target_method).upper()
+    path = str(inputs.get("path") or target_path)
+    if method not in _HTTP_METHODS:
+        raise ValueError(f"unsupported HTTP method: {method}")
+    if (method, path) != (target_method, target_path):
+        raise ValueError("HTTP inputs differ from the reviewed target")
+    if not path.startswith("/") or path.startswith("//") or "://" in path:
+        raise ValueError("HTTP path must be origin-relative")
+    return method, path
