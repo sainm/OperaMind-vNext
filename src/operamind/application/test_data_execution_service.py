@@ -36,6 +36,7 @@ class TestDataExecutionServiceRequest:
     base_url: str | None = None
     started_at: datetime | None = None
     replay_of_run_id: str | None = None
+    execution_owner: str | None = None
 
     def __post_init__(self) -> None:
         values = (
@@ -53,6 +54,8 @@ class TestDataExecutionServiceRequest:
             raise ValueError("Test data execution service started_at must include a timezone")
         if self.replay_of_run_id is not None and not self.replay_of_run_id.strip():
             raise ValueError("Test data replay Run ID must not be blank")
+        if self.execution_owner is not None and not self.execution_owner.strip():
+            raise ValueError("Test data execution owner must not be blank")
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,7 +198,14 @@ class TestDataExecutionService:
                 close = getattr(executor, "close", None)
                 if callable(close):
                     close()
-        record = self._repository.complete(artifact)
+        record = (
+            self._repository.complete(artifact)
+            if request.execution_owner is None
+            else self._repository.complete(
+                artifact,
+                execution_owner=request.execution_owner,
+            )
+        )
         return TestDataExecutionServiceResult(
             created=True,
             artifact=artifact,

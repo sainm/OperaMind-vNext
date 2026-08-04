@@ -764,7 +764,10 @@ class OrchestrationTaskRepository:
                       OR CASE
                           WHEN task.lease_expired_projection
                                AND task.state IN ('claimed', 'running')
-                          THEN 'ready'
+                          THEN CASE
+                              WHEN task.attempt_count >= task.max_attempts THEN 'failed'
+                              ELSE 'ready'
+                          END
                           ELSE task.state
                       END = ANY(%s::text[])
                   )
@@ -838,7 +841,8 @@ class OrchestrationTaskRepository:
                 WITH eligible AS (
                     SELECT task.orchestration_task_id, task.automation_run_id,
                            task.change_request_id, task.project_id, task.sequence,
-                           task.title, task.state, task.updated_at,
+                           task.title, task.state, task.attempt_count,
+                           task.max_attempts, task.updated_at,
                            EXISTS (
                                SELECT 1 FROM orchestration_task_claims AS claim
                                WHERE claim.orchestration_task_id = task.orchestration_task_id
@@ -865,7 +869,7 @@ class OrchestrationTaskRepository:
                 SELECT task.orchestration_task_id, task.automation_run_id,
                        task.change_request_id, task.project_id, task.sequence,
                        task.title, task.state, task.lease_expired, task.total_count,
-                       task.blocking_reason,
+                       task.attempt_count, task.max_attempts, task.blocking_reason,
                        COALESCE(
                            jsonb_agg(dependency.depends_on_task_id
                                      ORDER BY dependency.depends_on_task_id)
@@ -877,7 +881,8 @@ class OrchestrationTaskRepository:
                   ON dependency.orchestration_task_id = task.orchestration_task_id
                 GROUP BY task.orchestration_task_id, task.automation_run_id,
                          task.change_request_id, task.project_id, task.sequence,
-                         task.title, task.state, task.lease_expired, task.total_count,
+                         task.title, task.state, task.attempt_count, task.max_attempts,
+                         task.lease_expired, task.total_count,
                          task.blocking_reason, task.updated_at
                 ORDER BY task.automation_run_id, task.sequence, task.orchestration_task_id
                 """,
@@ -900,7 +905,11 @@ class OrchestrationTaskRepository:
                 "title": str(row["title"]),
                 "state": str(row["state"]),
                 "effective_state": (
-                    "ready"
+                    (
+                        "failed"
+                        if int(row["attempt_count"]) >= int(row["max_attempts"])
+                        else "ready"
+                    )
                     if bool(row["lease_expired"]) and str(row["state"]) in {"claimed", "running"}
                     else str(row["state"])
                 ),
@@ -1570,7 +1579,12 @@ class OrchestrationTaskRepository:
             str(value["status"]) == "active" and value["lease_expires_at"] <= datetime.now(UTC)
             for value in claims
         )
-        effective_state = "ready" if lease_expired and state in {"claimed", "running"} else state
+        if lease_expired and state in {"claimed", "running"}:
+            effective_state = (
+                "failed" if int(task["attempt_count"]) >= int(task["max_attempts"]) else "ready"
+            )
+        else:
+            effective_state = state
         claim_views = [_claim_view(value) for value in claims]
         result_views = [_result_view(value) for value in results]
         event_views = [_event_view(value) for value in events]

@@ -222,12 +222,54 @@ def _input() -> ChangeOrchestrationInput:
                 "setup_actions": [
                     {
                         "action_id": "load-default-seed",
-                        "action_type": "fixture",
-                        "target": "classpath:data.sql",
+                        "action_type": "sql",
+                        "target": "create_expense_default_seed",
                         "payload": {"expected_expense_count": 4},
                     }
                 ],
                 "cleanup_policy": "isolated_environment",
+                "identity_binding": {
+                    "binding_mode": "generated",
+                    "source_flow_id": "flow-expense-default-seed",
+                    "source_step_id": "load-default-seed",
+                    "primary_key": {
+                        "name": "id",
+                        "source": "database",
+                        "path": "rows[0].id",
+                    },
+                    "business_unique_keys": [
+                        {
+                            "name": "expense_number",
+                            "source": "database",
+                            "path": "rows[0].expense_number",
+                        }
+                    ],
+                    "screen_key": {
+                        "name": "expense_number",
+                        "source": "database",
+                        "path": "rows[0].expense_number",
+                        "locator_template": {
+                            "by": "css",
+                            "value": "[data-expense-number='{{value}}']",
+                            "exact": True,
+                        },
+                    },
+                    "match_count": {"source": "database", "path": "row_count"},
+                },
+                "coverage_conditions": [
+                    {
+                        "condition_id": "default-expense-status-condition",
+                        "criterion_ref": "criterion-expense-status",
+                        "test_case_ref": "expense-filter-default-all",
+                        "test_data_id": "expense-default-seed",
+                        "condition_kind": "status",
+                        "source_flow_id": "flow-expense-default-seed",
+                        "source_step_id": "load-default-seed",
+                        "path": "rows[0].status",
+                        "operator": "equals",
+                        "expected": "RETURNED",
+                    }
+                ],
             }
         ],
         "generation_flows": [
@@ -240,19 +282,20 @@ def _input() -> ChangeOrchestrationInput:
                     {
                         "step_id": "load-default-seed",
                         "sequence": 1,
-                        "channel": "fixture",
+                        "channel": "sql",
                         "business_action": "既定データをロードする",
-                        "target": "classpath:data.sql",
+                        "data_effect": "creates",
+                        "target": "create_expense_default_seed",
                         "inputs": {"expected_expense_count": 4},
                         "depends_on": [],
                         "output_bindings": [],
                         "postconditions": [
                             {
                                 "assertion_id": "default-expense-count",
-                                "observe_via": "fixture",
-                                "subject": "expected_expense_count",
+                                "observe_via": "database",
+                                "subject": "row_count",
                                 "operator": "equals",
-                                "expected": 4,
+                                "expected": 1,
                             }
                         ],
                     },
@@ -264,15 +307,15 @@ def _input() -> ChangeOrchestrationInput:
                         "test_step_refs": ["open-expense-list"],
                         "screen_ref": "expense-list",
                         "ui_action_ref": "open",
+                        "operation_scope": "screen",
                         "playwright": {
                             "action": "goto",
                             "path": "/expense",
                             "mask_locators": [],
                             "observations": [
                                 {
-                                    "key": "expense_rows",
-                                    "kind": "count",
-                                    "locator": {"by": "css", "value": "tbody tr"},
+                                    "key": "page_title",
+                                    "kind": "title",
                                 }
                             ],
                         },
@@ -283,9 +326,49 @@ def _input() -> ChangeOrchestrationInput:
                             {
                                 "assertion_id": "expense-rows-visible",
                                 "observe_via": "ui",
-                                "subject": "expense_rows",
+                                "subject": "page_title",
+                                "operator": "equals",
+                                "expected": "経費一覧",
+                            }
+                        ],
+                    },
+                    {
+                        "step_id": "verify-bound-expense",
+                        "sequence": 3,
+                        "channel": "ui",
+                        "business_action": "生成した経費行を一意に確認する",
+                        "test_step_refs": [],
+                        "screen_ref": "expense-list",
+                        "ui_action_ref": "verify-bound-row",
+                        "operation_scope": "bound_record",
+                        "data_binding_ref": "expense-default-seed",
+                        "playwright": {
+                            "action": "wait_for",
+                            "locator": {"by": "css", "value": ":scope", "exact": True},
+                            "state": "visible",
+                            "mask_locators": [],
+                            "observations": [
+                                {
+                                    "key": "bound_row_count",
+                                    "kind": "count",
+                                    "locator": {
+                                        "by": "css",
+                                        "value": ":scope",
+                                        "exact": True,
+                                    },
+                                }
+                            ],
+                        },
+                        "inputs": {},
+                        "depends_on": ["open-expense-list-action"],
+                        "output_bindings": [],
+                        "postconditions": [
+                            {
+                                "assertion_id": "bound-expense-visible",
+                                "observe_via": "ui",
+                                "subject": "bound_row_count",
                                 "operator": "count_equals",
-                                "expected": 4,
+                                "expected": 1,
                             }
                         ],
                     },

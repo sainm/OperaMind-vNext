@@ -58,12 +58,11 @@ def test_v2_plan_rejects_unproved_existing_target_system_data() -> None:
     flow = _cross_screen_flow()
     for step in cast(list[dict[str, Any]], flow["steps"]):
         step["test_step_refs"] = [f"test-{step['step_id']}"]
-    plan = _plan(flow)
-    plan["schema_version"] = "v2"
+    plan = _v2_plan(flow)
 
     assert validate_test_data_plan_artifact(plan) == [
-        "expense-approval-chain: v2 UI flow requires an explicit target-system data "
-        "generation step; unproved existing data is not executable test data"
+        "All real database data coverage conditions must execute before the first TestPlan UI step",
+        "expense-draft: generated identity requires an earlier explicit data generation step",
     ]
 
 
@@ -71,12 +70,10 @@ def test_v2_plan_does_not_infer_data_generation_from_action_words() -> None:
     flow = _cross_screen_flow()
     step = cast(list[dict[str, Any]], flow["steps"])[0]
     del step["data_effect"]
-    plan = _plan(flow)
-    plan["schema_version"] = "v2"
+    plan = _v2_plan(flow)
 
     assert validate_test_data_plan_artifact(plan) == [
-        "expense-approval-chain: v2 UI flow requires an explicit target-system data "
-        "generation step; unproved existing data is not executable test data"
+        "expense-draft: generated identity requires an earlier explicit data generation step"
     ]
 
 
@@ -108,14 +105,12 @@ def test_v2_plan_rejects_delete_disguised_as_data_generation() -> None:
             ],
         }
     )
-    plan = _plan(flow)
-    plan["schema_version"] = "v2"
+    plan = _v2_plan(flow)
 
     assert validate_test_data_plan_artifact(plan) == [
         "expense-approval-chain/create-expense: HTTP setup cannot use DELETE as test data "
         "generation",
-        "expense-approval-chain: v2 UI flow requires an explicit target-system data "
-        "generation step; unproved existing data is not executable test data",
+        "expense-draft: generated identity requires an earlier explicit data generation step",
     ]
 
 
@@ -124,10 +119,34 @@ def test_v2_plan_accepts_typed_ui_data_generation_without_keyword_guessing() -> 
     step = cast(list[dict[str, Any]], flow["steps"])[0]
     step["business_action"] = "入力内容を確定する"
     step["ui_action_ref"] = "confirm"
-    plan = _plan(flow)
-    plan["schema_version"] = "v2"
+    plan = _v2_plan(flow)
 
     assert validate_test_data_plan_artifact(plan) == []
+
+
+def test_v2_plan_requires_explicit_record_scope_and_consistent_binding() -> None:
+    plan = _v2_plan(_cross_screen_flow())
+    flow = cast(list[dict[str, Any]], plan["generation_flows"])[0]
+    record_step = cast(list[dict[str, Any]], flow["steps"])[2]
+
+    del record_step["operation_scope"]
+    assert (
+        "expense-approval-chain/find-expense: v2 UI operation requires an explicit screen "
+        "or bound_record operation_scope" in validate_test_data_plan_artifact(plan)
+    )
+
+    record_step["operation_scope"] = "screen"
+    assert (
+        "expense-approval-chain/find-expense: screen operation cannot carry data_binding_ref"
+        in validate_test_data_plan_artifact(plan)
+    )
+
+    del record_step["data_binding_ref"]
+    record_step["operation_scope"] = "bound_record"
+    assert (
+        "expense-approval-chain/find-expense: bound_record operation requires data_binding_ref"
+        in validate_test_data_plan_artifact(plan)
+    )
 
 
 def test_v2_http_generation_requires_business_response_checks_and_identity_binding() -> None:
@@ -161,8 +180,7 @@ def test_v2_http_generation_requires_business_response_checks_and_identity_bindi
             ],
         }
     )
-    plan = _plan(flow)
-    plan["schema_version"] = "v2"
+    plan = _v2_plan(flow)
 
     assert validate_test_data_plan_artifact(plan) == [
         "expense-approval-chain/create-expense: mutating HTTP setup must assert "
@@ -208,8 +226,39 @@ def test_v2_http_generation_accepts_verified_business_response_and_id() -> None:
             ],
         }
     )
-    plan = _plan(flow)
-    plan["schema_version"] = "v2"
+    plan = _v2_plan(flow)
+
+    assert validate_test_data_plan_artifact(plan) == []
+
+
+def test_v2_sql_generation_is_executable_after_project_binding_validation() -> None:
+    flow = _cross_screen_flow()
+    step = cast(list[dict[str, Any]], flow["steps"])[0]
+    step.update(
+        {
+            "channel": "sql",
+            "target": "upsert_expense",
+            "inputs": {"expense_id": "EXP-001", "status": "SUBMITTED"},
+            "output_bindings": [
+                {
+                    "variable": "expense_id",
+                    "source": "database",
+                    "path": "rows[0].expense_id",
+                    "required": True,
+                }
+            ],
+            "postconditions": [
+                {
+                    "assertion_id": "expense-created",
+                    "observe_via": "database",
+                    "subject": "read_after_write",
+                    "operator": "equals",
+                    "expected": "passed",
+                }
+            ],
+        }
+    )
+    plan = _v2_plan(flow)
 
     assert validate_test_data_plan_artifact(plan) == []
 
@@ -257,8 +306,7 @@ def test_v2_http_generation_rejects_hard_coded_nested_master_identity() -> None:
             ],
         }
     )
-    plan = _plan(flow)
-    plan["schema_version"] = "v2"
+    plan = _v2_plan(flow)
 
     assert validate_test_data_plan_artifact(plan) == [
         "expense-approval-chain/create-expense: mutating HTTP setup must resolve nested "
@@ -304,8 +352,7 @@ def test_v2_http_generation_rejects_hard_coded_identity_nested_in_array() -> Non
             ],
         }
     )
-    plan = _plan(flow)
-    plan["schema_version"] = "v2"
+    plan = _v2_plan(flow)
 
     assert validate_test_data_plan_artifact(plan) == [
         "expense-approval-chain/create-expense: mutating HTTP setup must resolve nested "
@@ -324,6 +371,91 @@ def _plan(flow: dict[str, Any]) -> dict[str, Any]:
         ],
         "generation_flows": [deepcopy(flow)],
     }
+
+
+def _v2_plan(flow: dict[str, Any]) -> dict[str, Any]:
+    value = deepcopy(flow)
+    steps = cast(list[dict[str, Any]], value["steps"])
+    steps.insert(
+        1,
+        {
+            "step_id": "read-expense-identity",
+            "sequence": 2,
+            "channel": "sql",
+            "business_action": "登録した経費を DB から一意に読み戻す",
+            "data_effect": "none",
+            "test_step_refs": [],
+            "target": "read_expense_identity",
+            "inputs": {"expense_id": "{{expense_id}}"},
+            "depends_on": [str(steps[0]["step_id"])],
+            "output_bindings": [],
+            "postconditions": [
+                {
+                    "assertion_id": "expense-identity-unique",
+                    "observe_via": "database",
+                    "subject": "row_count",
+                    "operator": "equals",
+                    "expected": 1,
+                }
+            ],
+        },
+    )
+    for index, step in enumerate(steps, start=1):
+        step["sequence"] = index
+        if step.get("channel") == "ui":
+            step["operation_scope"] = "screen"
+    record_step = steps[2]
+    record_step["depends_on"] = ["read-expense-identity"]
+    record_step["data_binding_ref"] = "expense-draft"
+    record_step["operation_scope"] = "bound_record"
+    record_step["playwright"] = {
+        "action": "wait_for",
+        "locator": {"by": "css", "value": ":scope", "exact": True},
+        "state": "visible",
+        "mask_locators": [],
+        "observations": [],
+    }
+    plan = _plan(value)
+    plan["schema_version"] = "v2"
+    cast(list[dict[str, Any]], plan["data_sets"])[0]["identity_binding"] = {
+        "binding_mode": "generated",
+        "source_flow_id": "expense-approval-chain",
+        "source_step_id": "read-expense-identity",
+        "primary_key": {"name": "id", "source": "database", "path": "rows[0].id"},
+        "business_unique_keys": [
+            {
+                "name": "expense_number",
+                "source": "database",
+                "path": "rows[0].expense_number",
+            }
+        ],
+        "screen_key": {
+            "name": "expense_number",
+            "source": "database",
+            "path": "rows[0].expense_number",
+            "locator_template": {
+                "by": "css",
+                "value": "[data-expense-number='{{value}}']",
+                "exact": True,
+            },
+        },
+        "match_count": {"source": "database", "path": "row_count"},
+    }
+    cast(list[dict[str, Any]], plan["data_sets"])[0]["coverage_conditions"] = [
+        {
+            "condition_id": "expense-returned-condition",
+            "criterion_ref": "criterion-returned",
+            "test_case_ref": "expense-search",
+            "test_data_id": "expense-draft",
+            "condition_kind": "status",
+            "source_flow_id": "expense-approval-chain",
+            "source_step_id": "read-expense-identity",
+            "path": "rows[0].status",
+            "operator": "equals",
+            "expected": "RETURNED",
+        }
+    ]
+    return plan
 
 
 def _cross_screen_flow() -> dict[str, Any]:

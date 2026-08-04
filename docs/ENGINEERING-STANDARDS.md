@@ -109,7 +109,7 @@ Pytest      unit/integration tests
 Coverage    repository total + capability-critical per-file gate, changed-code report
 ```
 
-仓库级质量流水线的总 statement coverage 不得低于 80%；`quality/critical-coverage.json` 中列出的 readiness／Golden RAG、Approval、Copilot／Project Stack、Main Change Flow、Task scheduling 与 Recovery 文件必须逐文件达到 80%，不得用总体平均值掩盖单个关键模块。具体命令和 Evidence 边界见 `docs/QUALITY-BASELINE.md`。
+仓库级质量流水线的总 statement coverage 不得低于 80%；`quality/critical-coverage.json` 中列出的 readiness／Golden RAG、Approval、Copilot／Project Stack、Main Change Flow、Task scheduling 与 Recovery 文件默认必须逐文件达到 80%，其中 `file_minimum_percent_overrides` 指定的高风险核心模块必须达到 90%。不要求整个工程统一达到 90%，但不得用总体平均值掩盖单个关键模块，也不得让已经进入 90% 门禁的模块回落。具体命令和 Evidence 边界见 `docs/QUALITY-BASELINE.md`。
 
 不得通过全局 `# noqa`、`type: ignore` 或降低规则等级绕过问题。单行例外必须说明原因。
 

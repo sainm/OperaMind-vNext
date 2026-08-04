@@ -1,8 +1,9 @@
 {
   "profile_type": "DocumentConventionProfile",
   "profile_id": "program-design-conventions-example",
-  "profile_version": "1.0.0",
+  "profile_version": "1.1.0",
   "document_type": "program_design",
+  "fact_type": "program_method",
   "minimum_auto_match_score": 0.8,
   "variants": [
     {
@@ -30,6 +31,37 @@
         "return_type": ["戻り値", "Return Type"],
         "summary": ["処理概要", "Summary"],
         "exceptions": ["例外", "Exceptions"]
+      },
+      "stable_key_fields": ["method_name"],
+      "stable_key_normalizers": {
+        "method_name": "casefold"
+      }
+    },
+    {
+      "variant_id": "method-list-en",
+      "signals": [
+        {
+          "type": "sheet_name",
+          "values": ["Method List"],
+          "weight": 0.35
+        },
+        {
+          "type": "headers",
+          "values": ["Method Name", "Arguments", "Return Type", "Summary"],
+          "weight": 0.45
+        },
+        {
+          "type": "filename_token",
+          "values": ["Program Design"],
+          "weight": 0.2
+        }
+      ],
+      "field_aliases": {
+        "method_name": ["Method Name", "メソッド名"],
+        "arguments": ["Arguments", "引数"],
+        "return_type": ["Return Type", "戻り値"],
+        "summary": ["Summary", "処理概要"],
+        "exceptions": ["Exceptions", "例外"]
       },
       "stable_key_fields": ["method_name"],
       "stable_key_normalizers": {

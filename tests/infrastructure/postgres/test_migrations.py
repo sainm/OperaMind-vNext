@@ -80,6 +80,15 @@ def test_repository_migrations_are_sequential_and_transaction_free() -> None:
         "0067",
         "0068",
         "0069",
+        "0070",
+        "0071",
+        "0072",
+        "0073",
+        "0074",
+        "0075",
+        "0076",
+        "0077",
+        "0078",
     ]
     assert all(len(migration.checksum) == 64 for migration in catalog.migrations)
 
@@ -94,6 +103,48 @@ def test_verification_only_scope_allows_empty_edit_authority() -> None:
     assert "DROP CONSTRAINT approval_grants_arrays_valid" in migration
 
 
+def test_main_flow_coordinator_candidates_have_bounded_query_indexes() -> None:
+    migration = (ROOT / "migrations/0070_main_flow_coordinator_candidates.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "change_automation_runs_coordinator_candidates_idx" in migration
+    assert "WHERE status IN ('running', 'waiting')" in migration
+    assert "orchestration_task_claims_active_expiry_idx" in migration
+    assert "WHERE status = 'active'" in migration
+
+
+def test_test_data_execution_has_a_persisted_lease() -> None:
+    migration = (ROOT / "migrations/0071_test_data_execution_leases.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "execution_owner text" in migration
+    assert "lease_expires_at timestamptz" in migration
+    assert "test_data_execution_runs_running_lease_idx" in migration
+
+
+def test_project_onboarding_is_staged_and_recoverable() -> None:
+    migration = (ROOT / "migrations/0072_project_onboarding.sql").read_text(encoding="utf-8")
+
+    assert "CREATE TABLE project_onboarding_runs" in migration
+    assert "settings_revision integer NOT NULL" in migration
+    assert "lease_expires_at timestamptz" in migration
+    assert "'discover', 'documents', 'index', 'complete'" in migration
+    assert "project_onboarding_runs_claimable_idx" in migration
+
+
+def test_project_document_profiles_are_learned_and_version_bound() -> None:
+    migration = (ROOT / "migrations/0073_project_document_profile_learning.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "CREATE TABLE project_document_learning_runs" in migration
+    assert "CREATE TABLE project_document_learning_profiles" in migration
+    assert "waiting_for_profile" in migration
+    assert "requested_action IN ('initialize', 'rescan', 'reindex', 'relearn')" in migration
+
+
 def test_ui_verification_closure_binding_uses_current_artifact_store() -> None:
     migration = (ROOT / "migrations/0060_ui_verification_artifact_binding.sql").read_text(
         encoding="utf-8"
@@ -106,9 +157,7 @@ def test_ui_verification_closure_binding_uses_current_artifact_store() -> None:
 
 
 def test_project_local_sources_allow_version_control_optional_paths() -> None:
-    migration = (ROOT / "migrations/0061_project_local_sources.sql").read_text(
-        encoding="utf-8"
-    )
+    migration = (ROOT / "migrations/0061_project_local_sources.sql").read_text(encoding="utf-8")
 
     assert "CREATE TABLE project_workspaces" in migration
     assert "'git', 'local_files'" in migration
@@ -149,9 +198,7 @@ def test_ui_test_plan_revision_task_adds_a_bounded_copilot_stage() -> None:
 
 
 def test_project_test_environment_and_post_commit_planning_are_persisted() -> None:
-    migration = (ROOT / "migrations/0065_project_test_environment.sql").read_text(
-        encoding="utf-8"
-    )
+    migration = (ROOT / "migrations/0065_project_test_environment.sql").read_text(encoding="utf-8")
 
     assert "ADD COLUMN test_base_url" in migration
     assert "^https?://" in migration

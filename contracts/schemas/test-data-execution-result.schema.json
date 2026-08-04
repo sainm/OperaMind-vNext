@@ -15,6 +15,8 @@
     "started_at",
     "completed_at",
     "flow_results",
+    "data_bindings",
+    "data_coverage",
     "evidence",
     "failure_reasons",
     "cleanup_status"
@@ -34,6 +36,11 @@
       "minItems": 1,
       "items": {"$ref": "#/$defs/flowResult"}
     },
+    "data_bindings": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/dataBinding"}
+    },
+    "data_coverage": {"$ref": "#/$defs/dataCoverage"},
     "evidence": {
       "type": "array",
       "items": {"$ref": "#/$defs/evidence"}
@@ -46,6 +53,112 @@
     "cleanup_status": {"enum": ["not_required", "passed", "failed", "interrupted"]}
   },
   "$defs": {
+    "identityValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "value": {"type": ["string", "integer", "number", "boolean"]}
+      }
+    },
+    "frozenLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["by", "value", "exact"],
+      "properties": {
+        "by": {"enum": ["role", "label", "placeholder", "text", "alt_text", "title", "test_id", "css"]},
+        "value": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "minLength": 1},
+        "exact": {"const": true},
+        "frame": {"type": "string", "minLength": 1}
+      }
+    },
+    "dataBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binding_id", "run_id", "test_data_id", "binding_mode",
+        "source_flow_id", "source_step_id", "primary_key",
+        "business_unique_keys", "screen_key", "screen_locator",
+        "match_count", "frozen_at", "content_digest", "evidence_ref"
+      ],
+      "properties": {
+        "binding_id": {"type": "string", "minLength": 1},
+        "run_id": {"type": "string", "minLength": 1},
+        "test_data_id": {"type": "string", "minLength": 1},
+        "binding_mode": {"enum": ["generated", "adopted"]},
+        "source_flow_id": {"type": "string", "minLength": 1},
+        "source_step_id": {"type": "string", "minLength": 1},
+        "primary_key": {"$ref": "#/$defs/identityValue"},
+        "business_unique_keys": {
+          "type": "array", "minItems": 1, "items": {"$ref": "#/$defs/identityValue"}
+        },
+        "screen_key": {"$ref": "#/$defs/identityValue"},
+        "screen_locator": {"$ref": "#/$defs/frozenLocator"},
+        "match_count": {"const": 1},
+        "frozen_at": {"type": "string", "format": "date-time"},
+        "content_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "evidence_ref": {"type": "string", "minLength": 1}
+      }
+    },
+    "dataCoverageProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proof_id", "run_id", "condition_id", "criterion_ref",
+        "test_case_ref", "test_data_id", "condition_kind",
+        "source_flow_id", "source_step_id", "path", "operator",
+        "expected", "actual", "status", "content_digest", "evidence_ref"
+      ],
+      "properties": {
+        "proof_id": {"type": "string", "minLength": 1},
+        "run_id": {"type": "string", "minLength": 1},
+        "condition_id": {"type": "string", "minLength": 1},
+        "criterion_ref": {"type": "string", "minLength": 1},
+        "test_case_ref": {"type": "string", "minLength": 1},
+        "test_data_id": {"type": "string", "minLength": 1},
+        "condition_kind": {"enum": ["field", "status", "boundary", "relationship"]},
+        "source_flow_id": {"type": "string", "minLength": 1},
+        "source_step_id": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "operator": {"type": "string", "minLength": 1},
+        "expected": {},
+        "actual": {},
+        "status": {"enum": ["passed", "failed"]},
+        "failure_reason": {"type": "string", "minLength": 1},
+        "content_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "evidence_ref": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "failed"}}, "required": ["status"]},
+          "then": {"required": ["failure_reason"]},
+          "else": {"not": {"required": ["failure_reason"]}}
+        }
+      ]
+    },
+    "dataCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required_criterion_count", "covered_criterion_count",
+        "coverage_percent", "condition_count", "passed_condition_count",
+        "status", "proofs"
+      ],
+      "properties": {
+        "required_criterion_count": {"type": "integer", "minimum": 0},
+        "covered_criterion_count": {"type": "integer", "minimum": 0},
+        "coverage_percent": {"type": "number", "minimum": 0, "maximum": 100},
+        "condition_count": {"type": "integer", "minimum": 0},
+        "passed_condition_count": {"type": "integer", "minimum": 0},
+        "status": {"enum": ["passed", "failed", "not_applicable"]},
+        "proofs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/dataCoverageProof"}
+        }
+      }
+    },
     "stepResult": {
       "type": "object",
       "additionalProperties": false,
@@ -82,7 +195,7 @@
         "flow_id": {"type": "string", "minLength": 1},
         "step_id": {"type": "string", "minLength": 1},
         "phase": {"enum": ["setup", "cleanup"]},
-        "evidence_type": {"enum": ["fixture", "request", "response", "sql", "screenshot", "assertion", "step_log", "cleanup"]},
+        "evidence_type": {"enum": ["fixture", "request", "response", "sql", "screenshot", "assertion", "step_log", "cleanup", "data_binding", "data_coverage"]},
         "evidence_ref": {"type": "string", "minLength": 1},
         "content_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "sanitized": {"const": true}

@@ -191,6 +191,19 @@ def _executable_ui_case_ids(
         for item in cast(list[dict[str, Any]], test_data_plan.get("data_sets", []))
     }
     flows = cast(list[dict[str, Any]], test_data_plan.get("generation_flows", []))
+    coverage_tuples = {
+        (
+            str(condition.get("criterion_ref", "")),
+            str(condition.get("test_case_ref", "")),
+            str(condition.get("test_data_id", "")),
+        )
+        for data_set in cast(
+            list[dict[str, Any]], test_data_plan.get("data_sets", [])
+        )
+        for condition in cast(
+            list[dict[str, Any]], data_set.get("coverage_conditions", [])
+        )
+    }
     required_steps_by_case = {
         str(case.get("test_case_id") or ""): _refs(case, "step_ids") for case in cases
     }
@@ -220,7 +233,13 @@ def _executable_ui_case_ids(
     for case in cases:
         case_id = str(case.get("test_case_id") or "")
         case_data = _refs(case, "test_data_refs")
+        criterion_refs = _refs(case, "acceptance_criteria_refs")
         step_ids = _refs(case, "step_ids")
+        expected_coverage_tuples = {
+            (criterion_ref, case_id, test_data_ref)
+            for criterion_ref in criterion_refs
+            for test_data_ref in case_data
+        }
         if (
             case_id
             and case.get("level") == "ui"
@@ -229,6 +248,8 @@ def _executable_ui_case_ids(
             and case_data
             and case_data.issubset(data_ids)
             and case_data.issubset(flow_data_by_case.get(case_id, set()))
+            and expected_coverage_tuples
+            and expected_coverage_tuples.issubset(coverage_tuples)
             and step_ids
             and step_ids.issubset(mapped_steps_by_case[case_id])
             and step_ids.issubset(asserted_steps_by_case.get(case_id, set()))

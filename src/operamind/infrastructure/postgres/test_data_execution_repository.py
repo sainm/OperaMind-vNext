@@ -64,6 +64,19 @@ class TestDataExecutionRecord:
     started_at: datetime
     completed_at: datetime | None
     replay_of_run_id: str | None = None
+    execution_owner: str | None = None
+    heartbeat_at: datetime | None = None
+    lease_expires_at: datetime | None = None
+    attempt_count: int = 0
+    max_attempts: int = 3
+
+
+@dataclass(frozen=True, slots=True)
+class TestDataExecutionClaim:
+    """Atomic execution-lease decision for one persisted TestData Run."""
+
+    outcome: str
+    record: TestDataExecutionRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,14 +297,22 @@ class TestDataExecutionRepository:
             raise PersistenceConflictError("Orchestration TestDataPlan scope differs")
         return artifact
 
-    def complete(self, artifact: dict[str, Any]) -> TestDataExecutionRecord:
+    def complete(
+        self,
+        artifact: dict[str, Any],
+        *,
+        execution_owner: str | None = None,
+    ) -> TestDataExecutionRecord:
         self._contracts.validate_artifact(artifact)
         if artifact.get("artifact_type") != "TestDataExecutionResult":
             raise ValueError("Test data completion requires TestDataExecutionResult")
+        if execution_owner is not None and not execution_owner.strip():
+            raise ValueError("Test data completion owner must not be blank")
         run_id = str(artifact["run_id"])
         project_id = str(artifact["project_id"])
         completed_at = _timestamp(str(artifact["completed_at"]))
         _validate_evidence_bindings(artifact)
+        _validate_coverage_evidence(artifact)
         with self._connection.transaction(), self._connection.cursor() as cursor:
             current = self._load(cursor, run_id, for_update=True)
             if current is None or current.project_id != project_id:
@@ -308,6 +329,16 @@ class TestDataExecutionRepository:
             )
             if actual_scope != expected_scope:
                 raise ValueError("TestDataExecutionResult does not match reserved scope")
+            plan = self._artifacts.get(current.test_data_plan_id)
+            if (
+                plan is None
+                or plan.get("artifact_type") != "TestDataPlan"
+                or plan.get("project_id") != current.project_id
+            ):
+                raise PersistenceConflictError(
+                    "Test data coverage requires the reserved TestDataPlan"
+                )
+            _validate_coverage_evidence(artifact, plan=plan)
             if _timestamp(str(artifact["started_at"])) != current.started_at:
                 raise ValueError("TestDataExecutionResult started_at differs from reservation")
             self._artifacts.store(
@@ -389,14 +420,59 @@ class TestDataExecutionRepository:
                         evidence["sanitized"],
                     ),
                 )
+            for binding in cast(list[dict[str, Any]], artifact["data_bindings"]):
+                cursor.execute(
+                    """
+                    INSERT INTO test_data_identity_bindings (
+                        binding_id, run_id, project_id, test_data_id, binding_mode,
+                        source_flow_id, source_phase, source_step_id, primary_key,
+                        business_unique_keys, screen_key, screen_locator, match_count,
+                        frozen_at, content_digest, evidence_ref
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, 'setup', %s, %s::jsonb,
+                        %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s
+                    )
+                    """,
+                    (
+                        binding["binding_id"],
+                        run_id,
+                        project_id,
+                        binding["test_data_id"],
+                        binding["binding_mode"],
+                        binding["source_flow_id"],
+                        binding["source_step_id"],
+                        _json(binding["primary_key"]),
+                        _json(binding["business_unique_keys"]),
+                        _json(binding["screen_key"]),
+                        _json(binding["screen_locator"]),
+                        binding["match_count"],
+                        _timestamp(str(binding["frozen_at"])),
+                        binding["content_digest"],
+                        binding["evidence_ref"],
+                    ),
+                )
             cursor.execute(
                 """
                 UPDATE test_data_execution_runs
                 SET status = %s, result_artifact_id = execution_result_id,
-                    completed_at = %s
+                    completed_at = %s, execution_owner = NULL,
+                    heartbeat_at = NULL, lease_expires_at = NULL
                 WHERE run_id = %s AND status = 'running'
+                  AND (
+                      %s::text IS NULL
+                      OR (
+                          execution_owner = %s
+                          AND lease_expires_at > now()
+                      )
+                  )
                 """,
-                (artifact["status"], completed_at, run_id),
+                (
+                    artifact["status"],
+                    completed_at,
+                    run_id,
+                    execution_owner,
+                    execution_owner,
+                ),
             )
             if cursor.rowcount != 1:
                 raise PersistenceConflictError("Test data execution completion lost its lock")
@@ -436,6 +512,130 @@ class TestDataExecutionRepository:
     def get_record(self, run_id: str) -> TestDataExecutionRecord | None:
         with self._connection.cursor() as cursor:
             return self._load(cursor, run_id, for_update=False)
+
+    def claim_execution(
+        self,
+        *,
+        run_id: str,
+        executor_id: str,
+        at: datetime,
+        lease_seconds: int,
+    ) -> TestDataExecutionClaim:
+        """Claim an unowned Run, or report a live/stale/terminal reservation."""
+
+        if not run_id.strip() or not executor_id.strip():
+            raise ValueError("Test data execution Claim fields must not be blank")
+        if at.utcoffset() is None:
+            raise ValueError("Test data execution Claim time must include a timezone")
+        if not 30 <= lease_seconds <= 3600:
+            raise ValueError("Test data execution lease_seconds must be between 30 and 3600")
+        claimed_at = at.astimezone(UTC)
+        with self._connection.transaction(), self._connection.cursor() as cursor:
+            record = self._load(cursor, run_id, for_update=True)
+            if record is None:
+                raise ValueError("Reserved Test data Run does not exist")
+            if record.status != "running":
+                return TestDataExecutionClaim("terminal", record)
+            if record.execution_owner is not None:
+                if record.lease_expires_at is None:
+                    raise PersistenceConflictError("Test data execution lease is incomplete")
+                if record.lease_expires_at > claimed_at:
+                    return TestDataExecutionClaim("busy", record)
+                self._take_recovery_claim(
+                    cursor,
+                    run_id=run_id,
+                    executor_id=executor_id,
+                    claimed_at=claimed_at,
+                    lease_seconds=lease_seconds,
+                )
+                return TestDataExecutionClaim("stale", record)
+            if record.attempt_count >= record.max_attempts:
+                self._take_recovery_claim(
+                    cursor,
+                    run_id=run_id,
+                    executor_id=executor_id,
+                    claimed_at=claimed_at,
+                    lease_seconds=lease_seconds,
+                )
+                return TestDataExecutionClaim("exhausted", record)
+            cursor.execute(
+                """
+                UPDATE test_data_execution_runs
+                SET execution_owner = %s,
+                    heartbeat_at = %s,
+                    lease_expires_at = %s + make_interval(secs => %s),
+                    attempt_count = attempt_count + 1
+                WHERE run_id = %s AND status = 'running'
+                  AND execution_owner IS NULL
+                """,
+                (executor_id, claimed_at, claimed_at, lease_seconds, run_id),
+            )
+            if cursor.rowcount != 1:
+                raise PersistenceConflictError("Test data execution Claim lost its lock")
+            claimed = self._load(cursor, run_id, for_update=False)
+        if claimed is None:
+            raise RuntimeError("Test data execution Claim was not persisted")
+        return TestDataExecutionClaim("claimed", claimed)
+
+    @staticmethod
+    def _take_recovery_claim(
+        cursor: Cursor[Any],
+        *,
+        run_id: str,
+        executor_id: str,
+        claimed_at: datetime,
+        lease_seconds: int,
+    ) -> None:
+        cursor.execute(
+            """
+            UPDATE test_data_execution_runs
+            SET execution_owner = %s,
+                heartbeat_at = %s,
+                lease_expires_at = %s + make_interval(secs => %s)
+            WHERE run_id = %s AND status = 'running'
+            """,
+            (executor_id, claimed_at, claimed_at, lease_seconds, run_id),
+        )
+        if cursor.rowcount != 1:
+            raise PersistenceConflictError("Test data recovery Claim lost its lock")
+
+    def heartbeat_execution(
+        self,
+        *,
+        run_id: str,
+        executor_id: str,
+        at: datetime,
+        lease_seconds: int,
+    ) -> bool:
+        """Renew only the live Claim owned by the current executor."""
+
+        if not run_id.strip() or not executor_id.strip():
+            raise ValueError("Test data execution heartbeat fields must not be blank")
+        if at.utcoffset() is None:
+            raise ValueError("Test data execution heartbeat time must include a timezone")
+        if not 30 <= lease_seconds <= 3600:
+            raise ValueError("Test data execution lease_seconds must be between 30 and 3600")
+        heartbeat_at = at.astimezone(UTC)
+        with self._connection.transaction(), self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE test_data_execution_runs
+                SET heartbeat_at = %s,
+                    lease_expires_at = %s + make_interval(secs => %s)
+                WHERE run_id = %s AND status = 'running'
+                  AND execution_owner = %s
+                  AND lease_expires_at > %s
+                """,
+                (
+                    heartbeat_at,
+                    heartbeat_at,
+                    lease_seconds,
+                    run_id,
+                    executor_id,
+                    heartbeat_at,
+                ),
+            )
+            return cursor.rowcount == 1
 
     def append_event(self, write: TestDataExecutionEventWrite) -> dict[str, Any]:
         if any(not value.strip() for value in (write.run_id, write.project_id, write.event_type)):
@@ -731,7 +931,9 @@ class TestDataExecutionRepository:
             """
             SELECT execution_result_id, orchestration_id, test_data_plan_id,
                    approval_grant_id, project_id, analysis_case_id, status,
-                   started_at, completed_at, replay_of_run_id
+                   started_at, completed_at, replay_of_run_id,
+                   execution_owner, heartbeat_at, lease_expires_at,
+                   attempt_count, max_attempts
             FROM test_data_execution_runs
             WHERE run_id = %s
             """
@@ -754,6 +956,11 @@ class TestDataExecutionRepository:
             started_at=cast(datetime, row[7]),
             completed_at=cast(datetime | None, row[8]),
             replay_of_run_id=str(row[9]) if row[9] is not None else None,
+            execution_owner=str(row[10]) if row[10] is not None else None,
+            heartbeat_at=cast(datetime | None, row[11]),
+            lease_expires_at=cast(datetime | None, row[12]),
+            attempt_count=int(row[13]),
+            max_attempts=int(row[14]),
         )
 
     @staticmethod
@@ -824,6 +1031,40 @@ class TestDataExecutionRepository:
             return False
         cursor.execute(
             """
+            SELECT binding_id, test_data_id, binding_mode, source_flow_id,
+                   source_step_id, primary_key, business_unique_keys, screen_key,
+                   screen_locator, match_count, frozen_at, content_digest, evidence_ref
+            FROM test_data_identity_bindings
+            WHERE run_id = %s ORDER BY test_data_id
+            """,
+            (run_id,),
+        )
+        actual_bindings = cursor.fetchall()
+        expected_bindings = sorted(
+            (
+                (
+                    value["binding_id"],
+                    value["test_data_id"],
+                    value["binding_mode"],
+                    value["source_flow_id"],
+                    value["source_step_id"],
+                    value["primary_key"],
+                    value["business_unique_keys"],
+                    value["screen_key"],
+                    value["screen_locator"],
+                    value["match_count"],
+                    _timestamp(str(value["frozen_at"])),
+                    value["content_digest"],
+                    value["evidence_ref"],
+                )
+                for value in cast(list[dict[str, Any]], artifact["data_bindings"])
+            ),
+            key=lambda value: value[1],
+        )
+        if actual_bindings != expected_bindings:
+            return False
+        cursor.execute(
+            """
             SELECT evidence_id, flow_id, phase, step_id, evidence_type,
                    evidence_ref, content_digest, sanitized
             FROM test_data_execution_evidence
@@ -886,6 +1127,214 @@ def _validate_evidence_bindings(artifact: dict[str, Any]) -> None:
         for value in evidence
     ):
         raise ValueError("Test data Evidence refers to an unknown step")
+    bindings = cast(list[dict[str, Any]], artifact["data_bindings"])
+    test_data_ids = [str(value["test_data_id"]) for value in bindings]
+    binding_ids = [str(value["binding_id"]) for value in bindings]
+    if len(test_data_ids) != len(set(test_data_ids)) or len(binding_ids) != len(
+        set(binding_ids)
+    ):
+        raise ValueError("Test data bindings must be unique within one Run")
+    for binding in bindings:
+        evidence_value = by_ref.get(str(binding["evidence_ref"]))
+        if evidence_value is None or (
+            evidence_value.get("evidence_type") != "data_binding"
+            or evidence_value.get("flow_id") != binding["source_flow_id"]
+            or evidence_value.get("step_id") != binding["source_step_id"]
+            or evidence_value.get("phase") != "setup"
+            or evidence_value.get("content_digest") != binding["content_digest"]
+        ):
+            raise ValueError(
+                f"Frozen data binding has no matching Evidence: {binding['test_data_id']}"
+            )
+        payload = {
+            key: value
+            for key, value in binding.items()
+            if key not in {"content_digest", "evidence_ref"}
+        }
+        if hashlib.sha256(_json(payload).encode()).hexdigest() != binding["content_digest"]:
+            raise ValueError(f"Frozen data binding digest differs: {binding['test_data_id']}")
+
+
+def _validate_coverage_evidence(
+    artifact: dict[str, Any], *, plan: dict[str, Any] | None = None
+) -> None:
+    coverage = cast(dict[str, Any], artifact["data_coverage"])
+    proofs = cast(list[dict[str, Any]], coverage["proofs"])
+    required_count = int(coverage["required_criterion_count"])
+    covered_count = int(coverage["covered_criterion_count"])
+    condition_count = int(coverage["condition_count"])
+    passed_count = int(coverage["passed_condition_count"])
+    coverage_percent = float(coverage["coverage_percent"])
+    coverage_status = str(coverage["status"])
+    if not (0 <= covered_count <= required_count):
+        raise ValueError("Test data coverage criterion counts are invalid")
+    expected_percent = covered_count * 100 / required_count if required_count else 0
+    if coverage_percent != expected_percent:
+        raise ValueError("Test data coverage percent differs from criterion counts")
+    if condition_count < len(proofs):
+        raise ValueError("Test data coverage contains more proofs than planned conditions")
+    condition_ids = [str(value["condition_id"]) for value in proofs]
+    proof_ids = [str(value["proof_id"]) for value in proofs]
+    if len(condition_ids) != len(set(condition_ids)) or len(proof_ids) != len(
+        set(proof_ids)
+    ):
+        raise ValueError("Test data coverage proofs must be unique within one Run")
+    evidence_by_ref = {
+        str(value["evidence_ref"]): value
+        for value in cast(list[dict[str, Any]], artifact["evidence"])
+    }
+    for proof in proofs:
+        evidence = evidence_by_ref.get(str(proof["evidence_ref"]))
+        if (
+            evidence is None
+            or evidence.get("evidence_type") != "data_coverage"
+            or evidence.get("flow_id") != proof["source_flow_id"]
+            or evidence.get("step_id") != proof["source_step_id"]
+            or evidence.get("phase") != "setup"
+            or evidence.get("content_digest") != proof["content_digest"]
+        ):
+            raise ValueError(
+                "Test data coverage proof has no matching Evidence: "
+                f"{proof['condition_id']}"
+            )
+        payload = {
+            key: value
+            for key, value in proof.items()
+            if key not in {"content_digest", "evidence_ref"}
+        }
+        if hashlib.sha256(_json(payload).encode()).hexdigest() != proof["content_digest"]:
+            raise ValueError(
+                f"Test data coverage proof digest differs: {proof['condition_id']}"
+            )
+    passed = [value for value in proofs if value["status"] == "passed"]
+    if passed_count != len(passed):
+        raise ValueError("Test data coverage passed condition count differs")
+    passed_criteria = {str(value["criterion_ref"]) for value in passed}
+    if covered_count > len(passed_criteria):
+        raise ValueError("Test data coverage covered criteria have no passed proof")
+    if coverage_status == "not_applicable":
+        if any(
+            value != 0
+            for value in (
+                required_count,
+                covered_count,
+                condition_count,
+                passed_count,
+                len(proofs),
+            )
+        ):
+            raise ValueError("Not-applicable Test data coverage must be empty")
+    elif coverage_status == "passed":
+        if (
+            required_count == 0
+            or covered_count != required_count
+            or condition_count == 0
+            or len(proofs) != condition_count
+            or passed_count != condition_count
+            or len(passed_criteria) != required_count
+        ):
+            raise ValueError("Passed Test data coverage requires complete passed proofs")
+    elif coverage_status == "failed" and coverage_percent >= 100:
+        raise ValueError("Failed Test data coverage cannot be 100%")
+    if (
+        artifact.get("schema_version") == "v2"
+        and artifact["status"] == "passed"
+        and coverage_status != "passed"
+    ):
+        raise ValueError("Passed v2 Test data execution requires 100% data coverage")
+    if artifact["status"] == "passed" and coverage_status == "failed":
+        raise ValueError("Passed Test data execution cannot contain failed data coverage")
+    if plan is None:
+        return
+    planned_conditions = [
+        condition
+        for data_set in cast(list[dict[str, Any]], plan.get("data_sets", []))
+        for condition in cast(list[dict[str, Any]], data_set.get("coverage_conditions", []))
+    ]
+    planned_by_id = {
+        str(value["condition_id"]): value for value in planned_conditions
+    }
+    if len(planned_by_id) != len(planned_conditions):
+        raise ValueError("Reserved TestDataPlan coverage condition IDs are not unique")
+    if condition_count != len(planned_conditions):
+        raise ValueError("Test data coverage condition count differs from reserved plan")
+    planned_criteria = {str(value["criterion_ref"]) for value in planned_conditions}
+    if required_count != len(planned_criteria):
+        raise ValueError("Test data coverage criterion count differs from reserved plan")
+    for proof in proofs:
+        condition = planned_by_id.get(str(proof["condition_id"]))
+        if condition is None:
+            raise ValueError(
+                f"Test data coverage proof is outside reserved plan: {proof['condition_id']}"
+            )
+        for key in (
+            "criterion_ref",
+            "test_case_ref",
+            "test_data_id",
+            "condition_kind",
+            "source_flow_id",
+            "source_step_id",
+            "path",
+            "operator",
+        ):
+            if proof[key] != condition[key]:
+                raise ValueError(
+                    f"Test data coverage proof differs from reserved plan: "
+                    f"{proof['condition_id']}/{key}"
+                )
+        if "expected" in condition and proof.get("expected") != condition["expected"]:
+            raise ValueError(
+                "Test data coverage expected value differs from reserved plan: "
+                f"{proof['condition_id']}"
+            )
+    derived = _derive_coverage_summary(plan=plan, proofs=proofs)
+    for key in (
+        "required_criterion_count",
+        "covered_criterion_count",
+        "coverage_percent",
+        "condition_count",
+        "passed_condition_count",
+        "status",
+    ):
+        if coverage[key] != derived[key]:
+            raise ValueError(f"Test data coverage {key} was not engine-derived")
+
+
+def _derive_coverage_summary(
+    *, plan: dict[str, Any], proofs: list[dict[str, Any]]
+) -> dict[str, object]:
+    conditions = [
+        condition
+        for data_set in cast(list[dict[str, Any]], plan.get("data_sets", []))
+        for condition in cast(list[dict[str, Any]], data_set.get("coverage_conditions", []))
+    ]
+    required_by_criterion: dict[str, set[str]] = {}
+    for condition in conditions:
+        required_by_criterion.setdefault(str(condition["criterion_ref"]), set()).add(
+            str(condition["condition_id"])
+        )
+    passed_ids = {
+        str(value["condition_id"]) for value in proofs if value.get("status") == "passed"
+    }
+    covered = sum(
+        bool(required) and required.issubset(passed_ids)
+        for required in required_by_criterion.values()
+    )
+    required_count = len(required_by_criterion)
+    return {
+        "required_criterion_count": required_count,
+        "covered_criterion_count": covered,
+        "coverage_percent": covered * 100 / required_count if required_count else 0,
+        "condition_count": len(conditions),
+        "passed_condition_count": len(passed_ids),
+        "status": (
+            "not_applicable"
+            if not required_count
+            else "passed"
+            if covered == required_count
+            else "failed"
+        ),
+    }
 
 
 def _strings(value: object) -> frozenset[str]:

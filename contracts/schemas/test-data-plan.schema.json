@@ -46,7 +46,13 @@
               }
             }
           },
-          "cleanup_policy": {"enum": ["isolated_environment", "delete_after_run", "retain"]}
+          "cleanup_policy": {"enum": ["isolated_environment", "delete_after_run", "retain"]},
+          "identity_binding": {"$ref": "#/$defs/identityBinding"},
+          "coverage_conditions": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"$ref": "#/$defs/dataCoverageCondition"}
+          }
         }
       }
     },
@@ -77,6 +83,11 @@
       },
       "then": {
         "properties": {
+          "data_sets": {
+            "items": {
+              "required": ["identity_binding", "coverage_conditions"]
+            }
+          },
           "generation_flows": {
             "items": {
               "properties": {
@@ -86,7 +97,7 @@
                       "properties": {"channel": {"const": "ui"}},
                       "required": ["channel"]
                     },
-                    "then": {"required": ["playwright"]}
+                    "then": {"required": ["playwright", "operation_scope"]}
                   }
                 },
                 "cleanup_steps": {
@@ -95,7 +106,7 @@
                       "properties": {"channel": {"const": "ui"}},
                       "required": ["channel"]
                     },
-                    "then": {"required": ["playwright"]}
+                    "then": {"required": ["playwright", "operation_scope"]}
                   }
                 }
               }
@@ -129,6 +140,154 @@
         "path": {"$ref": "#/$defs/nonBlank"},
         "required": {"type": "boolean"}
       }
+    },
+    "identityValueSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "source", "path"],
+      "properties": {
+        "name": {"$ref": "#/$defs/nonBlank"},
+        "source": {"enum": ["response", "api", "database", "ui", "fixture", "variables"]},
+        "path": {"$ref": "#/$defs/nonBlank"}
+      }
+    },
+    "screenIdentityValueSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "source", "path", "locator_template"],
+      "properties": {
+        "name": {"$ref": "#/$defs/nonBlank"},
+        "source": {"enum": ["response", "api", "database", "ui", "fixture", "variables"]},
+        "path": {"$ref": "#/$defs/nonBlank"},
+        "locator_template": {"$ref": "#/$defs/boundLocatorTemplate"}
+      }
+    },
+    "boundLocatorTemplate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["by", "value", "exact"],
+      "properties": {
+        "by": {"enum": ["role", "label", "placeholder", "text", "alt_text", "title", "test_id", "css"]},
+        "value": {"type": "string", "pattern": "\\{\\{value\\}\\}"},
+        "name": {"type": "string", "pattern": "\\{\\{value\\}\\}"},
+        "exact": {"const": true},
+        "frame": {"$ref": "#/$defs/nonBlank"}
+      }
+    },
+    "identityMatchCount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "path"],
+      "properties": {
+        "source": {"enum": ["response", "api", "database", "ui", "fixture", "variables"]},
+        "path": {"$ref": "#/$defs/nonBlank"}
+      }
+    },
+    "identityBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binding_mode",
+        "source_flow_id",
+        "source_step_id",
+        "primary_key",
+        "business_unique_keys",
+        "screen_key",
+        "match_count"
+      ],
+      "properties": {
+        "binding_mode": {"enum": ["generated", "adopted"]},
+        "source_flow_id": {"$ref": "#/$defs/nonBlank"},
+        "source_step_id": {"$ref": "#/$defs/nonBlank"},
+        "primary_key": {"$ref": "#/$defs/identityValueSource"},
+        "business_unique_keys": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/identityValueSource"}
+        },
+        "screen_key": {"$ref": "#/$defs/screenIdentityValueSource"},
+        "match_count": {"$ref": "#/$defs/identityMatchCount"}
+      }
+    },
+    "dataCoverageCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "condition_id",
+        "criterion_ref",
+        "test_case_ref",
+        "test_data_id",
+        "condition_kind",
+        "source_flow_id",
+        "source_step_id",
+        "path",
+        "operator"
+      ],
+      "properties": {
+        "condition_id": {"$ref": "#/$defs/nonBlank"},
+        "criterion_ref": {"$ref": "#/$defs/nonBlank"},
+        "test_case_ref": {"$ref": "#/$defs/nonBlank"},
+        "test_data_id": {"$ref": "#/$defs/nonBlank"},
+        "condition_kind": {"enum": ["field", "status", "boundary", "relationship"]},
+        "source_flow_id": {"$ref": "#/$defs/nonBlank"},
+        "source_step_id": {"$ref": "#/$defs/nonBlank"},
+        "path": {"type": "string", "pattern": "^(?:\\$\\.)?rows\\[0\\](?:\\.[A-Za-z_][A-Za-z0-9_]*)+$"},
+        "operator": {
+          "enum": [
+            "equals", "not_equals", "contains", "exists", "in",
+            "greater_than", "greater_than_or_equal", "less_than",
+            "less_than_or_equal", "between", "equals_path", "not_equals_path"
+          ]
+        },
+        "expected": {},
+        "expected_path": {"type": "string", "pattern": "^(?:\\$\\.)?rows\\[0\\](?:\\.[A-Za-z_][A-Za-z0-9_]*)+$"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"operator": {"enum": ["equals_path", "not_equals_path"]}},
+            "required": ["operator"]
+          },
+          "then": {
+            "required": ["expected_path"],
+            "not": {"required": ["expected"]}
+          },
+          "else": {
+            "required": ["expected"],
+            "not": {"required": ["expected_path"]}
+          }
+        },
+        {
+          "if": {
+            "properties": {"operator": {"const": "between"}},
+            "required": ["operator"]
+          },
+          "then": {
+            "properties": {
+              "expected": {
+                "type": "array",
+                "prefixItems": [{"type": "number"}, {"type": "number"}],
+                "minItems": 2,
+                "maxItems": 2
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"operator": {"const": "in"}},
+            "required": ["operator"]
+          },
+          "then": {"properties": {"expected": {"type": "array", "minItems": 1}}}
+        },
+        {
+          "if": {
+            "properties": {"operator": {"const": "exists"}},
+            "required": ["operator"]
+          },
+          "then": {"properties": {"expected": {"type": "boolean"}}}
+        }
+      ]
     },
     "playwrightLocator": {
       "type": "object",
@@ -276,6 +435,8 @@
         "target": {"$ref": "#/$defs/nonBlank"},
         "screen_ref": {"$ref": "#/$defs/nonBlank"},
         "ui_action_ref": {"$ref": "#/$defs/nonBlank"},
+        "operation_scope": {"enum": ["screen", "bound_record"]},
+        "data_binding_ref": {"$ref": "#/$defs/nonBlank"},
         "playwright": {"$ref": "#/$defs/playwrightAction"},
         "computer_use_fallback": {"$ref": "#/$defs/computerUseFallback"},
         "inputs": {"type": "object"},
@@ -298,6 +459,20 @@
           "if": {"properties": {"channel": {"const": "ui"}}},
           "then": {"required": ["screen_ref", "ui_action_ref"]},
           "else": {"required": ["target"]}
+        },
+        {
+          "if": {
+            "properties": {"operation_scope": {"const": "bound_record"}},
+            "required": ["operation_scope"]
+          },
+          "then": {"required": ["data_binding_ref"]}
+        },
+        {
+          "if": {
+            "properties": {"operation_scope": {"const": "screen"}},
+            "required": ["operation_scope"]
+          },
+          "then": {"not": {"required": ["data_binding_ref"]}}
         }
       ]
     },

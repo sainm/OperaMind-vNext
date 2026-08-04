@@ -2,6 +2,20 @@
   "schema_version": "operamind-critical-coverage-v1",
   "overall_minimum_percent": 80,
   "file_minimum_percent": 80,
+  "file_minimum_percent_overrides": {
+    "src/operamind/application/approval_grant.py": 90,
+    "src/operamind/application/change_automation.py": 90,
+    "src/operamind/application/copilot_coding_task.py": 90,
+    "src/operamind/application/copilot_impact.py": 90,
+    "src/operamind/application/copilot_task_context.py": 90,
+    "src/operamind/application/failure_management.py": 90,
+    "src/operamind/application/main_change_flow.py": 90,
+    "src/operamind/application/main_flow_coordinator.py": 90,
+    "src/operamind/application/main_flow_execution.py": 90,
+    "src/operamind/application/orchestration_task.py": 90,
+    "src/operamind/application/readiness_evidence.py": 90,
+    "src/operamind/application/test_data_execution_service.py": 90
+  },
   "capabilities": {
     "readiness_and_golden_rag": [
       "src/operamind/readiness.py",
@@ -22,11 +36,28 @@
       "src/operamind/infrastructure/postgres/copilot_coding_task_repository.py"
     ],
     "main_change_flow": [
+      "src/operamind/application/change_automation.py",
       "src/operamind/application/main_change_flow.py",
       "src/operamind/application/main_flow_coordinator.py",
       "src/operamind/application/main_flow_execution.py",
+      "src/operamind/infrastructure/postgres/change_automation_repository.py",
       "src/operamind/web/routers/change_requests.py",
       "src/operamind/web/routers/projects.py"
+    ],
+    "project_onboarding": [
+      "src/operamind/application/document_profile_learning.py",
+      "src/operamind/application/project_document_baseline.py",
+      "src/operamind/application/project_onboarding.py",
+      "src/operamind/infrastructure/postgres/document_profile_learning_repository.py",
+      "src/operamind/infrastructure/postgres/project_onboarding_repository.py"
+    ],
+    "target_test_data": [
+      "src/operamind/application/test_data_coverage.py",
+      "src/operamind/application/test_data_flow.py",
+      "src/operamind/application/test_data_execution.py",
+      "src/operamind/infrastructure/test_data/executors.py",
+      "src/operamind/infrastructure/test_data/target_data.py",
+      "src/operamind/infrastructure/postgres/test_data_execution_repository.py"
     ],
     "task_scheduling": [
       "src/operamind/application/orchestration_task.py",

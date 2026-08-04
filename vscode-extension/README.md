@@ -2,7 +2,7 @@
 
 OperaMind の変更タスクを、loopback Bridge から VS Code 上の GitHub Copilot Chat へ渡すローカル拡張です。
 
-設計書、ソース、Diff 本文、テストログ本文を Bridge の中継ファイルへ書きません。Bridge Token は VS Code SecretStorage に保存し、接続先は loopback URL だけを許可します。未信頼 Workspace では診断以外を実行しません。
+設計書、ソース、Diff 本文、テストログ本文を Bridge の中継ファイルへ書きません。Bridge Token と短期 Claim Token は VS Code SecretStorage に保存し、接続先は loopback URL だけを許可します。Claim Token は設計書学習 Task の所有権確認にだけ使用し、Task の終端で削除します。未信頼 Workspace では診断以外を実行しません。
 
 ## インストール
 
@@ -38,9 +38,9 @@ Extension は Workspace 内の `.vscode/mcp.json` や Python を参照しませ�
 
 ## Change Task v2
 
-拡張は `copilot_change_task` または `ui_test_plan_revision` を受け取り、要求、設計書変更、コード範囲、コンパイル／テスト、UI 検証、最終レポートの順序と、設計差分、コード差分、実ブラウザ用 UiTestPlan、TestDataPlan の必須成果物を Copilot Chat に渡します。
+拡張は `copilot_change_task` または `ui_test_plan_revision` を受け取り、現在工程だけの最小 Prompt を Copilot Chat に渡します。Prompt は Task ID、Workspace、業務要件、現在工程の目的・入力・出力・停止条件だけを表示します。将来工程の手順、Schema、Command、認可情報は対話文に重複させず、MCP の `inputs`、`constraints`、`stage_contract` に分離します。
 
-`copilot_record_change_outputs` は同じ会話で三段階に使用します。
+`copilot_record_change_outputs` は現在工程の成果物だけを記録します。
 
 1. `output_stage=document_change`: RAG 対象文書の実差分を記録
 2. `output_stage=code_scope`: Code Graph で検証する Path / Symbol / Test Binding を記録
@@ -48,6 +48,6 @@ Extension は Workspace 内の `.vscode/mcp.json` や Python を参照しませ�
 4. `output_stage=test_planning`: committed EditResult と変更行 Coverage 成功後の UiTestPlan / TestDataPlan を記録
 5. `output_stage=ui_test_revision`: Web で確認された自然言語修正から完全な UiTestPlan / TestDataPlan を再生成
 
-状態を変更する Tool は次へ進める場合だけ `next_context` を返します。`copilot_get_coding_task` の返却自体が現在の authoritative context であり、この Tool に `next_context` がないことは停止理由ではありません。UI Case は TestDataPlan の有限 UI Step / Assertion として表現し、OperaMind がデータ生成後に実行して Screenshot Evidence を保存します。旧ファイル handoff は使用しません。詳細は [主変更閉ループ再構成](../docs/RECONSTRUCTION.md) を参照してください。
+全五 Tool は、業務結果を `result`、工程状態を共通の `stage_status` で返します。`stage_status.next_action` は `perform_current_stage`、`continue_current_stage`、`reload_current_task`、`wait_for_confirmation`、`resolve_blocker`、`stop` のいずれかです。次工程の完全な Context は結果に複製せず、`reload_current_task` の場合だけ同じ Task ID を再取得します。Tool の可視テキストは日本語の一行要約とし、正規データは `structuredContent` に一度だけ格納します。UI Case は TestDataPlan の有限 UI Step / Assertion として表現し、OperaMind がデータ生成後に実行して Screenshot Evidence を保存します。
 
 Copilot が使用する公開 Tool は `copilot_get_coding_task`、`copilot_record_change_outputs`、`copilot_run_task_command`、`copilot_validate_task_diff`、`copilot_record_task_result` の五つです。旧 Case／Impact／Approval／Packet／UI 個別 Tool は公開しません。

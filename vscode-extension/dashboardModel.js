@@ -11,6 +11,9 @@ const TASK_STATE_LABELS = Object.freeze({
   failed: "失敗",
   reanalysis_required: "再分析が必要",
   cancelled: "取消済み",
+  draft_ready: "Web 確認待ち",
+  confirmed: "適用済み",
+  superseded: "旧バージョン",
 });
 
 const CONNECTION_LABELS = Object.freeze({

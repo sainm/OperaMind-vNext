@@ -71,6 +71,81 @@ class FakeService:
             },
         }
 
+    def update_project_settings(self, value: Any) -> dict[str, object]:
+        self.calls.append(("project-update", value))
+        return {
+            "project": {
+                "project_id": value.project_id,
+                "name": value.name,
+                "workspace_root": "/workspace/demo",
+                "document_roots": [str(root) for root in value.document_roots],
+                "source_control_kind": "local_files",
+                "test_base_url": value.test_base_url,
+                "settings_revision": value.expected_revision + 1,
+            },
+            "onboarding": {"status": "queued", "current_stage": "discover"},
+        }
+
+    def project_onboarding(self, project_id: str) -> dict[str, object]:
+        return {
+            "project_id": project_id,
+            "onboarding": {"status": "running", "current_stage": "documents"},
+        }
+
+    def project_document_learning(self, project_id: str) -> dict[str, object]:
+        return {"project_id": project_id, "learning": None}
+
+    def project_target_data_profile(
+        self, project_id: str, *, include_statements: bool = False
+    ) -> dict[str, object]:
+        return {
+            "project_id": project_id,
+            "profile": {
+                "connection_alias": "expense_test_db",
+                "secret_configured": True,
+                "include_statements": include_statements,
+                "bindings": [],
+            },
+        }
+
+    def configure_project_target_data_profile(self, **values: object) -> dict[str, object]:
+        self.calls.append(("project-target-data", values))
+        return {
+            "project_id": values["project_id"],
+            "profile": {
+                "connection_alias": values["connection_alias"],
+                "secret_configured": True,
+                "bindings": list(values["bindings"]),  # type: ignore[arg-type]
+            },
+        }
+
+    def confirm_project_document_learning(self, **values: object) -> dict[str, object]:
+        self.calls.append(("project-document-learning-confirm", values))
+        return {"project_id": values["project_id"], "learning": {"status": "confirmed"}}
+
+    def project_preflight(self, project_id: str) -> dict[str, object]:
+        return {
+            "project_id": project_id,
+            "status": "ready",
+            "blocking_capabilities": [],
+            "capabilities": [],
+            "document_discovery": {"status": "ready", "document_count": 2},
+        }
+
+    def request_project_onboarding(self, **values: object) -> dict[str, object]:
+        self.calls.append(("project-onboarding", values))
+        return {
+            "project_id": values["project_id"],
+            "onboarding": {"status": "queued", "current_stage": "discover"},
+        }
+
+    def retry_project_onboarding(self, **values: object) -> dict[str, object]:
+        self.calls.append(("project-onboarding-retry", values))
+        return {
+            "project_id": values["project_id"],
+            "onboarding": {"status": "queued", "current_stage": "index"},
+        }
+
     def list_change_requests(self, *, project_id: str) -> dict[str, object]:
         return {
             "project_id": project_id,
@@ -278,6 +353,10 @@ def test_local_web_exposes_only_project_selection_and_six_stage_flow() -> None:
                 "source_control_kind": "local_files",
                 "source_git_baselines": [],
                 "test_base_url": None,
+                "settings_revision": None,
+                "onboarding": None,
+                    "document_learning": None,
+                    "target_data_profile": None,
             }
         ],
         "count": 1,
@@ -293,6 +372,30 @@ def test_local_web_exposes_only_project_selection_and_six_stage_flow() -> None:
         ],
         "count": 1,
     }
+
+
+def test_project_document_learning_is_readable_and_confirmed_from_web() -> None:
+    client, fake = client_with_fake()
+
+    current = client.get("/api/v1/projects/demo/document-learning")
+    confirmed = client.post(
+        "/api/v1/projects/demo/document-learning/confirm",
+        headers={
+            "X-OperaMind-Actor": "operator",
+            "Idempotency-Key": "confirm-document-profile-1",
+        },
+        json={"learning_run_id": "document-learning-001"},
+    )
+
+    assert current.status_code == 200
+    assert current.json() == {"project_id": "demo", "learning": None}
+    assert confirmed.status_code == 200
+    assert confirmed.json()["learning"]["status"] == "confirmed"
+    assert ("project-document-learning-confirm", {
+        "project_id": "demo",
+        "learning_run_id": "document-learning-001",
+        "actor": "operator",
+    }) in fake.calls
     flow = client.get("/api/v1/change-requests/change-1/flow").json()
     assert [stage["stage_id"] for stage in flow["stages"]] == [
         "requirement",
@@ -367,6 +470,105 @@ def test_project_rejects_test_base_url_query_before_initialization() -> None:
 
     assert response.status_code == 422
     assert fake.calls == []
+
+
+def test_project_settings_update_queues_a_rescan_with_optimistic_revision() -> None:
+    client, fake = client_with_fake()
+
+    response = client.patch(
+        "/api/v1/projects/demo",
+        json={
+            "name": "Demo Updated",
+            "document_roots": ["/documents/demo", "/documents/shared"],
+            "test_base_url": "http://127.0.0.1:8080/app",
+            "expected_revision": 3,
+        },
+        headers={
+            "X-OperaMind-Actor": "local-user",
+            "Idempotency-Key": "project-update-1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["project"]["settings_revision"] == 4
+    assert response.json()["onboarding"]["status"] == "queued"
+    assert [name for name, _value in fake.calls] == ["command", "project-update"]
+
+
+def test_target_data_profile_route_never_puts_connection_secret_in_command_receipt() -> None:
+    client, fake = client_with_fake()
+    connection_secret = "postgresql://tester:local-password@127.0.0.1:5432/expense"
+    binding = {
+        "query_binding_id": "cleanup_expense",
+        "operation": "cleanup",
+        "statement_text": "DELETE FROM expenses WHERE id = %(id)s",
+        "target_schema": "public",
+        "target_table": "expenses",
+        "parameter_columns": {"id": "id"},
+        "input_constraints": {
+            "id": {"type": "integer", "required": True},
+        },
+        "read_after_write_statement": "SELECT id FROM expenses WHERE id = %(id)s",
+        "read_assertion": {"mode": "rows_absent"},
+        "cleanup_binding_id": None,
+        "idempotency_policy": "natural_key",
+    }
+
+    response = client.put(
+        "/api/v1/projects/demo/target-data-profile",
+        json={
+            "connection_alias": "expense_test_db",
+            "connection_dsn": connection_secret,
+            "transaction_policy": "per_binding_transaction",
+            "bindings": [binding],
+        },
+        headers={
+            "X-OperaMind-Actor": "local-user",
+            "Idempotency-Key": "target-data-1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["profile"]["secret_configured"] is True
+    command = next(value for name, value in fake.calls if name == "command")
+    assert connection_secret not in str(command)
+    assert "local-password" not in str(command)
+    configured = next(value for name, value in fake.calls if name == "project-target-data")
+    assert configured["connection_dsn"] == connection_secret
+
+
+def test_project_onboarding_routes_expose_preflight_rebuild_and_retry() -> None:
+    client, fake = client_with_fake()
+
+    assert client.get("/api/v1/projects/demo/onboarding").json()["onboarding"] == {
+        "status": "running",
+        "current_stage": "documents",
+    }
+    assert client.get("/api/v1/projects/demo/preflight").json()["status"] == "ready"
+    rescan = client.post(
+        "/api/v1/projects/demo/onboarding",
+        json={"action": "rescan"},
+        headers={
+            "X-OperaMind-Actor": "local-user",
+            "Idempotency-Key": "project-rescan-1",
+        },
+    )
+    retry = client.post(
+        "/api/v1/projects/demo/onboarding/retry",
+        headers={
+            "X-OperaMind-Actor": "local-user",
+            "Idempotency-Key": "project-retry-1",
+        },
+    )
+
+    assert rescan.status_code == 202
+    assert retry.status_code == 202
+    assert [name for name, _value in fake.calls] == [
+        "command",
+        "project-onboarding",
+        "command",
+        "project-onboarding-retry",
+    ]
 
 
 def test_change_request_starts_internal_flow_without_user_authentication() -> None:
@@ -526,6 +728,13 @@ def test_openapi_contains_only_six_stage_web_and_token_protected_bridge_routes()
 
     assert paths == {
         "/api/v1/projects",
+        "/api/v1/projects/{project_id}",
+        "/api/v1/projects/{project_id}/onboarding",
+        "/api/v1/projects/{project_id}/document-learning",
+            "/api/v1/projects/{project_id}/document-learning/confirm",
+            "/api/v1/projects/{project_id}/target-data-profile",
+        "/api/v1/projects/{project_id}/onboarding/retry",
+        "/api/v1/projects/{project_id}/preflight",
         "/api/v1/change-requests",
         "/api/v1/change-requests/{request_id}/flow",
         "/api/v1/change-requests/{request_id}/confirmations/{checkpoint}",
@@ -598,6 +807,40 @@ def test_loopback_bridge_remains_token_protected() -> None:
             "change_request_id": "change-1",
         },
     )
+
+    accepted = client.post(
+        "/api/v1/local-bridge/tasks/document-learning-1/accept",
+        headers={"Authorization": "Bearer bridge-secret"},
+        json={
+            "workspace_root": "/workspace/linked",
+            "consumer_id": "vscode-1",
+            "claim_token": "learning-claim-1",
+            "accepted_by": "github-copilot",
+        },
+    )
+    assert accepted.status_code == 200
+    assert fake.calls[-1] == (
+        "bridge-accept",
+        {
+            "coding_task_id": "document-learning-1",
+            "workspace_root": Path("/workspace/linked"),
+            "consumer_id": "vscode-1",
+            "claim_token": "learning-claim-1",
+            "actor": "github-copilot",
+        },
+    )
+
+    resumed = client.get(
+        "/api/v1/local-bridge/tasks/document-learning-1/resume",
+        params={
+            "workspace_root": "/workspace/linked",
+            "consumer_id": "vscode-1",
+            "claim_token": "learning-claim-1",
+        },
+        headers={"Authorization": "Bearer bridge-secret"},
+    )
+    assert resumed.status_code == 200
+    assert fake.calls[-1][1]["claim_token"] == "learning-claim-1"
 
     confirmation = client.get(
         "/api/v1/local-bridge/confirmations/next",
@@ -684,12 +927,13 @@ def test_change_request_dialog_guides_submission_without_changing_the_api_flow()
     assert "grid-template-columns: 1fr" in stylesheet
 
 
-def test_project_dialog_keeps_long_rag_initialization_status_visible() -> None:
+def test_project_dialog_reports_background_onboarding_without_blocking_the_page() -> None:
     page = (ROOT / "src/operamind/web/static/index.html").read_text(encoding="utf-8")
     script = (ROOT / "src/operamind/web/static/app.js").read_text(encoding="utf-8")
 
     assert 'id="projectFormStatus"' in page
     assert 'id="submitProjectButton"' in page
     assert "setProjectSubmitting(true)" in script
-    assert "RAG 基線を準備しています" in script
+    assert "バックグラウンド Onboarding を開始します" in script
+    assert "設計書と RAG の準備をバックグラウンドで開始します" in script
     assert 'setProjectFormStatus(error.message, "error")' in script

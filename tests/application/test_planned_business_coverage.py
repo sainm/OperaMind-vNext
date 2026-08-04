@@ -166,6 +166,14 @@ def test_assertion_for_one_case_does_not_cover_another_case_in_same_flow() -> No
     )
     flow = test_data_plan["generation_flows"][0]
     flow["test_case_refs"].append("case-other")
+    test_data_plan["data_sets"][0]["coverage_conditions"].append(
+        {
+            "condition_id": "other-status-condition",
+            "criterion_ref": "criterion-other",
+            "test_case_ref": "case-other",
+            "test_data_id": "data-ui",
+        }
+    )
     flow["steps"].append(
         {
             "channel": "ui",
@@ -205,6 +213,14 @@ def test_executable_case_cannot_claim_a_rule_bound_to_another_required_scenario(
     test_plan["test_cases"].append(copied)
     flow = test_data_plan["generation_flows"][0]
     flow["test_case_refs"].append("case-other")
+    test_data_plan["data_sets"][0]["coverage_conditions"].append(
+        {
+            "condition_id": "wrong-rule-case-condition",
+            "criterion_ref": "criterion-ui",
+            "test_case_ref": "case-other",
+            "test_data_id": "data-ui",
+        }
+    )
     flow["steps"].append(
         {
             "channel": "ui",
@@ -282,7 +298,19 @@ def _artifacts() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
         "requirement_evidence": [],
     }
     test_data_plan = {
-        "data_sets": [{"test_data_id": "data-ui"}],
+        "data_sets": [
+            {
+                "test_data_id": "data-ui",
+                "coverage_conditions": [
+                    {
+                        "condition_id": "returned-status-condition",
+                        "criterion_ref": "criterion-ui",
+                        "test_case_ref": "case-ui",
+                        "test_data_id": "data-ui",
+                    }
+                ],
+            }
+        ],
         "generation_flows": [
             {
                 "test_case_refs": ["case-ui"],

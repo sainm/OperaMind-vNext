@@ -12,6 +12,7 @@ __pycache__/
 .coverage
 coverage.json
 coverage.xml
+quality-results/
 readiness/evidence/test-data/
 *.egg-info/
 *.pyc

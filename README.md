@@ -68,7 +68,11 @@ Web は単機利用を前提とし、`127.0.0.1` のみで公開します。ユ�
 
 初回は Web の「新しいプロジェクト」から、コード Workspace、一つ以上の設計書 Folder、Project 固有の UI テスト対象 URL を登録します。OperaMind はコードと各設計書 Folder の実際の Git Repository Root を判定します。Git 管理外の Folder は外部送信しない内部 Git Repository と初回 Commit を作成し、既存 Repository は未 Commit 変更がない場合だけ現在 Commit を基線にします。設計書 Folder がコード Repository 内にある場合は同じ Repository を再利用し、Nested Repository は作成しません。Windows では Windows の絶対 Path、macOS／Linux では各 OS の絶対 Path を入力します。
 
-TestDataPlan で対象システムの HTTP／UI Step を実行する場合は、Project 初期化画面で資格情報を含まない Origin を明示します。URL は Project と TestDataPlan 実行に固定され、未設定の場合は確認前に fail closed になります。
+Project 登録後の Onboarding はバックグラウンドで `構造抽出 → 設計書学習 → Canonical 文書 → RAG 索引` を順番に実行します。Project ごとの XLSX／DOCX から Sheet、Heading、Header と Sample を抽出し、VS Code 上の GitHub Copilot が Project 専用 `DocumentConventionProfile` 草案を生成します。Web の「設計書学習」で Field Mapping、Stable Key、曖昧点、Sample Coverage を確認し、Coverage 100%／曖昧 0 件の場合だけ Version を適用します。別 Project の学習結果は流用しません。内容だけが変わった場合は現行 Profile で Canonical／RAG を更新し、Sheet、Heading、Header 等の構造が変わった場合は差分学習と再確認を要求します。PostgreSQL の Canonical Data、Profile Version、監査記録は更新可能で、RAG は確認済み Version から自動再構築します。
+
+TestDataPlan で対象システムの HTTP／UI Step を実行する場合は、Project 初期化画面で資格情報を含まない Origin を明示します。SQL を使う Project は同じ画面の「被テストシステム DB データ準備」で接続 Alias と確認済み Query Binding を登録します。接続 Secret はユーザー領域の owner-only SecretStore に保存し、OperaMind DB、ログ、Copilot へ保存・送信しません。Copilot には `query_binding_id`、入力制約、cleanup 関係と確認済み Identity Contract だけを渡し、任意 SQL は受理しません。各 Test Data は実 DB の主キー、業務一意キー、画面識別キーを readback で 1 件に確定し、その Binding と digest を Run／Evidence に固定します。全 UI Step は `operation_scope` を `screen` または `bound_record` として明示し、後続の跨画面・表操作は `bound_record` と `data_binding_ref` を必須として、固定した画面キーの exact Locator 内だけで実行します。0 件、複数件、画面 drift を検出した場合は停止します。行番号、曖昧 Text、AI 推測、固定済み行に対する computer-use fallback は使用しません。各 write Binding は項目型、長さ、必須、列挙・業務制約、実 Table／Column 検査、read-after-write、cleanup、Transaction、冪等方針を満たさなければ Plan 確認前に fail closed になります。Fixture は自動テスト用の注入 Adapter に限定し、production の対象システムデータ準備には使用しません。
+
+データを「生成した」ことと、テストを「データでカバーした」ことは別に判定します。OperaMind は確定した AcceptanceCriteria、TestCase、`test_data_id` の全組合せを母数にし、TestDataPlan の `coverage_conditions` と完全一致しなければ Plan を受理しません。各条件は確認済み SQL Binding の readback 列だけを参照し、実行後に実 DB の項目値、状態、境界値、関連関係を再評価します。期待値、実測値、結果、digest、Evidence を Run に保存し、OperaMind が算出した Test Data Coverage が 100% になるまで TestPlan の UI Step、Screenshot、人工確認後の UI 検証へ進みません。AI が Coverage 値や成功結果を自己申告することはできません。
 
 ## VS Code
 

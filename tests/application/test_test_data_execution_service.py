@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar
@@ -55,6 +56,7 @@ class FakeRepository:
         del connection, contracts
         self.reserved: DataExecutionRunWrite | None = None
         self.completed: dict[str, Any] | None = None
+        self.completed_owner: str | None = None
         self.recovered: tuple[dict[str, Any], DataExecutionRecoveryWrite] | None = None
         self.__class__.instances.append(self)
 
@@ -68,8 +70,11 @@ class FakeRepository:
         assert (orchestration_id, project_id) == ("orchestration-001", "visiondemo")
         return _plan()
 
-    def complete(self, artifact: dict[str, Any]) -> DataExecutionRecord:
+    def complete(
+        self, artifact: dict[str, Any], *, execution_owner: str | None = None
+    ) -> DataExecutionRecord:
         self.completed = artifact
+        self.completed_owner = execution_owner
         return _record("passed", COMPLETED, created=True)
 
     def get_result(self, run_id: str) -> dict[str, Any] | None:
@@ -132,6 +137,7 @@ def reset_fake_repository() -> None:
         {"actor": " "},
         {"started_at": datetime(2026, 7, 18, 12, 0)},
         {"replay_of_run_id": " "},
+        {"execution_owner": " "},
     ],
 )
 def test_execution_service_request_rejects_invalid_values(values: dict[str, object]) -> None:
@@ -289,6 +295,41 @@ def test_execute_reserved_validates_existence_and_scope(monkeypatch: Any) -> Non
     )
     with pytest.raises(ValueError, match="scope differs"):
         service.execute_reserved(_request())
+
+
+def test_execute_reserved_returns_the_existing_terminal_result(monkeypatch: Any) -> None:
+    completed = _record("passed", COMPLETED, created=False)
+    FakeRepository.record = completed
+    FakeRepository.result = {"artifact_type": "TestDataExecutionResult", "status": "passed"}
+    service = _service(monkeypatch)
+
+    result = service.execute_reserved(_request())
+
+    assert result.created is False
+    assert result.record is completed
+    assert result.artifact == FakeRepository.result
+
+
+def test_execute_reserved_fails_closed_when_terminal_result_is_missing(
+    monkeypatch: Any,
+) -> None:
+    FakeRepository.record = _record("failed", COMPLETED, created=False)
+    service = _service(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="no result Artifact"):
+        service.execute_reserved(_request())
+
+
+def test_execute_reserved_binds_completion_to_the_claim_owner(monkeypatch: Any) -> None:
+    service = _service(monkeypatch)
+
+    result = service.execute_reserved(
+        replace(_request(), execution_owner="main-flow:worker-1")
+    )
+
+    repository = FakeRepository.instances[-1]
+    assert result.created
+    assert repository.completed_owner == "main-flow:worker-1"
 
 
 def _service(monkeypatch: Any) -> DataExecutionService:

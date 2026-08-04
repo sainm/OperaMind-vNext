@@ -38,6 +38,14 @@ class TestDataUiVerificationService:
         ]
         if not ui_cases or execution_result.get("status") != "passed":
             return None
+        data_coverage = cast(dict[str, object], execution_result.get("data_coverage") or {})
+        if ui_cases and (
+            data_coverage.get("status") != "passed"
+            or data_coverage.get("coverage_percent") != 100
+        ):
+            raise ValueError(
+                "Executable Test Data Coverage must be 100 before UI verification"
+            )
         scenario_evidence = _ui_scenario_evidence(
             ui_cases=ui_cases,
             test_data_plan=test_data_plan,

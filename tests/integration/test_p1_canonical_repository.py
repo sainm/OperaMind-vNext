@@ -917,8 +917,8 @@ def test_document_node_neighborhood_is_bounded_and_cross_document_explicit() -> 
             project_id=project_id,
             snapshot_id=snapshot_id,
         ) == (
-            "api-design-conventions-example@1.0.0",
-            "screen-design-conventions-example@1.0.0",
+            "api-design-conventions-example@1.1.0",
+            "screen-design-conventions-example@1.1.0",
         )
         with connection.cursor() as cursor:
             cursor.execute("SAVEPOINT document_node_digest_drift_probe")

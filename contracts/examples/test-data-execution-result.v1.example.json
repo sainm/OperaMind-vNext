@@ -27,6 +27,16 @@
       "deferred_assertion_ids": []
     }
   ],
+  "data_bindings": [],
+  "data_coverage": {
+    "required_criterion_count": 0,
+    "covered_criterion_count": 0,
+    "coverage_percent": 0,
+    "condition_count": 0,
+    "passed_condition_count": 0,
+    "status": "not_applicable",
+    "proofs": []
+  },
   "evidence": [
     {
       "evidence_id": "create-response",

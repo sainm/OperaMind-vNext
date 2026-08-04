@@ -9,14 +9,12 @@ from __future__ import annotations
 
 from typing import Any
 
-FLOW_STAGE_IDS = (
-    "requirement",
-    "document_change",
-    "code_scope",
-    "compile_test",
-    "ui_validation",
-    "final_report",
+from operamind.application.change_automation import (
+    CHANGE_FLOW_STATE_MACHINE,
+    PUBLIC_STAGE_IDS,
 )
+
+FLOW_STAGE_IDS = PUBLIC_STAGE_IDS
 
 _ACTIVE_STATES = {"accepted", "claimed", "in_progress", "running", "submitted"}
 _FAILED_STATES = {"blocked", "cancelled", "failed", "interrupted", "rejected"}
@@ -50,6 +48,26 @@ def build_main_change_flow(
         _ui_stage(execution, automation, request),
         _report_stage(execution, automation),
     ]
+    if automation is not None:
+        projection = CHANGE_FLOW_STATE_MACHINE.project(automation)
+        normalized_statuses = CHANGE_FLOW_STATE_MACHINE.normalize_public_stage_statuses(
+            automation=automation,
+            evidence_statuses=tuple(str(stage["status"]) for stage in stages),
+        )
+        normalized_stages: list[dict[str, object]] = []
+        for index, stage in enumerate(stages):
+            status = normalized_statuses[index]
+            blockers = _string_list(stage.get("blocking_reasons"))
+            if (
+                status == "blocked"
+                and not blockers
+                and stage["stage_id"] == projection.public_stage
+            ):
+                blockers = list(projection.blocking_reasons) or ["工程が停止しました。"]
+            normalized_stages.append(
+                {**stage, "status": status, "blocking_reasons": blockers}
+            )
+        stages = normalized_stages
     current_index = next(
         (
             index
@@ -71,6 +89,7 @@ def build_main_change_flow(
     blockers = [
         blocker for stage in stages for blocker in _string_list(stage.get("blocking_reasons"))
     ]
+    has_blocked_stage = any(stage["status"] == "blocked" for stage in stages)
     completed = sum(stage["status"] in {"completed", "not_required"} for stage in stages)
     request_artifact = _dict(request.get("artifact"))
     request_id = request.get("change_request_id") or request_artifact.get("change_request_id")
@@ -81,7 +100,11 @@ def build_main_change_flow(
         "change_request_id": request_id,
         "project_id": project_id,
         "status": (
-            "blocked" if blockers else "completed" if completed == len(stages) else "in_progress"
+            "blocked"
+            if has_blocked_stage
+            else "completed"
+            if completed == len(stages)
+            else "in_progress"
         ),
         "current_stage": stages[current_index]["stage_id"],
         "progress_percent": round(completed * 100 / len(stages)),
@@ -339,6 +362,8 @@ def _ui_stage(
     test_plan_status = str(test_plan.get("status") or "pending")
     data_plan_status = str(data_plan.get("status") or "pending")
     data_status = str(data_run.get("status") or "pending")
+    execution_result = _dict(data_run.get("result"))
+    data_coverage = _dict(execution_result.get("data_coverage"))
     closure = _dict(execution.get("change_closure"))
     closure_ui_status = str(closure.get("ui_status") or "")
     coverage = _dict(execution.get("business_coverage"))
@@ -346,8 +371,17 @@ def _ui_stage(
         coverage.get("coverage_percent") != 100
         or ("status" in coverage and coverage.get("status") != "passed")
     )
+    data_coverage_gate_failed = data_status == "passed" and (
+        data_coverage.get("status") != "passed"
+        or data_coverage.get("coverage_percent") != 100
+    )
     passed = data_plan_status == "ready" and (closure_ui_status in {"passed", "not_impacted"})
-    failed = coverage_gate_failed or data_plan_status == "blocked" or data_status in _FAILED_STATES
+    failed = (
+        coverage_gate_failed
+        or data_coverage_gate_failed
+        or data_plan_status == "blocked"
+        or data_status in _FAILED_STATES
+    )
     running = data_status in _ACTIVE_STATES
     confirmation_waiting = str((automation or {}).get("current_stage") or "") in {
         "test_plan_confirmation",
@@ -373,13 +407,17 @@ def _ui_stage(
             blockers.append(
                 "業務要件カバレッジが 100% ではないため、TestPlan を Copilot に返却します。"
             )
+        if data_coverage_gate_failed:
+            blockers.append(
+                "実 DB のテストデータ条件カバレッジが 100% ではないため、"
+                "UI 検証へ進めません。"
+            )
         blockers.extend(confirmation_blockers)
         blockers.extend(_string_list(data_plan.get("blocking_reasons")))
         blockers.extend(_string_list(closure.get("blocking_reasons")))
     if status == "blocked" and not blockers:
         blockers = ["テストデータ生成または UI 検証が合格していません。"]
     screenshots = _dict_list(execution.get("screenshots"))
-    execution_result = _dict(data_run.get("result"))
     failure_management = _dict(execution.get("failure_management"))
     execution_actions = _dict(failure_management.get("actions"))
     return _stage(
@@ -414,6 +452,10 @@ def _ui_stage(
                 data_plan=data_plan,
                 execution_result=execution_result,
             ),
+            "data_bindings": _data_binding_summaries(execution_result),
+            "data_coverage_status": data_coverage.get("status"),
+            "data_coverage_percent": data_coverage.get("coverage_percent"),
+            "data_coverage_proofs": _data_coverage_summaries(data_coverage),
             "screenshots": [
                 {
                     "content_url": item.get("content_url"),
@@ -610,6 +652,53 @@ def _generation_flow_summaries(
             }
         )
     return values
+
+
+def _data_binding_summaries(
+    execution_result: dict[str, object],
+) -> list[dict[str, object]]:
+    """Expose the immutable record identity used by UI operations, without secrets."""
+
+    return [
+        {
+            "test_data_id": binding.get("test_data_id"),
+            "binding_mode": binding.get("binding_mode"),
+            "primary_key": _dict(binding.get("primary_key")),
+            "business_unique_keys": _dict_list(binding.get("business_unique_keys")),
+            "screen_key": _dict(binding.get("screen_key")),
+            "screen_locator": _dict(binding.get("screen_locator")),
+            "match_count": binding.get("match_count"),
+            "frozen_at": binding.get("frozen_at"),
+            "content_digest": binding.get("content_digest"),
+            "evidence_ref": binding.get("evidence_ref"),
+        }
+        for binding in _dict_list(execution_result.get("data_bindings"))
+    ]
+
+
+def _data_coverage_summaries(
+    data_coverage: dict[str, object],
+) -> list[dict[str, object]]:
+    """Expose engine-computed actual/expected proofs, never an AI coverage claim."""
+
+    return [
+        {
+            "condition_id": proof.get("condition_id"),
+            "criterion_ref": proof.get("criterion_ref"),
+            "test_case_ref": proof.get("test_case_ref"),
+            "test_data_id": proof.get("test_data_id"),
+            "condition_kind": proof.get("condition_kind"),
+            "path": proof.get("path"),
+            "operator": proof.get("operator"),
+            "expected": proof.get("expected"),
+            "actual": proof.get("actual"),
+            "status": proof.get("status"),
+            "failure_reason": proof.get("failure_reason"),
+            "content_digest": proof.get("content_digest"),
+            "evidence_ref": proof.get("evidence_ref"),
+        }
+        for proof in _dict_list(data_coverage.get("proofs"))
+    ]
 
 
 def _generation_step_summary(

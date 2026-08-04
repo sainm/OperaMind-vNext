@@ -70,6 +70,14 @@ textarea { resize: vertical; line-height: 1.7; }
 .project-summary > strong { display: block; margin-top: .55rem; overflow-wrap: anywhere; font-size: .72rem; line-height: 1.5; }
 .project-summary ul { display: grid; gap: .25rem; margin: .55rem 0 0; padding: .55rem 0 0 1rem; border-top: 1px dashed var(--line); color: var(--muted); }
 .project-summary li { overflow-wrap: anywhere; font-size: .68rem; line-height: 1.45; }
+.project-onboarding-summary { margin-top: .55rem; padding: .55rem .65rem; border-radius: 8px; background: white; font-size: .68rem; line-height: 1.45; }
+.project-onboarding-summary.ready { color: var(--brand-dark); background: var(--brand-soft); }
+.project-onboarding-summary.failed { color: var(--red); background: var(--red-soft); }
+.project-onboarding-summary.running, .project-onboarding-summary.queued { color: var(--blue); background: var(--blue-soft); }
+.project-onboarding-summary.waiting_for_profile { color: var(--amber); background: var(--amber-soft); }
+.project-summary-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .35rem; margin-top: .65rem; }
+.project-summary-actions button { min-width: 0; padding: .42rem .3rem; font-size: .65rem; }
+.project-summary-actions .learning-button { color: white; background: var(--brand); }
 .request-item { width: 100%; padding: .82rem; text-align: left; border: 1px solid transparent; border-radius: 12px; background: transparent; color: var(--ink); }
 .request-item strong { display: -webkit-box; overflow: hidden; font-size: .86rem; line-height: 1.5; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .request-item span { display: block; margin-top: .42rem; color: var(--muted); font-size: .68rem; }
@@ -247,7 +255,38 @@ pre { max-height: 240px; overflow: auto; margin: 0; white-space: pre-wrap; }
 .request-dialog > form > p { margin: 0; color: var(--muted); line-height: 1.6; }
 .form-grid { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 1rem; }
 .dialog-note { padding: .8rem 1rem; border-radius: 10px; color: var(--brand-dark); background: var(--brand-soft); font-size: .76rem; line-height: 1.6; }
+.target-data-settings { padding: .8rem 1rem; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
+.target-data-settings summary { cursor: pointer; color: var(--ink); font-weight: 700; }
+.target-data-settings > p { margin: .7rem 0; color: var(--muted); font-size: .76rem; line-height: 1.6; }
+.target-data-settings label { margin-top: .75rem; }
+.target-data-settings small { color: var(--muted); font-size: .68rem; }
+.target-data-settings textarea { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .72rem; }
+.dialog-note.neutral { margin-top: .8rem; color: var(--muted); background: white; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: .6rem; }
+.learning-dialog { width: min(920px, calc(100vw - 2rem)); }
+.learning-dialog-body { display: grid; max-height: min(92vh, 900px); overflow-y: auto; gap: 1rem; padding: 1.5rem; }
+.learning-dialog-body > p { margin: 0; color: var(--muted); line-height: 1.6; }
+.learning-status { display: grid; gap: .35rem; padding: .9rem; border-radius: 12px; background: var(--soft); }
+.learning-status strong { font-size: .95rem; }
+.learning-status span { color: var(--muted); font-size: .75rem; }
+.learning-status.draft_ready, .learning-status.confirmed { color: var(--brand-dark); background: var(--brand-soft); }
+.learning-status.failed, .learning-status.cancelled { color: var(--red); background: var(--red-soft); }
+.learning-meter { height: 7px; overflow: hidden; border-radius: 99px; background: rgb(100 114 109 / 16%); }
+.learning-meter span { display: block; height: 100%; border-radius: inherit; background: var(--brand); }
+.learning-content { display: grid; gap: .85rem; }
+.learning-profile-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: .75rem; }
+.learning-profile-card { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: white; }
+.learning-profile-card > header { display: flex; justify-content: space-between; gap: 1rem; padding: .8rem; background: var(--soft); }
+.learning-profile-card > small { display: block; padding: .55rem .8rem 0; overflow-wrap: anywhere; color: var(--muted); }
+.learning-profile-card section { padding: .7rem .8rem; }
+.learning-profile-card h3 { margin: 0 0 .5rem; font-size: .8rem; }
+.learning-profile-card dl { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: .5rem; margin: 0; }
+.learning-profile-card dt { color: var(--muted); font-size: .66rem; font-weight: 800; }
+.learning-profile-card dd { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0; }
+.learning-profile-card code { padding: .16rem .35rem; border-radius: 5px; background: var(--brand-soft); font-size: .66rem; overflow-wrap: anywhere; }
+.learning-evidence { display: flex; justify-content: space-between; gap: 1rem; padding: .75rem; border: 1px dashed #b9d8cc; border-radius: 10px; }
+.learning-evidence span { color: var(--muted); font-size: .72rem; }
+.learning-ambiguities { margin: 0; padding: .75rem .75rem .75rem 2rem; border-radius: 10px; color: var(--red); background: var(--red-soft); }
 
 .change-request-dialog { width: min(780px, calc(100vw - 2rem)); max-height: min(92vh, 900px); overflow: hidden; }
 .change-request-dialog form { max-height: min(92vh, 900px); overflow-y: auto; gap: 1.15rem; padding: 0 1.6rem 1.6rem; }

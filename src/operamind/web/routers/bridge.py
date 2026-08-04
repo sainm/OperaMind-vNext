@@ -81,6 +81,7 @@ def accept_task(
         coding_task_id=coding_task_id,
         workspace_root=Path(body.workspace_root),
         consumer_id=body.consumer_id,
+        claim_token=body.claim_token,
         actor=body.accepted_by,
     )
 
@@ -91,11 +92,13 @@ def resume_task(
     workspace_root: Annotated[str, Query(min_length=1, max_length=4000)],
     consumer_id: Annotated[str, Query(min_length=1, max_length=200)],
     service: Service,
+    claim_token: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
 ) -> dict[str, object]:
     return service.resume_copilot_task(
         coding_task_id=coding_task_id,
         workspace_root=Path(workspace_root),
         consumer_id=consumer_id,
+        claim_token=claim_token,
     )
 
 
@@ -109,6 +112,7 @@ def cancel_task(
         coding_task_id=coding_task_id,
         workspace_root=Path(body.workspace_root),
         consumer_id=body.consumer_id,
+        claim_token=body.claim_token,
         actor=body.cancelled_by,
         reason=body.reason,
     )

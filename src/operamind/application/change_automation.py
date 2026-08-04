@@ -35,8 +35,274 @@ STAGE_LABELS = {
     "completed": "完了",
 }
 
+PUBLIC_STAGE_IDS = (
+    "requirement",
+    "document_change",
+    "code_scope",
+    "compile_test",
+    "ui_validation",
+    "final_report",
+)
 
-def decide_change_automation(
+INTERNAL_TO_PUBLIC_STAGE = {
+    "requirement_confirmation": "requirement",
+    "rag_document_confirmation": "document_change",
+    "document_generation": "document_change",
+    "document_revision": "document_change",
+    "document_confirmation": "document_change",
+    "impact_analysis": "code_scope",
+    "impact_confirmation": "code_scope",
+    "execution_approval": "compile_test",
+    "code_change": "compile_test",
+    "planning": "ui_validation",
+    "test_plan_confirmation": "ui_validation",
+    "ui_test_confirmation": "ui_validation",
+    "test_data_execution": "ui_validation",
+    "ui_verification": "ui_validation",
+    "closure": "final_report",
+    "final_report_confirmation": "final_report",
+    "completed": "final_report",
+}
+
+CONFIRMATION_ACTION_CHECKPOINTS = {
+    "confirm_requirement": "requirement",
+    "confirm_rag_documents": "rag_documents",
+    "confirm_document_diff": "document_diff",
+    "confirm_code_scope": "code_scope",
+    "confirm_test_plan": "test_plan",
+    "confirm_ui_test": "ui_test",
+    "confirm_final_report": "final_report",
+}
+
+COPILOT_TASK_AUTOMATION_STAGES = {
+    "document_change": frozenset({"document_generation", "document_revision"}),
+    "code_scope": frozenset({"impact_analysis"}),
+}
+
+_ACTION_STAGES = {
+    "confirm_requirement": frozenset({"requirement_confirmation"}),
+    "confirm_rag_documents": frozenset({"rag_document_confirmation"}),
+    "prepare_document_with_copilot": frozenset({"document_generation"}),
+    "revise_document_with_copilot": frozenset({"document_revision"}),
+    "confirm_document_diff": frozenset({"document_confirmation"}),
+    "prepare_canonical_analysis": frozenset({"impact_analysis"}),
+    "analyze_code_scope_with_copilot": frozenset({"impact_analysis"}),
+    "confirm_code_scope": frozenset({"impact_confirmation"}),
+    "provision_execution_scope": frozenset({"execution_approval"}),
+    "apply_code_change_with_copilot": frozenset({"code_change"}),
+    "generate_ui_test_plan": frozenset({"code_change"}),
+    "generate_orchestration": frozenset({"planning"}),
+    "inspect_generated_plan": frozenset({"planning"}),
+    "confirm_test_plan": frozenset({"test_plan_confirmation"}),
+    "confirm_ui_test": frozenset({"ui_test_confirmation"}),
+    "start_test_data_execution": frozenset({"test_data_execution"}),
+    "refresh": frozenset({"test_data_execution"}),
+    "run_ui_verification": frozenset({"ui_verification"}),
+    "confirm_final_report": frozenset({"final_report_confirmation"}),
+}
+
+_AUTOMATION_STATUSES = frozenset({"waiting", "running", "blocked", "completed"})
+
+
+@dataclass(frozen=True, slots=True)
+class ChangeFlowProjection:
+    """One normalized state shared by Web, MCP, Copilot, and the coordinator."""
+
+    internal_stage: str
+    public_stage: str
+    status: str
+    next_action: str | None
+    confirmation_checkpoint: str | None
+    blocking_reasons: tuple[str, ...]
+
+
+class ChangeFlowStateMachine:
+    """Own workflow decisions and all cross-surface state projections."""
+
+    def decide(
+        self,
+        *,
+        request: dict[str, object],
+        diff: dict[str, object],
+        workspace: dict[str, object] | None,
+        has_orchestration: bool,
+        execution: dict[str, object] | None,
+        confirmations: dict[str, str] | None = None,
+        rag_discovery: dict[str, object] | None = None,
+    ) -> ChangeAutomationDecision:
+        decision = _decide_change_automation(
+            request=request,
+            diff=diff,
+            workspace=workspace,
+            has_orchestration=has_orchestration,
+            execution=execution,
+            confirmations=confirmations,
+            rag_discovery=rag_discovery,
+        )
+        self.validate_decision(decision)
+        return decision
+
+    def validate_decision(self, decision: ChangeAutomationDecision) -> None:
+        if decision.stage not in INTERNAL_TO_PUBLIC_STAGE:
+            raise ValueError(f"Unknown Change Flow stage: {decision.stage}")
+        if decision.status not in _AUTOMATION_STATUSES:
+            raise ValueError(f"Unknown Change Flow status: {decision.status}")
+        if decision.status == "blocked" and decision.next_action != "resolve_blocker":
+            raise ValueError("Blocked Change Flow must require resolve_blocker")
+        if (decision.stage == "completed") != (decision.status == "completed"):
+            raise ValueError("Completed Change Flow stage and status must be terminal together")
+        if decision.status == "completed" and decision.next_action is not None:
+            raise ValueError("Completed Change Flow must be terminal without a next action")
+        if decision.next_action in CONFIRMATION_ACTION_CHECKPOINTS and decision.status != "waiting":
+            raise ValueError("Human confirmation must be exposed as a waiting state")
+        self._validate_stage_action(decision.stage, decision.next_action)
+
+    def project(self, automation: dict[str, object]) -> ChangeFlowProjection:
+        value = automation
+        nested = value.get("run")
+        if isinstance(nested, dict):
+            value = nested
+        internal_stage = str(value.get("current_stage") or "")
+        status = str(value.get("status") or "")
+        if internal_stage not in INTERNAL_TO_PUBLIC_STAGE:
+            raise ValueError(f"Unknown persisted Change Flow stage: {internal_stage}")
+        if status not in _AUTOMATION_STATUSES:
+            raise ValueError(f"Unknown persisted Change Flow status: {status}")
+        next_action_value = value.get("next_action")
+        next_action = str(next_action_value) if next_action_value is not None else None
+        reason = value.get("blocking_reason") or value.get("message")
+        self.validate_decision(
+            ChangeAutomationDecision(
+                stage=internal_stage,
+                status=status,
+                next_action=next_action,
+                blocking_reason=str(reason) if reason else None,
+                message=str(value.get("message") or "Persisted Change Flow state"),
+            )
+        )
+        blockers = (str(reason),) if status == "blocked" and reason else ()
+        return ChangeFlowProjection(
+            internal_stage=internal_stage,
+            public_stage=INTERNAL_TO_PUBLIC_STAGE[internal_stage],
+            status=status,
+            next_action=next_action,
+            confirmation_checkpoint=CONFIRMATION_ACTION_CHECKPOINTS.get(next_action or ""),
+            blocking_reasons=blockers,
+        )
+
+    def confirmation_checkpoint(self, next_action: str | None) -> str | None:
+        return CONFIRMATION_ACTION_CHECKPOINTS.get(next_action or "")
+
+    @staticmethod
+    def _validate_stage_action(stage: str, next_action: str | None) -> None:
+        if next_action is None or next_action == "resolve_blocker":
+            return
+        allowed_stages = _ACTION_STAGES.get(next_action)
+        if allowed_stages is None:
+            raise ValueError(f"Unknown Change Flow action: {next_action}")
+        if stage not in allowed_stages:
+            raise ValueError(
+                f"Change Flow action {next_action} is invalid for stage {stage}"
+            )
+
+    def allows_copilot_stage(
+        self,
+        *,
+        task_stage: str,
+        automation_stage: object,
+        has_review_feedback: bool = False,
+    ) -> bool:
+        if has_review_feedback:
+            return True
+        return automation_stage in COPILOT_TASK_AUTOMATION_STAGES.get(task_stage, frozenset())
+
+    def is_ready_for_action(
+        self, automation: dict[str, object] | None, *, action: str
+    ) -> bool:
+        if automation is None:
+            return False
+        projection = self.project(automation)
+        return projection.status == "waiting" and projection.next_action == action
+
+    def is_running_action(
+        self, automation: dict[str, object] | None, *, action: str
+    ) -> bool:
+        if automation is None:
+            return False
+        projection = self.project(automation)
+        return projection.status == "running" and projection.next_action == action
+
+    def normalize_public_stage_statuses(
+        self,
+        *,
+        automation: dict[str, object],
+        evidence_statuses: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        """Make the persisted decision authoritative while retaining fail-closed blockers."""
+
+        if len(evidence_statuses) != len(PUBLIC_STAGE_IDS):
+            raise ValueError("Public Change Flow evidence status count is invalid")
+        projection = self.project(automation)
+        if projection.internal_stage == "completed":
+            blocked_index = next(
+                (index for index, status in enumerate(evidence_statuses) if status == "blocked"),
+                None,
+            )
+            if blocked_index is None:
+                return tuple("completed" for _ in PUBLIC_STAGE_IDS)
+            current_index = blocked_index
+        else:
+            current_index = PUBLIC_STAGE_IDS.index(projection.public_stage)
+            earlier_blocker = next(
+                (
+                    index
+                    for index, status in enumerate(evidence_statuses[: current_index + 1])
+                    if status == "blocked"
+                ),
+                None,
+            )
+            if earlier_blocker is not None:
+                current_index = earlier_blocker
+        statuses = ["completed" if index < current_index else "waiting" for index in range(6)]
+        evidence_status = evidence_statuses[current_index]
+        if evidence_status == "blocked" or projection.status == "blocked":
+            statuses[current_index] = "blocked"
+        elif evidence_status == "running" or projection.status == "running":
+            statuses[current_index] = "running"
+        else:
+            statuses[current_index] = "waiting"
+        return tuple(statuses)
+
+    @staticmethod
+    def flow_requires_confirmation(flow: dict[str, object] | None) -> bool:
+        if flow is None:
+            return False
+        stages = flow.get("stages")
+        if not isinstance(stages, list):
+            return False
+        return any(
+            isinstance(stage, dict)
+            and isinstance(stage.get("details"), dict)
+            and isinstance(stage["details"].get("confirmation"), dict)
+            for stage in stages
+        )
+
+
+CHANGE_FLOW_STATE_MACHINE = ChangeFlowStateMachine()
+
+
+@dataclass(frozen=True, slots=True)
+class _ChangeFlowInputs:
+    request: dict[str, object]
+    diff: dict[str, object]
+    workspace: dict[str, object] | None
+    has_orchestration: bool
+    execution: dict[str, object] | None
+    confirmations: dict[str, str]
+    rag_discovery: dict[str, object]
+
+
+def _decide_change_automation(
     *,
     request: dict[str, object],
     diff: dict[str, object],
@@ -47,9 +313,29 @@ def decide_change_automation(
     rag_discovery: dict[str, object] | None = None,
 ) -> ChangeAutomationDecision:
     """Return the next trusted checkpoint without inventing missing evidence."""
-    confirmations = confirmations or {}
+    inputs = _ChangeFlowInputs(
+        request=request,
+        diff=diff,
+        workspace=workspace,
+        has_orchestration=has_orchestration,
+        execution=execution,
+        confirmations=confirmations or {},
+        rag_discovery=rag_discovery or {},
+    )
+    for resolver in (
+        _decide_document_stage,
+        _decide_code_scope_stage,
+        _decide_compile_test_stage,
+    ):
+        decision = resolver(inputs)
+        if decision is not None:
+            return decision
+    return _decide_ui_and_closure_stage(inputs)
+
+
+def _decide_document_stage(inputs: _ChangeFlowInputs) -> ChangeAutomationDecision | None:
     requirement = _confirmation_decision(
-        confirmations,
+        inputs.confirmations,
         checkpoint="requirement",
         stage="requirement_confirmation",
         action="confirm_requirement",
@@ -57,14 +343,14 @@ def decide_change_automation(
     )
     if requirement is not None:
         return requirement
-    discovery = rag_discovery or {}
+    discovery = inputs.rag_discovery
     if discovery.get("status") != "ready":
         reason = str(
             discovery.get("blocking_reason") or "Canonical RAG から対象設計書を取得できません。"
         )
         return _blocked("rag_document_confirmation", reason)
     rag_documents = _confirmation_decision(
-        confirmations,
+        inputs.confirmations,
         checkpoint="rag_documents",
         stage="rag_document_confirmation",
         action="confirm_rag_documents",
@@ -72,23 +358,23 @@ def decide_change_automation(
     )
     if rag_documents is not None:
         return rag_documents
-    if request.get("analysis_case_id") is None:
+    if inputs.request.get("analysis_case_id") is None:
         return _waiting(
             "document_generation",
             "prepare_document_with_copilot",
             "VS Code 上の GitHub Copilot で設計書ドラフトを生成してください。",
         )
-    total = diff.get("total")
-    if request.get("analysis_case_id") is None or not isinstance(total, int) or total == 0:
+    total = inputs.diff.get("total")
+    if not isinstance(total, int) or total == 0:
         return _waiting(
             "document_generation",
             "prepare_document_with_copilot",
             "VS Code 上の GitHub Copilot で設計書ドラフトを生成し、"
             "Canonical Case に取り込んでください。",
         )
-    review = _dict(request.get("document_review"))
+    review = _dict(inputs.request.get("document_review"))
     if review.get("status") == "revision_requested":
-        revision_task = _dict((workspace or {}).get("copilot_task"))
+        revision_task = _dict((inputs.workspace or {}).get("copilot_task"))
         if revision_task.get("current_stage") == "document_change":
             return _waiting(
                 "document_revision",
@@ -97,7 +383,7 @@ def decide_change_automation(
             )
     if review.get("status") != "confirmed":
         document_diff = _confirmation_decision(
-            confirmations,
+            inputs.confirmations,
             checkpoint="document_diff",
             stage="document_confirmation",
             action="confirm_document_diff",
@@ -105,6 +391,11 @@ def decide_change_automation(
         )
         if document_diff is not None:
             return document_diff
+    return None
+
+
+def _decide_code_scope_stage(inputs: _ChangeFlowInputs) -> ChangeAutomationDecision | None:
+    workspace = inputs.workspace
     if workspace is None:
         return _waiting(
             "impact_analysis",
@@ -134,7 +425,7 @@ def decide_change_automation(
     confirmation = _dict(workspace.get("confirmation"))
     if confirmation.get("id") is None or impact.get("status") != "confirmed":
         code_scope = _confirmation_decision(
-            confirmations,
+            inputs.confirmations,
             checkpoint="code_scope",
             stage="impact_confirmation",
             action="confirm_code_scope",
@@ -168,6 +459,15 @@ def decide_change_automation(
             blocking_reason=None,
             message="現在の VS Code Change Task に確認済み実行範囲を再バインドします。",
         )
+    return None
+
+
+def _decide_compile_test_stage(inputs: _ChangeFlowInputs) -> ChangeAutomationDecision | None:
+    workspace = inputs.workspace
+    if workspace is None:
+        raise RuntimeError("Change Flow reached compile/test without a Workspace")
+    copilot_task = _dict(workspace.get("copilot_task"))
+    edit_packet = _dict(workspace.get("edit_packet"))
     edit_result = _dict(workspace.get("edit_result"))
     if edit_result.get("id") is None:
         return _waiting(
@@ -212,7 +512,7 @@ def decide_change_automation(
             "コード結果は確定しました。VS Code 上の GitHub Copilot で、"
             "確定済み設計とコードから UI TestPlan / TestDataPlan を生成してください。",
         )
-    if not has_orchestration:
+    if not inputs.has_orchestration:
         return ChangeAutomationDecision(
             stage="planning",
             status="running",
@@ -223,7 +523,11 @@ def decide_change_automation(
                 "カバレッジ、UI シナリオを生成します。"
             ),
         )
-    management = execution or {}
+    return None
+
+
+def _decide_ui_and_closure_stage(inputs: _ChangeFlowInputs) -> ChangeAutomationDecision:
+    management = inputs.execution or {}
     business_coverage = _dict(management.get("business_coverage"))
     if (
         business_coverage.get("status") != "passed"
@@ -235,7 +539,7 @@ def decide_change_automation(
             "GitHub Copilot に自動返却し、UI TestPlan と TestDataPlan を再生成してください。",
         )
     test_plan = _confirmation_decision(
-        confirmations,
+        inputs.confirmations,
         checkpoint="test_plan",
         stage="test_plan_confirmation",
         action="confirm_test_plan",
@@ -259,6 +563,16 @@ def decide_change_automation(
         )
     if data_result.get("status") != "passed":
         return _blocked("test_data_execution", "テストデータ生成または検証が合格していません。")
+    execution_artifact = _dict(data_result.get("result"))
+    data_coverage = _dict(execution_artifact.get("data_coverage"))
+    if (
+        data_coverage.get("status") != "passed"
+        or data_coverage.get("coverage_percent") != 100
+    ):
+        return _blocked(
+            "test_data_execution",
+            "実 DB の Test Data Coverage が 100% ではないため UI 検証へ進めません。",
+        )
     closure = _dict(management.get("change_closure"))
     if not closure:
         return _waiting(
@@ -268,7 +582,7 @@ def decide_change_automation(
         )
     if closure.get("status") == "passed":
         final_report = _confirmation_decision(
-            confirmations,
+            inputs.confirmations,
             checkpoint="final_report",
             stage="final_report_confirmation",
             action="confirm_final_report",
@@ -280,6 +594,29 @@ def decide_change_automation(
             "completed", "completed", None, None, "文書、コード、テスト、UI 検証が完了しました。"
         )
     return _blocked("closure", "ChangeClosureResult に未解決項目があります。")
+
+
+def decide_change_automation(
+    *,
+    request: dict[str, object],
+    diff: dict[str, object],
+    workspace: dict[str, object] | None,
+    has_orchestration: bool,
+    execution: dict[str, object] | None,
+    confirmations: dict[str, str] | None = None,
+    rag_discovery: dict[str, object] | None = None,
+) -> ChangeAutomationDecision:
+    """Compatibility entry point backed by the single Change Flow state machine."""
+
+    return CHANGE_FLOW_STATE_MACHINE.decide(
+        request=request,
+        diff=diff,
+        workspace=workspace,
+        has_orchestration=has_orchestration,
+        execution=execution,
+        confirmations=confirmations,
+        rag_discovery=rag_discovery,
+    )
 
 
 def _waiting(stage: str, action: str, message: str) -> ChangeAutomationDecision:

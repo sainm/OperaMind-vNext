@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operamind.dev/contracts/document-profile-learning-draft.schema.json",
+  "title": "DocumentProfileLearningDraft",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_type",
+    "schema_version",
+    "learning_run_id",
+    "project_id",
+    "source_structure_digest",
+    "generated_by",
+    "profiles",
+    "document_assignments",
+    "ambiguities"
+  ],
+  "properties": {
+    "artifact_type": {"const": "DocumentProfileLearningDraft"},
+    "schema_version": {"const": "v1"},
+    "learning_run_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "source_structure_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "generated_by": {"const": "vscode_github_copilot"},
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "object"}
+    },
+    "document_assignments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sample_id", "profile_id", "variant_id", "reason"],
+        "properties": {
+          "sample_id": {"type": "string", "minLength": 1},
+          "profile_id": {"type": "string", "minLength": 1},
+          "variant_id": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 2000}
+        }
+      }
+    },
+    "ambiguities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ambiguity_id", "sample_id", "description", "suggested_action"],
+        "properties": {
+          "ambiguity_id": {"type": "string", "minLength": 1},
+          "sample_id": {"type": "string", "minLength": 1},
+          "description": {"type": "string", "minLength": 1, "maxLength": 4000},
+          "suggested_action": {"type": "string", "minLength": 1, "maxLength": 2000}
+        }
+      }
+    }
+  }
+}

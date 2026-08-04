@@ -17,6 +17,7 @@ EXPECTED_ARTIFACT_TYPES = frozenset(
         "ChangeRequest",
         "DocumentChangeProposal",
         "DocumentIngestionResult",
+        "DocumentProfileLearningDraft",
         "StructuredChange",
         "ContextPackage",
         "CopilotImpactContext",

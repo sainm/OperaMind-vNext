@@ -25,6 +25,7 @@
   "main": "./extension.js",
   "scripts": {
     "test": "node --test test/*.test.js",
+    "test:junit": "node --test --test-reporter=junit --test-reporter-destination=../quality-results/vscode-extension.xml test/*.test.js",
     "package:vsix": "npm test && node --check extension.js && node --check bridgeClient.js && node --check dashboardModel.js && node --check dashboardView.js && node --check diagnostics.js && node --check runtimeManifest.js && node --check uriHandler.js && node -e \"require('node:fs').mkdirSync('dist',{recursive:true})\" && vsce package --allow-missing-repository --out dist/operamind-copilot-bridge.vsix"
   },
   "devDependencies": {

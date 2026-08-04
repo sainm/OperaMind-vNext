@@ -27,6 +27,19 @@ class ChangeAutomationRunRecord:
     superseded_run_ids: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class ChangeAutomationCoordinatorCandidate:
+    """One active run that can make progress without scanning all requests."""
+
+    automation_run_id: str
+    change_request_id: str
+    project_id: str
+    status: str
+    current_stage: str
+    next_action: str | None
+    selection_reason: str
+
+
 class ChangeAutomationRepository:
     def __init__(self, connection: Connection[Any]) -> None:
         self._connection = connection
@@ -217,6 +230,78 @@ class ChangeAutomationRepository:
             )
             row = cursor.fetchone()
         return self.view(str(row[0])) if row is not None else None
+
+    def list_coordinator_candidates(
+        self, *, limit: int = 200
+    ) -> tuple[ChangeAutomationCoordinatorCandidate, ...]:
+        """Return only runs needing a deterministic transition or recovery attempt."""
+
+        if not 1 <= limit <= 500:
+            raise ValueError("coordinator candidate limit must be between 1 and 500")
+        with self._connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                WITH candidates AS (
+                    SELECT run.automation_run_id, run.change_request_id,
+                           run.project_id, run.status, run.current_stage,
+                           run.next_action, run.updated_at,
+                           run.status = 'running'
+                           AND EXISTS (
+                               SELECT 1
+                               FROM orchestration_tasks AS task
+                               JOIN orchestration_task_claims AS claim
+                                 ON claim.orchestration_task_id =
+                                    task.orchestration_task_id
+                               WHERE task.automation_run_id = run.automation_run_id
+                                 AND task.project_id = run.project_id
+                                 AND task.state IN ('claimed', 'running')
+                                 AND task.attempt_count < task.max_attempts
+                                 AND claim.status = 'active'
+                                 AND claim.lease_expires_at <= now()
+                           ) AS has_expired_retry
+                    FROM change_automation_runs AS run
+                    WHERE run.status = 'running'
+                       OR (
+                           run.status = 'waiting'
+                           AND run.next_action IN (
+                               'start_test_data_execution',
+                               'run_ui_verification'
+                           )
+                       )
+                )
+                SELECT automation_run_id, change_request_id, project_id,
+                       status, current_stage, next_action,
+                       CASE
+                           WHEN has_expired_retry THEN 'expired_retry'
+                           WHEN status = 'running' THEN 'running_recovery'
+                           ELSE 'automatic_action'
+                       END AS selection_reason
+                FROM candidates
+                ORDER BY
+                    CASE
+                        WHEN has_expired_retry THEN 0
+                        WHEN status = 'waiting' THEN 1
+                        ELSE 2
+                    END,
+                    updated_at,
+                    automation_run_id
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cursor.fetchall()
+        return tuple(
+            ChangeAutomationCoordinatorCandidate(
+                automation_run_id=str(row["automation_run_id"]),
+                change_request_id=str(row["change_request_id"]),
+                project_id=str(row["project_id"]),
+                status=str(row["status"]),
+                current_stage=str(row["current_stage"]),
+                next_action=(str(row["next_action"]) if row["next_action"] is not None else None),
+                selection_reason=str(row["selection_reason"]),
+            )
+            for row in rows
+        )
 
     def _supersede_prior_runs(
         self,
@@ -528,9 +613,7 @@ class ChangeAutomationRepository:
             if subject_digests.get(str(row["checkpoint"])) == str(row["subject_digest"])
         }
 
-    def latest_confirmation(
-        self, *, run_id: str, checkpoint: str
-    ) -> dict[str, object] | None:
+    def latest_confirmation(self, *, run_id: str, checkpoint: str) -> dict[str, object] | None:
         """Return the latest raw checkpoint decision for recovery reconciliation."""
         with self._connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(

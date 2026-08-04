@@ -28,6 +28,7 @@ from operamind.infrastructure.postgres.canonical_repository import (
     SnapshotStatus,
 )
 from operamind.infrastructure.postgres.change_automation_repository import (
+    ChangeAutomationCoordinatorCandidate,
     ChangeAutomationRepository,
     ChangeAutomationRunRecord,
 )
@@ -108,6 +109,11 @@ from operamind.infrastructure.postgres.profile_repository import (
     ActiveProfileBinding,
     ProfileRepository,
 )
+from operamind.infrastructure.postgres.project_onboarding_repository import (
+    ProjectOnboardingClaim,
+    ProjectOnboardingRecord,
+    ProjectOnboardingRepository,
+)
 from operamind.infrastructure.postgres.rag_quality_repository import (
     GoldenRagQualityGateBlockedError,
     GoldenRagQualityRepository,
@@ -159,6 +165,7 @@ from operamind.infrastructure.postgres.test_case_revision_repository import (
     TestCaseStaleScope,
 )
 from operamind.infrastructure.postgres.test_data_execution_repository import (
+    TestDataExecutionClaim,
     TestDataExecutionEventWrite,
     TestDataExecutionRecord,
     TestDataExecutionRecoveryWrite,
@@ -208,6 +215,7 @@ __all__ = [
     "CanonicalDocumentSlice",
     "CanonicalOrchestrationEvidence",
     "CanonicalRepository",
+    "ChangeAutomationCoordinatorCandidate",
     "ChangeAutomationRepository",
     "ChangeAutomationRunRecord",
     "ChangeClosureEvidence",
@@ -269,6 +277,9 @@ __all__ = [
     "ProfileRebuildTaskQueue",
     "ProfileReplacementValidator",
     "ProfileRepository",
+    "ProjectOnboardingClaim",
+    "ProjectOnboardingRecord",
+    "ProjectOnboardingRepository",
     "RankedSearchHit",
     "ReadinessEvidenceInput",
     "ReadinessEvidenceRepository",
@@ -292,6 +303,7 @@ __all__ = [
     "TestCaseRevisionRecord",
     "TestCaseRevisionRepository",
     "TestCaseStaleScope",
+    "TestDataExecutionClaim",
     "TestDataExecutionEventWrite",
     "TestDataExecutionRecord",
     "TestDataExecutionRecoveryWrite",

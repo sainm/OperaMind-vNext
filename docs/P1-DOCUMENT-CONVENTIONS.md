@@ -3,7 +3,10 @@
 ## 当前实现
 
 - `EmbeddingProfile`、`DocumentConventionProfile`、`CodeFrameworkProfile` 的版本化 JSON Schema 和 catalog。
-- Profile 示例同时作为 baseline 可执行输入，不再根据文件名推断 Profile 类型。
+- Profile 示例仅作为 Copilot 学习参考，不再作为所有项目共享的正式 baseline。
+- Project Onboarding 从真实 XLSX／DOCX 提取结构，由 VS Code GitHub Copilot 生成 Project 专用 `DocumentConventionProfile` 草案；服务端重新验证全部 Sample，覆盖率 100% 且无歧义后由 Web 人工确认并版本化激活。
+- Canonical 化只读取当前 Project 最近一次确认的 Profile Version Set，不混用其他项目或旧学习批次。
+- 业务字段值变化不改变结构 Digest；Sheet、Heading、Header 或文件集合变化会触发差异学习。
 - Document Convention 多 Variant 加权匹配。
 - 低于阈值和最高分并列时进入 `needs_review`，不自动选择。
 - Stable Key 只由有序 Canonical Business Field 构建，不依赖文件名、Sheet、列顺序或字段映射顺序。
@@ -111,7 +114,7 @@ operamind-ingest \
   --target-document-version-id document-after \
   --source-ref immutable://design-docs/before.xlsx \
   --target-ref immutable://design-docs/after.xlsx \
-  --profile-version-id screen-design-conventions-example@1.0.0 \
+  --profile-version-id screen-design-conventions-example@1.1.0 \
   --profile-binding-key document:screen_design \
   --profile-activation-event-id activation-001 \
   --activated-by reviewer@example.com \

@@ -14,7 +14,9 @@ from jsonschema import Draft202012Validator
 from psycopg import Connection
 
 from operamind.application import CopilotCodingTaskService
+from operamind.application.change_automation import CHANGE_FLOW_STATE_MACHINE
 from operamind.application.copilot_document_change import DocumentFieldEdit
+from operamind.application.document_profile_learning import DocumentProfileLearningService
 from operamind.contracts import ContractCatalog
 from operamind.contracts.catalog import ArtifactValidationError
 
@@ -47,12 +49,7 @@ def _artifact_input_schema(artifact_type: str, property_name: str) -> dict[str, 
         if isinstance(frozen_root, str) and frozen_root
         else Path(__file__).resolve().parents[3]
     )
-    schema_path = (
-        resource_root
-        / "contracts"
-        / "schemas"
-        / f"{artifact_type}.schema.json"
-    )
+    schema_path = resource_root / "contracts" / "schemas" / f"{artifact_type}.schema.json"
     schema = cast(dict[str, object], json.loads(schema_path.read_text(encoding="utf-8")))
     schema.pop("$schema", None)
     schema.pop("$id", None)
@@ -83,12 +80,15 @@ def _change_outputs_schema() -> dict[str, object]:
         {
             "coding_task_id": _string(),
             "workspace_root": _string(),
+            "consumer_id": _string(),
+            "claim_token": _string(),
             "output_stage": {
                 "enum": [
                     "document_change",
                     "code_scope",
                     "test_planning",
                     "ui_test_revision",
+                    "document_profile_learning",
                 ]
             },
             "document_ids": {
@@ -138,9 +138,7 @@ def _change_outputs_schema() -> dict[str, object]:
                             "uniqueItems": True,
                             "items": _string(),
                         },
-                        "recommended_action": {
-                            "enum": ["modify", "add", "delete", "review_only"]
-                        },
+                        "recommended_action": {"enum": ["modify", "add", "delete", "review_only"]},
                         "test_file_refs": {
                             "type": "array",
                             "minItems": 1,
@@ -153,8 +151,9 @@ def _change_outputs_schema() -> dict[str, object]:
                 },
             },
             "test_plan": _artifact_input_schema("test-plan", "test_plan"),
-            "test_data_plan": _artifact_input_schema(
-                "test-data-plan", "test_data_plan"
+            "test_data_plan": _artifact_input_schema("test-data-plan", "test_data_plan"),
+            "document_profile_draft": _artifact_input_schema(
+                "document-profile-learning-draft", "document_profile_draft"
             ),
         },
         ("coding_task_id", "workspace_root", "output_stage"),
@@ -176,6 +175,10 @@ def _change_outputs_schema() -> dict[str, object]:
             "properties": {"output_stage": {"const": "ui_test_revision"}},
             "required": ["test_plan", "test_data_plan"],
         },
+        {
+            "properties": {"output_stage": {"const": "document_profile_learning"}},
+            "required": ["document_profile_draft", "consumer_id", "claim_token"],
+        },
     ]
     return schema
 
@@ -185,11 +188,16 @@ TOOLS: tuple[dict[str, object], ...] = (
         "name": "copilot_get_coding_task",
         "title": "Load one unified Copilot Change Task",
         "description": (
-            "Load the current ordered stage of one Change Task after the VS Code user "
-            "confirms the local Bridge notification."
+            "Load only the current stage of one confirmed Change Task. The response separates "
+            "business inputs, machine constraints, the expected output, and the stop condition."
         ),
         "inputSchema": _schema(
-            {"coding_task_id": _string(), "workspace_root": _string()},
+            {
+                "coding_task_id": _string(),
+                "workspace_root": _string(),
+                "consumer_id": _string(),
+                "claim_token": _string(),
+            },
             ("coding_task_id", "workspace_root"),
         ),
         "annotations": {
@@ -204,7 +212,7 @@ TOOLS: tuple[dict[str, object], ...] = (
         "title": "Run a test command bound to one Coding Task",
         "description": (
             "Run one task-bound command and automatically publish its digest-only "
-            "result to the Coding Task timeline used by OperaMind Web."
+            "result. Returns result plus the common stage_status envelope."
         ),
         "inputSchema": _schema(
             {
@@ -232,7 +240,8 @@ TOOLS: tuple[dict[str, object], ...] = (
         "title": "Record one ordered Change Task output stage",
         "description": (
             "Record exactly one ordered stage: materialize a Canonical design diff, validate "
-            "a Code Graph scope, or validate TestPlan/TestDataPlan after the code diff."
+            "a Code Graph scope, or validate TestPlan/TestDataPlan after the code diff. Returns "
+            "result plus stage_status; follow only stage_status.next_action."
         ),
         "inputSchema": _change_outputs_schema(),
         "annotations": {
@@ -249,7 +258,8 @@ TOOLS: tuple[dict[str, object], ...] = (
             "Compare all current Git path changes with the Change Task path allowlist and "
             "automatically publish the path-only Diff result to OperaMind Web. Preserve the "
             "returned committed_edit_result_id for copilot_record_task_result; a working and "
-            "committed validation are distinct immutable evidence records."
+            "committed validation are distinct immutable evidence records. Returns result plus "
+            "the common stage_status envelope."
         ),
         "inputSchema": _schema(
             {
@@ -274,7 +284,8 @@ TOOLS: tuple[dict[str, object], ...] = (
             "code result to OperaMind Web without a response file. For source changes, pass "
             "the approved coverage command ID; OperaMind reads and verifies its bound report "
             "before the UI TestPlan stage can start. edit_result_id must be the distinct "
-            "committed_edit_result_id returned by copilot_validate_task_diff."
+            "committed_edit_result_id returned by copilot_validate_task_diff. Returns result "
+            "plus stage_status; reload only when next_action is reload_current_task."
         ),
         "inputSchema": _schema(
             {
@@ -364,12 +375,27 @@ class CopilotToolDispatcher:
             repository_root=self._contracts.root.parent,
         )
         if name == "copilot_get_coding_task":
-            return coding_tasks.get_mcp_context(
-                coding_task_id=_text(args, "coding_task_id"),
-                workspace_root=Path(_text(args, "workspace_root")),
+            coding_task_id = _text(args, "coding_task_id")
+            if coding_task_id.startswith("document-learning-"):
+                return _stage_context_envelope(
+                    DocumentProfileLearningService(
+                        connection=self._connection,
+                        repository_root=self._contracts.root.parent,
+                    ).mcp_context(
+                        learning_run_id=coding_task_id,
+                        workspace_root=Path(_text(args, "workspace_root")),
+                        consumer_id=_text(args, "consumer_id"),
+                        claim_token=_text(args, "claim_token"),
+                    )
+                )
+            return _stage_context_envelope(
+                coding_tasks.get_mcp_context(
+                    coding_task_id=coding_task_id,
+                    workspace_root=Path(_text(args, "workspace_root")),
+                )
             )
         if name == "copilot_run_task_command":
-            return _public_command_result(
+            command = _public_command_result(
                 coding_tasks.run_command(
                     coding_task_id=_text(args, "coding_task_id"),
                     command_execution_id=_text(args, "command_execution_id"),
@@ -377,15 +403,44 @@ class CopilotToolDispatcher:
                     workspace_root=Path(_text(args, "workspace_root")),
                 )
             )
+            task_view = coding_tasks.view(_text(args, "coding_task_id"))
+            passed = command.get("status") == "passed" and command.get("exit_code") == 0
+            return {
+                "result": command,
+                "stage_status": _public_stage_status(
+                    task_view,
+                    outcome="passed" if passed else "failed",
+                    next_action="continue_current_stage" if passed else "resolve_blocker",
+                    message=(
+                        "必須 Command が成功しました。"
+                        if passed
+                        else "必須 Command が成功していません。"
+                    ),
+                ),
+            }
         if name == "copilot_record_change_outputs":
             output_stage = _text(args, "output_stage")
+            if output_stage == "document_profile_learning":
+                result = DocumentProfileLearningService(
+                    connection=self._connection,
+                    repository_root=self._contracts.root.parent,
+                ).record_draft(
+                    learning_run_id=_text(args, "coding_task_id"),
+                    workspace_root=Path(_text(args, "workspace_root")),
+                    consumer_id=_text(args, "consumer_id"),
+                    claim_token=_text(args, "claim_token"),
+                    draft=cast(dict[str, Any], args["document_profile_draft"]),
+                )
+                return {
+                    "result": {"learning": result["learning"]},
+                    "stage_status": result["stage_status"],
+                }
             internal_result = coding_tasks.record_change_outputs(
                 coding_task_id=_text(args, "coding_task_id"),
                 workspace_root=Path(_text(args, "workspace_root")),
                 output_stage=output_stage,
                 document_ids=tuple(
-                    str(value)
-                    for value in cast(list[object], args.get("document_ids", []))
+                    str(value) for value in cast(list[object], args.get("document_ids", []))
                 ),
                 document_edits=tuple(
                     DocumentFieldEdit(
@@ -400,14 +455,12 @@ class CopilotToolDispatcher:
                     cast(dict[str, Any], value)
                     for value in cast(list[object], args.get("code_scope", []))
                 ),
-                test_plan=cast(dict[str, Any], args["test_plan"])
-                if "test_plan" in args
-                else None,
+                test_plan=cast(dict[str, Any], args["test_plan"]) if "test_plan" in args else None,
                 test_data_plan=cast(dict[str, Any], args["test_data_plan"])
                 if "test_data_plan" in args
                 else None,
             )
-            result = _public_change_output(internal_result, output_stage=output_stage)
+            output = _public_change_output(internal_result, output_stage=output_stage)
             from operamind.application.web_control_plane import WebControlPlaneService
 
             task_view = coding_tasks.view(_text(args, "coding_task_id"))
@@ -421,36 +474,51 @@ class CopilotToolDispatcher:
                 actor="mcp:github-copilot",
             )
             flow = service.main_change_flow(str(task_artifact["change_request_id"]))
-            result["flow_status"] = _public_flow_status(flow)
-            if _can_load_next_context(
-                coding_task_state=internal_result.get("coding_task_state"),
-                flow=flow,
-                output_stage=output_stage,
-            ):
-                result["next_context"] = coding_tasks.get_mcp_context(
-                    coding_task_id=_text(args, "coding_task_id"),
-                    workspace_root=Path(_text(args, "workspace_root")),
-                )
-            else:
-                result["next_context"] = None
-            return result
+            refreshed_task = coding_tasks.view(_text(args, "coding_task_id"))
+            return {
+                "result": output,
+                "stage_status": _accepted_stage_status(
+                    refreshed_task,
+                    flow=flow,
+                    message="現在工程の成果物を受け付けました。",
+                ),
+            }
         if name == "copilot_validate_task_diff":
-            return _public_edit_result(
+            edit = _public_edit_result(
                 coding_tasks.validate_diff(
                     coding_task_id=_text(args, "coding_task_id"),
                     edit_result_id=_text(args, "edit_result_id"),
                     workspace_root=Path(_text(args, "workspace_root")),
                 )
             )
+            task_view = coding_tasks.view(_text(args, "coding_task_id"))
+            accepted = _edit_diff_accepted(
+                edit.get("status"),
+                verification_only=coding_tasks.is_verification_only(
+                    _text(args, "coding_task_id")
+                ),
+            )
+            return {
+                "result": edit,
+                "stage_status": _public_stage_status(
+                    task_view,
+                    outcome="passed" if accepted else "blocked",
+                    next_action="continue_current_stage" if accepted else "resolve_blocker",
+                    message=(
+                        "コード差分は許可範囲内です。"
+                        if accepted
+                        else "コード差分に許可範囲外の変更があります。"
+                    ),
+                ),
+            }
         if name == "copilot_record_task_result":
-            result = _public_edit_result(
+            edit = _public_edit_result(
                 coding_tasks.record_result(
                     coding_task_id=_text(args, "coding_task_id"),
                     edit_result_id=_text(args, "edit_result_id"),
                     workspace_root=Path(_text(args, "workspace_root")),
                     test_result_refs=tuple(
-                        str(value)
-                        for value in cast(list[object], args["test_result_refs"])
+                        str(value) for value in cast(list[object], args["test_result_refs"])
                     ),
                     tests_passed=cast(bool, args["tests_passed"]),
                     coverage_report_command_execution_id=(
@@ -469,19 +537,15 @@ class CopilotToolDispatcher:
                 repository_root=self._contracts.root.parent,
             )
             flow = service.main_change_flow(str(task_artifact["change_request_id"]))
-            result["flow_status"] = _public_flow_status(flow)
-            result["next_context"] = (
-                coding_tasks.get_mcp_context(
-                    coding_task_id=_text(args, "coding_task_id"),
-                    workspace_root=Path(_text(args, "workspace_root")),
-                )
-                if _can_load_next_context(
-                    coding_task_state=result.get("coding_task_state"),
+            refreshed_task = coding_tasks.view(_text(args, "coding_task_id"))
+            return {
+                "result": edit,
+                "stage_status": _accepted_stage_status(
+                    refreshed_task,
                     flow=flow,
-                )
-                else None
-            )
-            return result
+                    message="コード変更、Command Evidence、Coverage を受け付けました。",
+                ),
+            }
         raise AssertionError(f"Tool dispatch is incomplete: {name}")
 
 
@@ -657,12 +721,36 @@ def _text(args: dict[str, object], key: str) -> str:
 
 
 def _tool_result(payload: dict[str, object], *, is_error: bool) -> dict[str, object]:
-    text = _json(payload)
     return {
-        "content": [{"type": "text", "text": text}],
+        "content": [{"type": "text", "text": _tool_result_summary(payload, is_error=is_error)}],
         "structuredContent": payload,
         "isError": is_error,
     }
+
+
+def _tool_result_summary(payload: dict[str, object], *, is_error: bool) -> str:
+    """Keep Copilot's visible tool transcript short; structuredContent remains authoritative."""
+
+    if is_error:
+        reason = str(payload.get("error") or "処理を続行できません。")
+        return f"OperaMind: {reason}"
+    stage_status = payload.get("stage_status")
+    if isinstance(stage_status, dict):
+        message = stage_status.get("message")
+        if isinstance(message, str) and message.strip():
+            return f"OperaMind: {message}"
+    stage_contract = payload.get("stage_contract")
+    if isinstance(stage_contract, dict):
+        label = stage_contract.get("label")
+        if isinstance(label, str) and label.strip():
+            return f"OperaMind: {label} の入力と制約を取得しました。"
+    return "OperaMind: 処理が完了しました。"
+
+
+def _edit_diff_accepted(status: object, *, verification_only: bool) -> bool:
+    """Accept an empty Diff only when the confirmed scope is intentionally read-only."""
+
+    return status == "in_scope" or (status == "no_changes" and verification_only)
 
 
 def _success(request_id: object, result: dict[str, object]) -> dict[str, object]:
@@ -685,42 +773,77 @@ def _valid_request_id(value: object) -> bool:
     return value is None or (isinstance(value, (int, str)) and not isinstance(value, bool))
 
 
-def _public_flow_status(flow: dict[str, object]) -> dict[str, object]:
-    """Return only the six-stage business projection to the Copilot client."""
+def _public_stage_status(
+    task_view: dict[str, object],
+    *,
+    outcome: str,
+    next_action: str,
+    message: str,
+    flow: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Use one compact stage envelope for every state-changing MCP result."""
 
+    blocking_reasons = [
+        str(value) for value in cast(list[object], (flow or {}).get("blocking_reasons", []))
+    ]
     return {
-        key: flow.get(key)
-        for key in (
-            "status",
-            "current_stage",
-            "progress_percent",
-            "blocking_reasons",
-        )
+        "task_stage": task_view.get("current_stage"),
+        "flow_stage": (flow or {}).get("current_stage"),
+        "task_state": task_view.get("state"),
+        "outcome": outcome,
+        "requires_confirmation": _flow_requires_confirmation(flow),
+        "next_action": next_action,
+        "message": message,
+        "blocking_reasons": blocking_reasons,
     }
 
 
-def _can_load_next_context(
-    *,
-    coding_task_state: object,
-    flow: dict[str, object],
-    output_stage: object | None = None,
-) -> bool:
-    """Continue only when the accepted output did not reach a human checkpoint."""
+def _stage_context_envelope(context: dict[str, object]) -> dict[str, object]:
+    """Apply the same result/status envelope to the read-only task load tool."""
 
-    if output_stage == "document_change":
-        return False
-    if coding_task_state != "in_progress" or flow.get("status") == "blocked":
-        return False
-    stages = flow.get("stages")
-    if not isinstance(stages, list):
-        return False
-    for stage in stages:
-        if not isinstance(stage, dict):
-            continue
-        details = stage.get("details")
-        if isinstance(details, dict) and isinstance(details.get("confirmation"), dict):
-            return False
-    return True
+    stage_status = context.get("stage_status")
+    if not isinstance(stage_status, dict):
+        raise RuntimeError("Copilot Change Task stage_status is missing")
+    return {
+        "result": {key: value for key, value in context.items() if key != "stage_status"},
+        "stage_status": stage_status,
+    }
+
+
+def _accepted_stage_status(
+    task_view: dict[str, object],
+    *,
+    flow: dict[str, object],
+    message: str,
+) -> dict[str, object]:
+    blockers = cast(list[object], flow.get("blocking_reasons", []))
+    confirmation = _flow_requires_confirmation(flow)
+    task_state = task_view.get("state")
+    if blockers or flow.get("status") == "blocked":
+        outcome = "blocked"
+        next_action = "resolve_blocker"
+    elif confirmation:
+        outcome = "accepted"
+        next_action = "wait_for_confirmation"
+        message += " OperaMind Web の確認を待ってください。"
+    elif task_state in {"completed", "cancelled", "failed"}:
+        outcome = "completed" if task_state == "completed" else "failed"
+        next_action = "stop"
+    else:
+        outcome = "accepted"
+        next_action = "reload_current_task"
+        message += " 同じ Task ID で現在工程を再取得してください。"
+    return _public_stage_status(
+        task_view,
+        outcome=outcome,
+        next_action=next_action,
+        message=message,
+        flow=flow,
+    )
+
+
+def _flow_requires_confirmation(flow: dict[str, object] | None) -> bool:
+    return CHANGE_FLOW_STATE_MACHINE.flow_requires_confirmation(flow)
 
 
 def _public_change_output(
@@ -730,10 +853,7 @@ def _public_change_output(
 ) -> dict[str, object]:
     """Return the accepted business output without Canonical implementation IDs."""
 
-    public = {
-        key: result.get(key)
-        for key in ("recorded_stage", "next_stage", "coding_task_state")
-    }
+    public: dict[str, object] = {"output_stage": output_stage}
     if output_stage == "document_change":
         public["document_count"] = len(cast(list[object], result.get("document_ids", [])))
         public["document_change_count"] = len(
@@ -769,7 +889,6 @@ def _public_command_result(result: dict[str, object]) -> dict[str, object]:
             "output_truncated",
             "started_at",
             "completed_at",
-            "coding_task_state",
         )
     }
     return public
@@ -788,7 +907,6 @@ def _public_edit_result(result: dict[str, object]) -> dict[str, object]:
             "changed_paths",
             "out_of_scope_files",
             "result_repository_revision",
-            "coding_task_state",
             "committed_edit_result_id",
         )
     }

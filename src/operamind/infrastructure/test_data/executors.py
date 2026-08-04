@@ -16,6 +16,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from operamind.application.test_data_execution import (
     TestDataExecutionEvidence,
     TestDataExecutionRequest,
+    TestDataStepBlockedError,
     TestDataStepExecution,
 )
 from operamind.infrastructure.browser import LocalEvidenceStore, StoredBrowserEvidence
@@ -329,7 +330,16 @@ class BoundUiTestDataExecutor:
         binding = self._bindings.get((screen_ref, action_ref))
         if binding is None:
             raise ValueError(f"UI screen/action has no approved binding: {screen_ref}/{action_ref}")
+        frozen_binding = _validated_frozen_binding(step=step, request=request)
         result = binding(request, resolved_inputs, variables)
+        observed = dict(result.observations)
+        if frozen_binding is not None:
+            if observed.get("binding_match_count") != 1:
+                raise TestDataStepBlockedError(
+                    "Bound UI adapter did not prove exactly one screen-key match"
+                )
+            if observed.get("binding_content_digest") != frozen_binding["content_digest"]:
+                raise TestDataStepBlockedError("Bound UI adapter reported binding drift")
         step_id = str(step["step_id"])
         evidence: list[TestDataExecutionEvidence] = [
             _store_bound_json(
@@ -342,7 +352,7 @@ class BoundUiTestDataExecutor:
                 payload={
                     "screen_ref": screen_ref,
                     "ui_action_ref": action_ref,
-                    "observed": dict(result.observations),
+                    "observed": observed,
                 },
             )
         ]
@@ -364,7 +374,7 @@ class BoundUiTestDataExecutor:
                 )
             )
         return TestDataStepExecution(
-            source_values={"ui": dict(result.observations)},
+            source_values={"ui": observed},
             evidence=tuple(evidence),
             failure_reason=result.failure_reason,
         )
@@ -420,6 +430,7 @@ class PlaywrightSession(Protocol):
         base_url: str,
         observations: tuple[Mapping[str, object], ...],
         mask_locators: tuple[Mapping[str, object], ...],
+        binding_scope_locator: Mapping[str, object] | None = None,
     ) -> PlaywrightActionResult: ...
 
     def close(self) -> None: ...
@@ -468,14 +479,22 @@ class PlaywrightUiTestDataExecutor:
         action = step.get("playwright")
         if not isinstance(action, Mapping):
             raise ValueError("UI step requires a reviewed playwright action")
+        frozen_binding = _validated_frozen_binding(step=step, request=request)
+        runtime_action = dict(action)
+        if frozen_binding is not None:
+            runtime_action["_operamind_binding_scope"] = frozen_binding["screen_locator"]
         if self._session is None:
             self._session = self._session_factory()
         driver = "playwright"
         fallback_reason: str | None = None
         action_kinds: tuple[str, ...] = ()
         try:
-            result = self._session.execute(base_url=request.base_url, action=action)
+            result = self._session.execute(base_url=request.base_url, action=runtime_action)
         except PlaywrightCapabilityError as error:
+            if frozen_binding is not None:
+                raise TestDataStepBlockedError(
+                    "Deterministically bound UI operation cannot use AI fallback"
+                ) from error
             fallback = step.get("computer_use_fallback")
             if not isinstance(fallback, Mapping):
                 raise
@@ -507,6 +526,16 @@ class PlaywrightUiTestDataExecutor:
             fallback_reason = str(fallback.get("reason") or "")
             action_kinds = fallback_result.action_kinds
         step_id = str(step["step_id"])
+        observed = dict(result.observations)
+        if frozen_binding is not None:
+            observed.update(
+                {
+                    "binding_match_count": 1,
+                    "binding_content_digest": frozen_binding["content_digest"],
+                    "binding_id": frozen_binding["binding_id"],
+                    "test_data_id": frozen_binding["test_data_id"],
+                }
+            )
         log = _store_bound_json(
             evidence_store=self._evidence_store,
             request=request,
@@ -521,7 +550,7 @@ class PlaywrightUiTestDataExecutor:
                 "driver": driver,
                 "fallback_reason": fallback_reason,
                 "computer_use_action_kinds": list(action_kinds),
-                "observed": dict(result.observations),
+                "observed": observed,
             },
         )
         evidence_id = _evidence_id(request.run_id, flow_id, step_id, phase, "screenshot")
@@ -533,7 +562,7 @@ class PlaywrightUiTestDataExecutor:
             content=result.screenshot,
         )
         return TestDataStepExecution(
-            source_values={"ui": dict(result.observations)},
+            source_values={"ui": observed},
             evidence=(
                 log,
                 _execution_evidence(
@@ -581,10 +610,21 @@ class _SyncPlaywrightSession:
         if _http_origin(base_url) is None:
             raise ValueError("Playwright base_url must be a credential-free HTTP(S) origin")
         action_name = str(action.get("action") or "")
+        raw_binding_scope = action.get("_operamind_binding_scope")
+        binding_scope = None
+        if isinstance(raw_binding_scope, Mapping):
+            binding_scope = _playwright_locator(self._page, raw_binding_scope)
+            binding_count = binding_scope.count()
+            if binding_count != 1:
+                raise TestDataStepBlockedError(
+                    "Frozen screen-key locator must resolve to exactly one record: "
+                    f"count={binding_count}"
+                )
+        locator_scope = binding_scope if binding_scope is not None else self._page
         locator = None
         locator_spec = action.get("locator")
         if isinstance(locator_spec, Mapping):
-            locator = _playwright_locator(self._page, locator_spec)
+            locator = _playwright_locator(locator_scope, locator_spec)
             if action_name != "wait_for":
                 locator_count = locator.count()
                 if locator_count != 1:
@@ -635,7 +675,7 @@ class _SyncPlaywrightSession:
             target_spec = action.get("target_locator")
             if not isinstance(target_spec, Mapping):
                 raise ValueError("Playwright drag_to requires target_locator")
-            target_locator = _playwright_locator(self._page, target_spec)
+            target_locator = _playwright_locator(locator_scope, target_spec)
             target_count = target_locator.count()
             if target_count != 1:
                 raise PlaywrightCapabilityError(
@@ -668,6 +708,11 @@ class _SyncPlaywrightSession:
             base_url=base_url,
             observations=tuple(cast(Mapping[str, object], value) for value in raw_observations),
             mask_locators=_reviewed_mask_locators(action),
+            binding_scope_locator=(
+                cast(Mapping[str, object], raw_binding_scope)
+                if isinstance(raw_binding_scope, Mapping)
+                else None
+            ),
         )
 
     def observe(
@@ -676,9 +721,20 @@ class _SyncPlaywrightSession:
         base_url: str,
         observations: tuple[Mapping[str, object], ...],
         mask_locators: tuple[Mapping[str, object], ...],
+        binding_scope_locator: Mapping[str, object] | None = None,
     ) -> PlaywrightActionResult:
         if _http_origin(self._page.url) != _http_origin(base_url):
             raise OSError("Playwright UI action escaped the approved origin")
+        binding_scope = None
+        if binding_scope_locator is not None:
+            binding_scope = _playwright_locator(self._page, binding_scope_locator)
+            binding_count = binding_scope.count()
+            if binding_count != 1:
+                raise TestDataStepBlockedError(
+                    "Frozen screen-key locator drifted during observation: "
+                    f"count={binding_count}"
+                )
+        locator_scope = binding_scope if binding_scope is not None else self._page
         observed: dict[str, object] = {
             "url": self._page.url,
             "title": self._page.title(),
@@ -688,7 +744,7 @@ class _SyncPlaywrightSession:
             kind = str(observation.get("kind") or "")
             observation_locator = observation.get("locator")
             target_locator = (
-                _playwright_locator(self._page, observation_locator)
+                _playwright_locator(locator_scope, observation_locator)
                 if isinstance(observation_locator, Mapping)
                 else None
             )
@@ -741,6 +797,43 @@ def _playwright_locator(page: Any, value: Mapping[str, object]) -> Any:
     if by == "css":
         return scope.locator(locator_value)
     raise PlaywrightCapabilityError(f"Unsupported Playwright locator strategy: {by}")
+
+
+def _validated_frozen_binding(
+    *,
+    step: Mapping[str, object],
+    request: TestDataExecutionRequest,
+) -> Mapping[str, object] | None:
+    binding_ref = str(step.get("data_binding_ref", ""))
+    raw = step.get("_frozen_data_binding")
+    if not binding_ref:
+        if raw is not None:
+            raise TestDataStepBlockedError("Unexpected frozen data binding was injected")
+        return None
+    if not isinstance(raw, Mapping):
+        raise TestDataStepBlockedError(f"Frozen data binding is missing: {binding_ref}")
+    if raw.get("test_data_id") != binding_ref or raw.get("run_id") != request.run_id:
+        raise TestDataStepBlockedError("Frozen data binding execution scope differs")
+    digest = str(raw.get("content_digest", ""))
+    payload = {
+        key: value
+        for key, value in raw.items()
+        if key not in {"content_digest", "evidence_ref"}
+    }
+    actual = hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    if digest != actual:
+        raise TestDataStepBlockedError("Frozen data binding content digest drifted")
+    locator = raw.get("screen_locator")
+    if not isinstance(locator, Mapping) or locator.get("exact") is not True:
+        raise TestDataStepBlockedError("Frozen data binding has no exact screen locator")
+    return raw
 
 
 def _reviewed_mask_locators(

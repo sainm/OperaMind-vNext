@@ -18,6 +18,7 @@ from operamind.application.approval_grant import (
     ApprovalGrantService,
 )
 from operamind.application.change_automation import (
+    CHANGE_FLOW_STATE_MACHINE,
     STAGE_LABELS,
     ChangeAutomationDecision,
     decide_change_automation,
@@ -29,6 +30,7 @@ from operamind.application.copilot_coding_task import (
     CopilotCodingTaskService,
     build_bridge_task_view,
 )
+from operamind.application.document_profile_learning import DocumentProfileLearningService
 from operamind.application.edit_packet import EditPacketRequest, EditPacketService
 from operamind.application.failure_management import build_failure_management
 from operamind.application.local_source_control import (
@@ -40,7 +42,7 @@ from operamind.application.orchestration_task import (
     OrchestrationSchedulingPolicy,
     build_orchestration_task,
 )
-from operamind.application.project_document_baseline import ProjectDocumentBaselineService
+from operamind.application.project_onboarding import ProjectOnboardingService
 from operamind.application.project_stack import (
     ProjectProfileBootstrapper,
     detect_project_stack,
@@ -71,6 +73,11 @@ from operamind.infrastructure.postgres import (
     WebControlPlaneRepository,
 )
 from operamind.infrastructure.postgres.web_command_repository import WebCommandRepository
+from operamind.infrastructure.test_data.target_data import (
+    TargetDataProfile,
+    TargetDataProfileRepository,
+    TargetDataSecretStore,
+)
 from operamind.profiles import ProfileCatalog
 
 _AUTOMATIC_FORBIDDEN_GLOBS = (
@@ -111,6 +118,16 @@ class ProjectInitializationInput:
     workspace_root: Path
     document_roots: tuple[Path, ...]
     configured_by: str
+    test_base_url: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectSettingsUpdateInput:
+    project_id: str
+    name: str
+    document_roots: tuple[Path, ...]
+    expected_revision: int
+    updated_by: str
     test_base_url: str | None = None
 
 
@@ -179,6 +196,21 @@ class WebControlPlaneService:
     def submit_change_request(self, value: ChangeRequestInput) -> dict[str, object]:
         if not value.business_rules:
             raise ValueError("Change Request requires at least one business rule")
+        registration = self._repository.project_workspace_registration(value.project_id)
+        if registration is not None:
+            onboarding = ProjectOnboardingService(
+                connection=self._connection,
+                repository_root=self._root,
+            ).latest(value.project_id)
+            if (
+                onboarding is None
+                or onboarding.get("status") != "ready"
+                or onboarding.get("settings_revision") != registration.get("settings_revision")
+            ):
+                raise ValueError(
+                    "Project Onboarding と RAG が現在の設定で ready になるまで"
+                    "変更要件を開始できません"
+                )
         artifact: dict[str, Any] = {
             "artifact_type": "ChangeRequest",
             "schema_version": "v1",
@@ -254,7 +286,7 @@ class WebControlPlaneService:
         return response
 
     def initialize_project(self, value: ProjectInitializationInput) -> dict[str, object]:
-        """Register local roots and prepare the Canonical RAG baseline when Git is available."""
+        """Register local Git baselines and queue the Canonical/RAG Onboarding."""
 
         if value.test_base_url is not None:
             parsed_url = urlsplit(value.test_base_url)
@@ -335,9 +367,7 @@ class WebControlPlaneService:
                     document_roots=tuple(str(root) for root in document_roots),
                     configured_by=value.configured_by,
                     test_base_url=(
-                        value.test_base_url.rstrip("/")
-                        if value.test_base_url is not None
-                        else None
+                        value.test_base_url.rstrip("/") if value.test_base_url is not None else None
                     ),
                     source_git_baselines=source_git_baselines,
                 )
@@ -351,32 +381,217 @@ class WebControlPlaneService:
                         "source_control_kind": record.source_control_kind,
                         "test_base_url": record.test_base_url,
                         "source_git_baselines": list(record.source_git_baselines),
+                        "settings_revision": record.settings_revision,
                     },
                 }
-                baseline = ProjectDocumentBaselineService(
+                onboarding_service = ProjectOnboardingService(
                     connection=self._connection,
                     repository_root=self._root,
-                ).ensure(
-                    project_id=value.project_id,
-                    document_roots=document_roots,
-                    actor=value.configured_by,
                 )
-                response["document_baseline"] = {
-                    "status": "ready",
-                    "snapshot_id": baseline.snapshot_id,
-                    "document_count": baseline.document_count,
-                    "index_build_id": baseline.index_build_id,
-                    "generated_vector_count": baseline.generated_vector_count,
-                    "embedding_profile_binding_key": (baseline.embedding_profile_binding_key),
-                }
-                response["target_project"] = detect_project_stack(
-                    workspace_root
-                ).copilot_context()
+                latest = onboarding_service.latest(value.project_id)
+                onboarding = (
+                    onboarding_service.enqueue(
+                        project_id=value.project_id,
+                        action="initialize",
+                        actor=value.configured_by,
+                    ).public_view()
+                    if record.created or latest is None
+                    else latest
+                )
+                response["onboarding"] = onboarding
+                response["target_project"] = detect_project_stack(workspace_root).copilot_context()
             return response
         except Exception:
             if source_control is not None:
                 source_control.rollback_created_repositories(tuple(initialized_baselines))
             raise
+
+    def update_project_settings(self, value: ProjectSettingsUpdateInput) -> dict[str, object]:
+        """Replace mutable Project settings and queue a fresh document scan."""
+
+        document_roots = tuple(
+            _resolved_local_directory(root, field_name="設計書の場所")
+            for root in value.document_roots
+        )
+        if len(document_roots) != len(set(document_roots)):
+            raise ValueError("設計書の場所に同じフォルダーを重複して登録できません")
+        test_base_url = _validated_test_base_url(value.test_base_url)
+        source_control = LocalSourceControlService()
+        initialized: list[LocalSourceBaseline] = []
+        try:
+            baselines: list[dict[str, object]] = []
+            for position, root in enumerate(document_roots):
+                baseline = source_control.ensure(
+                    root=root,
+                    project_id=value.project_id,
+                    source_kind="document",
+                    position=position,
+                )
+                initialized.append(baseline)
+                baselines.append(
+                    {
+                        "configured_root": str(baseline.configured_root),
+                        "repository_root": str(baseline.repository_root),
+                        "repository_identity": baseline.repository_identity,
+                        "baseline_revision": baseline.baseline_revision,
+                        "management_kind": baseline.management_kind,
+                        "position": baseline.position,
+                    }
+                )
+            with self._connection.transaction():
+                record = self._repository.update_project_settings(
+                    project_id=value.project_id,
+                    name=value.name,
+                    document_roots=tuple(str(root) for root in document_roots),
+                    test_base_url=test_base_url,
+                    expected_revision=value.expected_revision,
+                    updated_by=value.updated_by,
+                    document_source_git_baselines=tuple(baselines),
+                )
+                onboarding = ProjectOnboardingService(
+                    connection=self._connection,
+                    repository_root=self._root,
+                ).enqueue(
+                    project_id=value.project_id,
+                    action="rescan",
+                    actor=value.updated_by,
+                )
+            return {
+                "project": {
+                    "project_id": record.project_id,
+                    "name": record.name,
+                    "workspace_root": record.workspace_root,
+                    "document_roots": list(record.document_roots),
+                    "source_control_kind": record.source_control_kind,
+                    "test_base_url": record.test_base_url,
+                    "source_git_baselines": list(record.source_git_baselines),
+                    "settings_revision": record.settings_revision,
+                },
+                "onboarding": onboarding.public_view(),
+            }
+        except Exception:
+            source_control.rollback_created_repositories(tuple(initialized))
+            raise
+
+    def project_onboarding(self, project_id: str) -> dict[str, object]:
+        service = ProjectOnboardingService(
+            connection=self._connection,
+            repository_root=self._root,
+        )
+        return {
+            "project_id": project_id,
+            "onboarding": service.latest(project_id),
+        }
+
+    def project_document_learning(self, project_id: str) -> dict[str, object]:
+        return {
+            "project_id": project_id,
+            "learning": DocumentProfileLearningService(
+                connection=self._connection,
+                repository_root=self._root,
+            ).latest(project_id),
+        }
+
+    def project_target_data_profile(
+        self, project_id: str, *, include_statements: bool = False
+    ) -> dict[str, object]:
+        profile = TargetDataProfileRepository(self._connection).get(project_id)
+        if profile is None:
+            return {"project_id": project_id, "profile": None}
+        view = profile.public_view(include_statements=include_statements)
+        view["secret_configured"] = TargetDataSecretStore().configured(
+            project_id=project_id,
+            connection_alias=profile.connection_alias,
+        )
+        return {"project_id": project_id, "profile": view}
+
+    def configure_project_target_data_profile(
+        self,
+        *,
+        project_id: str,
+        connection_alias: str,
+        connection_dsn: str | None,
+        transaction_policy: str,
+        bindings: tuple[dict[str, object], ...],
+        actor: str,
+    ) -> dict[str, object]:
+        secrets = TargetDataSecretStore()
+        secret_already_configured = secrets.configured(
+            project_id=project_id,
+            connection_alias=connection_alias,
+        )
+        previous_secret = (
+            secrets.get(project_id=project_id, connection_alias=connection_alias)
+            if secret_already_configured
+            else None
+        )
+        if connection_dsn is None and not secret_already_configured:
+            raise ValueError("Target Data 接続 Secret を入力してください")
+        if connection_dsn is not None:
+            secrets.put(
+                project_id=project_id,
+                connection_alias=connection_alias,
+                connection_dsn=connection_dsn,
+            )
+        try:
+            profile = TargetDataProfileRepository(self._connection).replace(
+                project_id=project_id,
+                connection_alias=connection_alias,
+                transaction_policy=transaction_policy,
+                bindings=bindings,
+                reviewed_by=actor,
+            )
+        except Exception:
+            if connection_dsn is not None:
+                if previous_secret is None:
+                    secrets.delete(project_id=project_id, connection_alias=connection_alias)
+                else:
+                    secrets.put(
+                        project_id=project_id,
+                        connection_alias=connection_alias,
+                        connection_dsn=previous_secret,
+                    )
+            raise
+        view = profile.public_view(include_statements=True)
+        view["secret_configured"] = True
+        return {"project_id": project_id, "profile": view}
+
+    def confirm_project_document_learning(
+        self, *, project_id: str, learning_run_id: str, actor: str
+    ) -> dict[str, object]:
+        learning = DocumentProfileLearningService(
+            connection=self._connection,
+            repository_root=self._root,
+        ).confirm(
+            project_id=project_id,
+            learning_run_id=learning_run_id,
+            actor=actor,
+        )
+        return {"project_id": project_id, "learning": learning}
+
+    def project_preflight(self, project_id: str) -> dict[str, object]:
+        return ProjectOnboardingService(
+            connection=self._connection,
+            repository_root=self._root,
+        ).preflight(project_id)
+
+    def request_project_onboarding(
+        self, *, project_id: str, action: str, actor: str
+    ) -> dict[str, object]:
+        record = ProjectOnboardingService(
+            connection=self._connection,
+            repository_root=self._root,
+        ).enqueue(project_id=project_id, action=action, actor=actor)
+        return {"project_id": project_id, "onboarding": record.public_view()}
+
+    def retry_project_onboarding(self, *, project_id: str, actor: str) -> dict[str, object]:
+        return {
+            "project_id": project_id,
+            "onboarding": ProjectOnboardingService(
+                connection=self._connection,
+                repository_root=self._root,
+            ).retry(project_id=project_id, actor=actor),
+        }
 
     def _ensure_change_request_case(self, value: ChangeRequestInput) -> str:
         registration = self._repository.project_repository_registration(value.project_id)
@@ -445,11 +660,25 @@ class WebControlPlaneService:
 
     def list_projects(self) -> dict[str, object]:
         projects = self._repository.list_projects()
+        onboarding = ProjectOnboardingService(
+            connection=self._connection,
+            repository_root=self._root,
+        )
+        learning = DocumentProfileLearningService(
+            connection=self._connection,
+            repository_root=self._root,
+        )
+        target_data = TargetDataProfileRepository(self._connection)
+        secret_store = TargetDataSecretStore()
         enriched = [
             {
                 **project,
-                "target_project": _safe_project_stack_context(
-                    Path(str(project["workspace_root"]))
+                "target_project": _safe_project_stack_context(Path(str(project["workspace_root"]))),
+                "onboarding": onboarding.latest(str(project["project_id"])),
+                "document_learning": learning.latest(str(project["project_id"])),
+                "target_data_profile": _target_data_summary(
+                    target_data.get(str(project["project_id"])),
+                    secret_store=secret_store,
                 ),
             }
             for project in projects
@@ -580,6 +809,13 @@ class WebControlPlaneService:
         consumer_id: str,
         change_request_id: str | None = None,
     ) -> dict[str, object]:
+        if change_request_id is None:
+            learning = DocumentProfileLearningService(
+                connection=self._connection,
+                repository_root=self._root,
+            ).claim_next(workspace_root=workspace_root, consumer_id=consumer_id)
+            if learning is not None:
+                return {"task": learning}
         task = CopilotCodingTaskService(
             connection=self._connection,
             repository_root=self._root,
@@ -596,8 +832,20 @@ class WebControlPlaneService:
         coding_task_id: str,
         workspace_root: Path,
         consumer_id: str,
+        claim_token: str | None,
         actor: str,
     ) -> dict[str, object]:
+        if coding_task_id.startswith("document-learning-"):
+            return DocumentProfileLearningService(
+                connection=self._connection,
+                repository_root=self._root,
+            ).accept(
+                learning_run_id=coding_task_id,
+                workspace_root=workspace_root,
+                consumer_id=consumer_id,
+                claim_token=_required_learning_claim_token(claim_token),
+                actor=actor,
+            )
         view = CopilotCodingTaskService(
             connection=self._connection,
             repository_root=self._root,
@@ -615,7 +863,18 @@ class WebControlPlaneService:
         coding_task_id: str,
         workspace_root: Path,
         consumer_id: str,
+        claim_token: str | None,
     ) -> dict[str, object]:
+        if coding_task_id.startswith("document-learning-"):
+            return DocumentProfileLearningService(
+                connection=self._connection,
+                repository_root=self._root,
+            ).resume(
+                learning_run_id=coding_task_id,
+                workspace_root=workspace_root,
+                consumer_id=consumer_id,
+                claim_token=_required_learning_claim_token(claim_token),
+            )
         view = CopilotCodingTaskService(
             connection=self._connection,
             repository_root=self._root,
@@ -632,9 +891,21 @@ class WebControlPlaneService:
         coding_task_id: str,
         workspace_root: Path,
         consumer_id: str,
+        claim_token: str | None,
         actor: str,
         reason: str,
     ) -> dict[str, object]:
+        if coding_task_id.startswith("document-learning-"):
+            return DocumentProfileLearningService(
+                connection=self._connection,
+                repository_root=self._root,
+            ).cancel(
+                learning_run_id=coding_task_id,
+                workspace_root=workspace_root,
+                consumer_id=consumer_id,
+                claim_token=_required_learning_claim_token(claim_token),
+                reason=reason,
+            )
         task = CopilotCodingTaskService(
             connection=self._connection,
             repository_root=self._root,
@@ -691,15 +962,6 @@ class WebControlPlaneService:
         note: str | None = None,
     ) -> dict[str, object]:
         """Record one shared human decision and resume deterministic work."""
-        action_checkpoints = {
-            "confirm_requirement": "requirement",
-            "confirm_rag_documents": "rag_documents",
-            "confirm_document_diff": "document_diff",
-            "confirm_code_scope": "code_scope",
-            "confirm_test_plan": "test_plan",
-            "confirm_ui_test": "ui_test",
-            "confirm_final_report": "final_report",
-        }
         if decision not in {"confirmed", "rejected"}:
             raise ValueError("確認結果は confirmed または rejected を指定してください")
         run_view = self._automation_runs.latest_for_request(request_id)
@@ -716,7 +978,7 @@ class WebControlPlaneService:
             bundle=bundle,
             execution=execution,
         )
-        expected_checkpoint = action_checkpoints.get(str(current.next_action))
+        expected_checkpoint = CHANGE_FLOW_STATE_MACHINE.confirmation_checkpoint(current.next_action)
         if checkpoint != expected_checkpoint:
             raise ValueError(
                 "現在の確認点と一致しません: "
@@ -875,9 +1137,10 @@ class WebControlPlaneService:
             decision.stage == "planning"
             and decision.status == "running"
             and current_task is not None
-            and current_task["state"] in {"submitted", "completed", "failed", "blocked"}
+            and current_task.get("effective_state", current_task["state"])
+            in {"submitted", "completed", "failed", "blocked"}
         ):
-            task_state = str(current_task["state"])
+            task_state = str(current_task.get("effective_state", current_task["state"]))
             decision = ChangeAutomationDecision(
                 stage="planning",
                 status="blocked",
@@ -892,7 +1155,7 @@ class WebControlPlaneService:
             decision.stage == "planning"
             and decision.status == "running"
             and current_task is not None
-            and current_task["state"] == "ready"
+            and current_task.get("effective_state", current_task["state"]) == "ready"
         ):
             internal_executor_id = (
                 f"operamind-single-agent:{hashlib.sha256(run_id.encode()).hexdigest()[:24]}"
@@ -1714,16 +1977,7 @@ class WebControlPlaneService:
             execution=execution,
         )
         value["confirmations"] = [confirmations[key] for key in confirmations]
-        action_checkpoints = {
-            "confirm_requirement": "requirement",
-            "confirm_rag_documents": "rag_documents",
-            "confirm_document_diff": "document_diff",
-            "confirm_code_scope": "code_scope",
-            "confirm_test_plan": "test_plan",
-            "confirm_ui_test": "ui_test",
-            "confirm_final_report": "final_report",
-        }
-        checkpoint = action_checkpoints.get(str(decision.next_action))
+        checkpoint = CHANGE_FLOW_STATE_MACHINE.confirmation_checkpoint(decision.next_action)
         value["pending_confirmation"] = (
             {
                 "change_request_id": record.change_request_id,
@@ -2325,6 +2579,49 @@ def _safe_project_stack_context(workspace_root: Path) -> dict[str, object]:
             "quality_evidence": [],
             "quality_missing_signals": ["コード Workspace を読み取れません"],
         }
+
+
+def _target_data_summary(
+    profile: TargetDataProfile | None, *, secret_store: TargetDataSecretStore
+) -> dict[str, object] | None:
+    if profile is None:
+        return None
+    return {
+        "connection_alias": profile.connection_alias,
+        "dialect": profile.dialect,
+        "transaction_policy": profile.transaction_policy,
+        "reviewed_by": profile.reviewed_by,
+        "reviewed_at": profile.reviewed_at.isoformat(),
+        "secret_configured": secret_store.configured(
+            project_id=profile.project_id,
+            connection_alias=profile.connection_alias,
+        ),
+        "query_binding_ids": [value.query_binding_id for value in profile.bindings],
+    }
+
+
+def _validated_test_base_url(value: str | None) -> str | None:
+    if value is None:
+        return None
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(
+            "UI テスト対象 URL は認証情報、Query、Fragment を含まない HTTP(S) URL にしてください"
+        )
+    return value.rstrip("/")
+
+
+def _required_learning_claim_token(value: str | None) -> str:
+    if value is None or not value.strip():
+        raise ValueError("Document Profile learning claim token is required")
+    return value
 
 
 def _web_id(prefix: str, *values: str) -> str:

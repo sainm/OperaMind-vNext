@@ -10,7 +10,41 @@
       "test_data_id": "expense-returned-data",
       "test_case_refs": ["ui-expense-status-search"],
       "setup_actions": [],
-      "cleanup_policy": "isolated_environment"
+      "cleanup_policy": "isolated_environment",
+      "identity_binding": {
+        "binding_mode": "generated",
+        "source_flow_id": "expense-status-ui-flow",
+        "source_step_id": "read-expense-identity",
+        "primary_key": {"name": "id", "source": "database", "path": "rows[0].id"},
+        "business_unique_keys": [
+          {"name": "expense_number", "source": "database", "path": "rows[0].expense_number"}
+        ],
+        "screen_key": {
+          "name": "expense_number",
+          "source": "database",
+          "path": "rows[0].expense_number",
+          "locator_template": {
+            "by": "css",
+            "value": "[data-expense-number='{{value}}']",
+            "exact": true
+          }
+        },
+        "match_count": {"source": "database", "path": "row_count"}
+      },
+      "coverage_conditions": [
+        {
+          "condition_id": "expense-returned-status-condition",
+          "criterion_ref": "expense-status-visible",
+          "test_case_ref": "ui-expense-status-search",
+          "test_data_id": "expense-returned-data",
+          "condition_kind": "status",
+          "source_flow_id": "expense-status-ui-flow",
+          "source_step_id": "read-expense-identity",
+          "path": "rows[0].status",
+          "operator": "equals",
+          "expected": "RETURNED"
+        }
+      ]
     }
   ],
   "generation_flows": [
@@ -28,6 +62,7 @@
           "test_step_refs": [],
           "screen_ref": "expense-create",
           "ui_action_ref": "open",
+          "operation_scope": "screen",
           "playwright": {
             "mask_locators": [],
             "action": "goto",
@@ -55,16 +90,17 @@
           "test_step_refs": [],
           "screen_ref": "expense-create",
           "ui_action_ref": "enter-title",
+          "operation_scope": "screen",
           "playwright": {
             "mask_locators": [],
             "action": "fill",
-            "locator": {"by": "label", "value": "件名"},
+            "locator": {"by": "label", "value": "件名", "exact": true},
             "value": "差戻し確認用経費",
             "observations": [
               {
                 "key": "expense_title",
                 "kind": "value",
-                "locator": {"by": "label", "value": "件名"}
+                "locator": {"by": "label", "value": "件名", "exact": true}
               }
             ]
           },
@@ -89,16 +125,17 @@
           "test_step_refs": [],
           "screen_ref": "expense-create",
           "ui_action_ref": "select-status",
+          "operation_scope": "screen",
           "playwright": {
             "mask_locators": [],
             "action": "select_option",
-            "locator": {"by": "label", "value": "状態"},
+            "locator": {"by": "label", "value": "状態", "exact": true},
             "value": "RETURNED",
             "observations": [
               {
                 "key": "created_expense_status",
                 "kind": "value",
-                "locator": {"by": "label", "value": "状態"}
+                "locator": {"by": "label", "value": "状態", "exact": true}
               }
             ]
           },
@@ -124,10 +161,11 @@
           "test_step_refs": [],
           "screen_ref": "expense-create",
           "ui_action_ref": "save",
+          "operation_scope": "screen",
           "playwright": {
             "mask_locators": [],
             "action": "click",
-            "locator": {"by": "role", "value": "button", "name": "登録"},
+            "locator": {"by": "role", "value": "button", "name": "登録", "exact": true},
             "observations": [
               {"key": "saved_page_title", "kind": "title"},
               {
@@ -159,13 +197,35 @@
           ]
         },
         {
-          "step_id": "open-expense-list",
+          "step_id": "read-expense-identity",
           "sequence": 5,
+          "channel": "sql",
+          "business_action": "登録した経費を DB から一意に読み戻す",
+          "data_effect": "none",
+          "test_step_refs": [],
+          "target": "read_expense_identity",
+          "inputs": {"expense_id": "{{expense_id}}"},
+          "depends_on": ["save-returned-expense"],
+          "output_bindings": [],
+          "postconditions": [
+            {
+              "assertion_id": "expense-identity-unique",
+              "observe_via": "database",
+              "subject": "row_count",
+              "operator": "equals",
+              "expected": 1
+            }
+          ]
+        },
+        {
+          "step_id": "open-expense-list",
+          "sequence": 6,
           "channel": "ui",
           "business_action": "経費一覧を開く",
           "test_step_refs": ["open-expense-list"],
           "screen_ref": "expense-list",
           "ui_action_ref": "open",
+          "operation_scope": "screen",
           "playwright": {
             "mask_locators": [],
             "action": "goto",
@@ -175,7 +235,7 @@
             ]
           },
           "inputs": {},
-          "depends_on": ["save-returned-expense"],
+          "depends_on": ["read-expense-identity"],
           "output_bindings": [],
           "postconditions": [
             {
@@ -189,22 +249,23 @@
         },
         {
           "step_id": "select-returned-status-action",
-          "sequence": 6,
+          "sequence": 7,
           "channel": "ui",
           "business_action": "状態で差戻しを選択する",
           "test_step_refs": ["select-returned-status"],
           "screen_ref": "expense-list",
           "ui_action_ref": "select-status",
+          "operation_scope": "screen",
           "playwright": {
             "mask_locators": [],
             "action": "select_option",
-            "locator": {"by": "label", "value": "状態"},
+            "locator": {"by": "label", "value": "状態", "exact": true},
             "value": "RETURNED",
             "observations": [
               {
                 "key": "selected_status",
                 "kind": "value",
-                "locator": {"by": "label", "value": "状態"}
+                "locator": {"by": "label", "value": "状態", "exact": true}
               }
             ]
           },
@@ -223,47 +284,78 @@
         },
         {
           "step_id": "search-expenses-action",
-          "sequence": 7,
+          "sequence": 8,
           "channel": "ui",
           "business_action": "検索を実行する",
           "test_step_refs": ["search-expenses"],
           "screen_ref": "expense-list",
           "ui_action_ref": "search",
+          "operation_scope": "screen",
           "playwright": {
             "mask_locators": [],
             "action": "click",
-            "locator": {"by": "role", "value": "button", "name": "検索"},
-            "observations": [
-              {
-                "key": "returned_rows",
-                "kind": "count",
-                "locator": {"by": "css", "value": "[data-status='RETURNED']"}
-              }
-            ]
+            "locator": {"by": "role", "value": "button", "name": "検索", "exact": true},
+          "observations": [
+            {
+              "key": "url",
+              "kind": "url"
+            }
+          ]
           },
           "computer_use_fallback": {
             "reason": "virtualized_ui",
             "objective": "検索ボタンがアクセシビリティツリーから操作できない場合だけ、画面上の検索ボタンを一度選択する",
             "max_actions": 3,
             "requires_confirmation": true,
-            "observations": [
-              {
-                "key": "returned_rows",
-                "kind": "count",
-                "locator": {"by": "css", "value": "[data-status='RETURNED']"}
-              }
-            ]
+            "observations": []
           },
           "inputs": {},
           "depends_on": ["select-returned-status-action"],
           "output_bindings": [],
           "postconditions": [
             {
-              "assertion_id": "only-returned-expenses",
+              "assertion_id": "expense-search-completed",
               "observe_via": "ui",
-              "subject": "returned_rows",
-              "operator": "count_equals",
-              "expected": 1
+              "subject": "url",
+              "operator": "contains",
+              "expected": "/expense"
+            }
+          ]
+        },
+        {
+          "step_id": "verify-bound-returned-expense",
+          "sequence": 9,
+          "channel": "ui",
+          "business_action": "一意に結合した経費行の状態を確認する",
+          "test_step_refs": [],
+          "screen_ref": "expense-list",
+          "ui_action_ref": "verify-bound-row",
+          "operation_scope": "bound_record",
+          "data_binding_ref": "expense-returned-data",
+          "playwright": {
+            "mask_locators": [],
+            "action": "wait_for",
+            "locator": {"by": "css", "value": ":scope", "exact": true},
+            "state": "visible",
+            "observations": [
+              {
+                "key": "returned_status",
+                "kind": "attribute",
+                "locator": {"by": "css", "value": ":scope", "exact": true},
+                "attribute_name": "data-status"
+              }
+            ]
+          },
+          "inputs": {},
+          "depends_on": ["search-expenses-action"],
+          "output_bindings": [],
+          "postconditions": [
+            {
+              "assertion_id": "bound-expense-is-returned",
+              "observe_via": "ui",
+              "subject": "returned_status",
+              "operator": "equals",
+              "expected": "RETURNED"
             }
           ]
         }

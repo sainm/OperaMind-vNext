@@ -223,6 +223,49 @@ def test_projection_exposes_exactly_six_product_stages_and_no_internal_approval(
                             ],
                         }
                     ],
+                    "data_bindings": [
+                        {
+                            "test_data_id": "expense-returned-data",
+                            "binding_mode": "generated",
+                            "primary_key": {"name": "id", "value": 42},
+                            "business_unique_keys": [
+                                {"name": "expense_number", "value": "EXP-042"}
+                            ],
+                            "screen_key": {
+                                "name": "expense_number",
+                                "value": "EXP-042",
+                            },
+                            "screen_locator": {
+                                "by": "css",
+                                "value": "[data-expense-number='EXP-042']",
+                                "exact": True,
+                            },
+                            "match_count": 1,
+                            "frozen_at": "2026-08-04T00:00:00Z",
+                            "content_digest": "a" * 64,
+                            "evidence_ref": "artifact://result/data-binding/expense-returned-data",
+                        }
+                    ],
+                    "data_coverage": {
+                        "status": "passed",
+                        "coverage_percent": 100,
+                        "proofs": [
+                            {
+                                "condition_id": "expense-returned-status",
+                                "criterion_ref": "criterion-returned",
+                                "test_case_ref": "expense-returned-ui",
+                                "test_data_id": "expense-returned-data",
+                                "condition_kind": "status",
+                                "path": "rows[0].status",
+                                "operator": "equals",
+                                "expected": "RETURNED",
+                                "actual": "RETURNED",
+                                "status": "passed",
+                                "content_digest": "b" * 64,
+                                "evidence_ref": "artifact://result/data-coverage/status",
+                            }
+                        ],
+                    },
                 },
             },
             "business_coverage": {"coverage_percent": 100},
@@ -302,6 +345,43 @@ def test_projection_exposes_exactly_six_product_stages_and_no_internal_approval(
     assert generation_flow["steps"][0]["output_variables"] == ["expense_id"]
     assert generation_flow["steps"][0]["assertions"][0]["expected"] == "RETURNED"
     assert generation_flow["cleanup_steps"][0]["status"] == "passed"
+    assert result["stages"][4]["details"]["data_bindings"] == [
+        {
+            "test_data_id": "expense-returned-data",
+            "binding_mode": "generated",
+            "primary_key": {"name": "id", "value": 42},
+            "business_unique_keys": [
+                {"name": "expense_number", "value": "EXP-042"}
+            ],
+            "screen_key": {"name": "expense_number", "value": "EXP-042"},
+            "screen_locator": {
+                "by": "css",
+                "value": "[data-expense-number='EXP-042']",
+                "exact": True,
+            },
+            "match_count": 1,
+            "frozen_at": "2026-08-04T00:00:00Z",
+            "content_digest": "a" * 64,
+            "evidence_ref": "artifact://result/data-binding/expense-returned-data",
+        }
+    ]
+    assert result["stages"][4]["details"]["data_coverage_status"] == "passed"
+    assert result["stages"][4]["details"]["data_coverage_percent"] == 100
+    assert result["stages"][4]["details"]["data_coverage_proofs"][0] == {
+        "condition_id": "expense-returned-status",
+        "criterion_ref": "criterion-returned",
+        "test_case_ref": "expense-returned-ui",
+        "test_data_id": "expense-returned-data",
+        "condition_kind": "status",
+        "path": "rows[0].status",
+        "operator": "equals",
+        "expected": "RETURNED",
+        "actual": "RETURNED",
+        "status": "passed",
+        "failure_reason": None,
+        "content_digest": "b" * 64,
+        "evidence_ref": "artifact://result/data-coverage/status",
+    }
     assert result["stages"][5]["details"]["test_results"] == [
         {
             "title": "差戻し状態で検索する",
@@ -481,6 +561,7 @@ def test_projection_surfaces_business_blockers_on_the_relevant_product_stage() -
         automation={
             "current_stage": "impact_analysis",
             "status": "blocked",
+            "next_action": "resolve_blocker",
             "blocking_reason": "RAG index is not ready",
         },
         copilot_task=None,
@@ -556,6 +637,59 @@ def test_working_diff_keeps_compile_test_running_until_committed_evidence() -> N
     assert result["stages"][3]["status"] == "running"
 
 
+def test_persisted_state_machine_prevents_web_from_displaying_a_future_stage() -> None:
+    result = build_main_change_flow(
+        request=_request(),
+        document_diff={"total": 1, "changes": [{"change_id": "doc-1"}]},
+        workspace={
+            "impact_report": {"id": "impact-001", "status": "confirmed"},
+            "confirmation": {"id": "confirmation-001"},
+            "edit_result": {
+                "id": "edit-committed",
+                "status": "in_scope",
+                "validation_mode": "committed",
+                "tests_passed": True,
+                "command_evidence_status": "verified",
+            },
+        },
+        automation={
+            "current_stage": "code_change",
+            "status": "waiting",
+            "next_action": "apply_code_change_with_copilot",
+        },
+        copilot_task={"state": "completed", "commands": []},
+        execution={"test_plan": _test_plan(), "test_data_plan": _test_data_plan()},
+    )
+
+    assert result["current_stage"] == "compile_test"
+    assert result["stages"][3]["status"] == "waiting"
+    assert result["stages"][4]["status"] == "waiting"
+
+
+def test_state_machine_blocker_is_projected_even_without_stage_specific_evidence() -> None:
+    result = build_main_change_flow(
+        request=_request(),
+        document_diff={"total": 1, "changes": [{"change_id": "doc-1"}]},
+        workspace={
+            "impact_report": {"id": "impact-001", "status": "confirmed"},
+            "confirmation": {"id": "confirmation-001"},
+            "edit_result": {"id": None, "status": None},
+        },
+        automation={
+            "current_stage": "execution_approval",
+            "status": "blocked",
+            "next_action": "resolve_blocker",
+            "blocking_reason": "実行範囲を作成できません。",
+        },
+        copilot_task={"state": "pending", "commands": []},
+        execution=None,
+    )
+
+    assert result["status"] == "blocked"
+    assert result["current_stage"] == "compile_test"
+    assert result["stages"][3]["blocking_reasons"] == ["実行範囲を作成できません。"]
+
+
 def test_verification_only_no_change_result_completes_compile_test() -> None:
     result = build_main_change_flow(
         request=_request(),
@@ -591,7 +725,7 @@ def test_future_stale_copilot_failure_does_not_override_current_confirmation() -
         workspace=None,
         automation={
             "current_stage": "requirement_confirmation",
-            "status": "running",
+            "status": "waiting",
             "next_action": "confirm_requirement",
             "pending_confirmation": {
                 "checkpoint": "requirement",
@@ -638,13 +772,23 @@ def test_rejected_confirmation_blocks_the_visible_product_stage(
         automation={
             "current_stage": automation_stage,
             "status": "blocked",
+            "next_action": "resolve_blocker",
             "blocking_reason": "ユーザーにより差し戻されました。",
         },
         copilot_task={"state": "completed", "commands": []},
         execution={
             "test_plan": _test_plan(),
             "test_data_plan": _test_data_plan(),
-            "test_data_execution": {"status": "passed", "result": {}},
+            "test_data_execution": {
+                "status": "passed",
+                "result": {
+                    "data_coverage": {
+                        "status": "passed",
+                        "coverage_percent": 100,
+                        "proofs": [],
+                    }
+                },
+            },
             "business_coverage": {"coverage_percent": 100},
             "changed_line_coverage": {"coverage_percent": 90},
             "change_closure": {

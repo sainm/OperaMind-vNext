@@ -144,7 +144,7 @@ class BridgeClient {
     );
   }
 
-  acceptTask(codingTaskId, workspaceRoot, consumerId, acceptedBy) {
+  acceptTask(codingTaskId, workspaceRoot, consumerId, acceptedBy, claimToken = undefined) {
     return this.transport(
       this.baseUrl,
       this.token,
@@ -153,13 +153,15 @@ class BridgeClient {
       {
         workspace_root: workspaceRoot,
         consumer_id: consumerId,
+        ...(claimToken ? {claim_token: claimToken} : {}),
         accepted_by: acceptedBy,
       },
     );
   }
 
-  resumeTask(codingTaskId, workspaceRoot, consumerId) {
+  resumeTask(codingTaskId, workspaceRoot, consumerId, claimToken = undefined) {
     const query = new URLSearchParams({workspace_root: workspaceRoot, consumer_id: consumerId});
+    if (claimToken) query.set("claim_token", claimToken);
     return this.transport(
       this.baseUrl,
       this.token,
@@ -168,7 +170,14 @@ class BridgeClient {
     );
   }
 
-  cancelTask(codingTaskId, workspaceRoot, consumerId, cancelledBy, reason) {
+  cancelTask(
+    codingTaskId,
+    workspaceRoot,
+    consumerId,
+    cancelledBy,
+    reason,
+    claimToken = undefined,
+  ) {
     return this.transport(
       this.baseUrl,
       this.token,
@@ -177,6 +186,7 @@ class BridgeClient {
       {
         workspace_root: workspaceRoot,
         consumer_id: consumerId,
+        ...(claimToken ? {claim_token: claimToken} : {}),
         cancelled_by: cancelledBy,
         reason,
       },
@@ -194,59 +204,89 @@ class BridgeClient {
   }
 }
 
-function buildCopilotPrompt(taskView, workspaceRoot) {
+function buildCopilotPrompt(taskView, workspaceRoot, consumerId = undefined) {
   const task = taskView && taskView.task;
   if (!task || task.execution_mode !== "copilot_change_task") {
     throw new Error("OperaMind task is not a unified Copilot Change Task");
   }
-  const tools = Array.isArray(task.required_mcp_tools) ? task.required_mcp_tools.join(", ") : "";
-  if (task.task_kind === "ui_test_plan_revision" || task.initial_stage === "ui_test_revision") {
-    return [
-      `OperaMind UI TestPlan revision Task ${task.coding_task_id} を実行してください。`,
-      `対象 Workspace: ${workspaceRoot}`,
-      `要求: ${task.task_summary}`,
-      "最初に operaMind MCP の copilot_get_coding_task を task ID と Workspace で呼び出してください。",
-      "source_ui_test_plan、source_test_data_plan、revision_instruction、confirmed_change_summary を読み、現在の UI 計画の意味を理解してください。",
-      "コード、設計書、Git 履歴、Scope、Approval を変更せず、画面横断の自然言語 UiTestPlan と完全な TestDataPlan だけを再生成してください。",
-      "UiTestPlan の全 Case は execution_mode=browser の UI Case とし、各 UI Step に同一 Origin 内の限定 Playwright action、UI assertion、Screenshot、cleanup を含めてください。",
-      "TestDataPlan の data_sets、generation_flows、変数、依存順、最終業務 Assertion、cleanup を省略せず、全 UiTestPlan Case を過不足なく覆ってください。",
-      "copilot_record_change_outputs に output_stage=ui_test_revision、test_plan、test_data_plan を渡してください。",
-      "next_context が null の場合は先へ進まず、flow_status の停止理由を報告してください。",
-      `必要な MCP tools: ${tools}`,
-    ].join("\n");
-  }
-  const target = task.target_project || {};
-  const targetLines = target.detection_status === "supported"
-    ? [
-        `対象技術 Stack: ${target.framework} / ${target.template_engine} / ${target.build_system}`,
-        `変更制約: ${(target.change_constraints || []).join("、")}`,
-        `固定 compile: ${(target.compile_command || []).join(" ")}`,
-        `固定 test: ${(target.test_command || []).join(" ")}`,
-        `固定 build: ${(target.build_command || []).join(" ")}`,
-      ]
-    : [
-        "対象技術 Stack は自動確定していません。MCP が返す限定範囲を越えて Framework や Build Tool を変更しないでください。",
-      ];
-  return [
-    `OperaMind Change Task ${task.coding_task_id} を実行してください。`,
+  const currentStage = taskView.current_stage || task.initial_stage || "document_change";
+  const stage = stagePrompt(currentStage, task.task_kind);
+  const lines = [
+    `OperaMind Change Task: ${task.coding_task_id}`,
     `対象 Workspace: ${workspaceRoot}`,
-    `要求: ${task.task_summary}`,
-    ...targetLines,
-    "最初に operaMind MCP の copilot_get_coding_task を task ID と Workspace で呼び出してください。",
-    "document_discovery が blocked の場合は編集せず、その blocking_reason を報告してください。",
-    "設計書段階では Canonical RAG 候補の canonical_document facts から変更対象の stable_key、field、new_value を決め、output_stage=document_change、document_ids、document_edits を copilot_record_change_outputs に渡してください。XLSX 原本は OperaMind が限定セルだけ更新するため、コード Workspace 内でファイルを探したり shell で編集したりしないでください。",
-    "次にコードを読み取り専用で調査し、Graph で確認できる code_scope を output_stage=code_scope として記録してください。",
-    "copilot_get_coding_task の返却自体を現在の authoritative context として扱ってください。この Tool は next_context を返さないため、next_context の欠落を停止理由にしないでください。",
-    "copilot_get_coding_task が current_stage=compile_test かつ execution_scope.bound=true を返した後だけ、editable/test 範囲内でコードとテストを変更してください。",
-    "コード変更後、まず copilot_validate_task_diff を実行してください。",
-    "次に、MCP が返した必須のコンパイル、コードテスト、カバレッジコマンドを copilot_run_task_command ですべて実行し、成功を確認してください。",
-    "必須コマンドがすべて成功した後、検証済みコード差分を commit し、全 Command Evidence を指定して copilot_record_task_result を記録してください。",
-    "next_context が test_planning に進んだことを確認した後だけ、committed コード差分、設計差分、要件から自然言語 UI TestPlan と実行可能 TestDataPlan を作り、output_stage=test_planning として記録してください。",
-    "UI TestPlan の全 Case は browser UI とし、TestDataPlan の各 UI step に限定 Playwright action、UI assertion、Screenshot、cleanup を含めてください。",
-    "状態を変更する MCP Tool が next_context を含めて返した場合だけ、その値を次工程判定に使用してください。next_context=null は人工確認待ちなので停止し、確認後の再開時は copilot_get_coding_task を再取得してください。",
-    `必要な MCP tools: ${tools}`,
-    "範囲外ファイルが必要な場合は停止し、任意の shell command を実行しないでください。",
-  ].join("\n");
+    `業務要件: ${task.task_summary}`,
+    `現在工程: ${stage.label}`,
+    `目的: ${stage.goal}`,
+    `入力: ${stage.input}`,
+    `出力: ${stage.output}`,
+    `停止条件: ${stage.stop}`,
+    `最初に operaMind MCP の copilot_get_coding_task を coding_task_id=${task.coding_task_id} とこの Workspace で呼び出してください。`,
+    "完了後は stage_status.next_action に従い、wait_for_confirmation または stop ならそこで停止してください。",
+  ];
+  if (currentStage === "document_profile_learning") {
+    if (!consumerId || !taskView.claim_token) {
+      throw new Error("Document Profile learning claim identity is missing");
+    }
+    lines.splice(
+      9,
+      0,
+      `document_profile_learning の全 MCP 呼び出しに consumer_id=${consumerId} と claim_token=${taskView.claim_token} を渡してください。`,
+    );
+  }
+  return lines.join("\n");
+}
+
+function stagePrompt(currentStage, taskKind) {
+  if (taskKind === "document_profile_learning" || currentStage === "document_profile_learning") {
+    return {
+      label: "Project 設計書学習",
+      goal: "抽出済み XLSX／DOCX 構造から、この Project 専用の DocumentConventionProfile を作成する。",
+      input: "MCP が返す構造 Sample、前回 Profile、構造差分、Schema 制約。",
+      output: "copilot_record_change_outputs で document_profile_learning の草案を記録する。",
+      stop: "Coverage 100% かつ曖昧 0 件の草案を記録したら、OperaMind Web の確認を待つ。",
+    };
+  }
+  if (taskKind === "ui_test_plan_revision" || currentStage === "ui_test_revision") {
+    return {
+      label: "UI テスト計画の再作成",
+      goal: "確認済みの自然言語修正だけを反映し、完全な UI TestPlan と TestDataPlan を再作成する。",
+      input: "MCP が返す現行計画、確認済み修正、実行制約。",
+      output: "copilot_record_change_outputs で ui_test_revision の完全な両計画を記録する。",
+      stop: "計画を記録したら、OperaMind Web の確認を待つ。",
+    };
+  }
+  const stages = {
+    document_change: {
+      label: "設計書変更",
+      goal: "RAG が特定した設計書の必要箇所だけを業務要件に合わせて更新する。",
+      input: "MCP が返す業務要件と Canonical RAG 文書候補。",
+      output: "copilot_record_change_outputs で document_change の対象文書と項目変更を記録する。",
+      stop: "設計書差分を記録したら、OperaMind Web の確認を待つ。",
+    },
+    code_scope: {
+      label: "コード影響範囲",
+      goal: "確認済み設計差分に対応するコードとテストの影響範囲を読み取り専用で特定する。",
+      input: "MCP が返す業務要件、設計差分、Code Graph 検証条件。",
+      output: "copilot_record_change_outputs で code_scope の対象 Path、Symbol、関連テスト、根拠を記録する。",
+      stop: "影響範囲を記録したら、OperaMind Web の確認を待つ。",
+    },
+    compile_test: {
+      label: "コード変更・コンパイル・テスト",
+      goal: "確認済み範囲だけを変更し、差分、必須 Command、変更行 Coverage を検証する。",
+      input: "MCP が返す編集可能 Path、読取 Path、テスト Path、必須 Command。",
+      output: "差分検証、必須 Command、commit、copilot_record_task_result を順に完了する。",
+      stop: "結果記録後、reload_current_task なら現在 Task を再取得し、それ以外は停止する。",
+    },
+    test_planning: {
+      label: "UI テスト計画",
+      goal: "確定済み設計とコードから、全業務要件を覆う UI TestPlan と TestDataPlan を作成する。",
+      input: "MCP が返す業務要件、実行範囲、シナリオ、Evidence 制約。",
+      output: "copilot_record_change_outputs で test_planning の完全な UI TestPlan と TestDataPlan を記録する。",
+      stop: "業務 Coverage 100% で計画が受理されたら、OperaMind Web の確認を待つ。",
+    },
+  };
+  if (!stages[currentStage]) throw new Error(`Unsupported OperaMind task stage: ${currentStage}`);
+  return stages[currentStage];
 }
 
 module.exports = {

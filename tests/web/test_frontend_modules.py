@@ -49,12 +49,26 @@ def test_web_opens_selected_workspace_in_vscode_without_bridge_credentials() -> 
     )
 
 
-def test_project_initialization_notice_exposes_canonical_and_rag_counts() -> None:
+def test_project_onboarding_summary_exposes_canonical_and_rag_counts() -> None:
     source = APP_SCRIPT.read_text(encoding="utf-8")
 
-    assert "baseline.document_count" in source
-    assert "baseline.generated_vector_count" in source
+    assert "onboarding.document_count" in source
+    assert "onboarding.generated_vector_count" in source
     assert "RAG Vector" in source
+
+
+def test_project_document_learning_is_visible_and_confirmation_is_gated() -> None:
+    source = APP_SCRIPT.read_text(encoding="utf-8")
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    assert 'id="documentLearningButton"' in html
+    assert 'id="documentLearningDialog"' in html
+    assert "設計書学習" in html
+    assert "profile.variants" in source
+    assert "variant.field_aliases" in source
+    assert "variant.stable_key_fields" in source
+    assert 'learning.status === "draft_ready" && coverage === 100 && ambiguities === 0' in source
+    assert 'requestProjectOnboarding("relearn")' in source
 
 
 def test_stage_rail_renders_only_the_six_product_stages() -> None:
@@ -480,6 +494,45 @@ def test_stage_details_render_business_coverage_for_human_confirmation() -> None
     assert "未カバー" in html
     assert "すべてで全件を表示する" in html
     assert "カバー済み" in html
+
+
+def test_stage_details_render_real_database_coverage_proof() -> None:
+    stages = [
+        {
+            **_stage("ui_validation", "テストデータ・UI 検証", "blocked"),
+            "details": {
+                "data_coverage_status": "failed",
+                "data_coverage_percent": 0,
+                "data_coverage_proofs": [
+                    {
+                        "condition_id": "expense-returned-status",
+                        "criterion_ref": "criterion-returned",
+                        "test_case_ref": "expense-returned-ui",
+                        "test_data_id": "expense-returned-data",
+                        "path": "rows[0].status",
+                        "operator": "equals",
+                        "expected": "RETURNED",
+                        "actual": "APPROVED<script>",
+                        "status": "failed",
+                        "failure_reason": "database value differs",
+                        "evidence_ref": "artifact://result/data-coverage/status",
+                    }
+                ],
+            },
+        }
+    ]
+
+    html = _run("stageDetails", stages, "ui_validation")
+
+    assert "実 DB データ条件の検証結果" in html
+    assert "criterion-returned" in html
+    assert "expense-returned-ui" in html
+    assert "expense-returned-data" in html
+    assert "RETURNED" in html
+    assert "APPROVED&lt;script&gt;" in html
+    assert "artifact://result/data-coverage/status" in html
+    assert "database value differs" in html
+    assert "APPROVED<script>" not in html
 
 
 def _stage(stage_id: str, label: str, status: str) -> dict[str, object]:

@@ -24,6 +24,7 @@ from operamind.infrastructure.postgres.test_data_execution_repository import (
     _flow_steps,
     _strings,
     _timestamp,
+    _validate_coverage_evidence,
     _validate_evidence_bindings,
 )
 
@@ -108,14 +109,65 @@ def test_run_and_recovery_writes_reject_invalid_identity_and_time() -> None:
         )
 
 
+def test_coverage_validation_rejects_self_declared_success_without_real_proofs() -> None:
+    artifact = _result_artifact()
+    artifact["schema_version"] = "v2"
+    artifact["data_coverage"] = {
+        "required_criterion_count": 1,
+        "covered_criterion_count": 1,
+        "coverage_percent": 100,
+        "condition_count": 1,
+        "passed_condition_count": 0,
+        "status": "passed",
+        "proofs": [],
+    }
+
+    with pytest.raises(ValueError, match="no passed proof"):
+        _validate_coverage_evidence(artifact)
+
+
+def test_v2_passed_execution_rejects_not_applicable_data_coverage() -> None:
+    artifact = _result_artifact()
+    artifact["schema_version"] = "v2"
+
+    with pytest.raises(ValueError, match="requires 100% data coverage"):
+        _validate_coverage_evidence(artifact)
+
+
+def test_coverage_validation_recomputes_summary_from_reserved_plan() -> None:
+    artifact = _result_artifact()
+    artifact["data_coverage"] = {
+        "required_criterion_count": 0,
+        "covered_criterion_count": 0,
+        "coverage_percent": 0,
+        "condition_count": 0,
+        "passed_condition_count": 0,
+        "status": "not_applicable",
+        "proofs": [],
+    }
+    plan = {
+        "data_sets": [
+            {
+                "coverage_conditions": [
+                    {
+                        "condition_id": "condition-1",
+                        "criterion_ref": "criterion-1",
+                    }
+                ]
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match="condition count differs from reserved plan"):
+        _validate_coverage_evidence(artifact, plan=plan)
+
+
 def test_reserve_is_idempotent_only_for_the_same_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cursor = Cursor()
     repository = _repository(cursor)
-    record = DataRepository._load(
-        Cursor(one=[_record_row()]), "run-1", for_update=False
-    )
+    record = DataRepository._load(Cursor(one=[_record_row()]), "run-1", for_update=False)
     assert record is not None
     monkeypatch.setattr(repository, "_load", lambda *_args, **_kwargs: record)
     monkeypatch.setattr(repository, "_created_by", lambda *_args: "operator")
@@ -196,22 +248,15 @@ def test_load_plan_requires_ready_matching_artifact() -> None:
         ),
     ):
         repository = _repository(Cursor(one=[row]))
-        repository._artifacts = SimpleNamespace(
-            get=lambda _artifact_id, value=artifact: value
-        )
+        repository._artifacts = SimpleNamespace(get=lambda _artifact_id, value=artifact: value)
         with pytest.raises((ValueError, PersistenceConflictError), match=error):
-            repository.load_plan(
-                orchestration_id="orchestration-1", project_id="project-1"
-            )
+            repository.load_plan(orchestration_id="orchestration-1", project_id="project-1")
 
     expected = {"artifact_type": "TestDataPlan", "project_id": "project-1"}
     repository = _repository(Cursor(one=[("plan-1", "ready")]))
     repository._artifacts = SimpleNamespace(get=lambda _artifact_id: expected)
     assert (
-        repository.load_plan(
-            orchestration_id="orchestration-1", project_id="project-1"
-        )
-        is expected
+        repository.load_plan(orchestration_id="orchestration-1", project_id="project-1") is expected
     )
 
 
@@ -226,9 +271,7 @@ def test_append_event_validates_scope_state_and_persists_sequence(
             "phase is invalid",
         ),
         (
-            EventWrite(
-                "run-1", "project-1", "started", step_id="step-1"
-            ),
+            EventWrite("run-1", "project-1", "started", step_id="step-1"),
             "requires flow and phase",
         ),
     )
@@ -238,22 +281,16 @@ def test_append_event_validates_scope_state_and_persists_sequence(
 
     monkeypatch.setattr(repository, "_load", lambda *_args, **_kwargs: None)
     with pytest.raises(ValueError, match="Run does not exist"):
-        repository.append_event(
-            EventWrite("run-1", "project-1", "started")
-        )
+        repository.append_event(EventWrite("run-1", "project-1", "started"))
 
     completed = _record(status="passed")
     monkeypatch.setattr(repository, "_load", lambda *_args, **_kwargs: completed)
     with pytest.raises(ValueError, match="does not accept"):
-        repository.append_event(
-            EventWrite("run-1", "project-1", "step_started")
-        )
+        repository.append_event(EventWrite("run-1", "project-1", "step_started"))
 
     cursor = Cursor(one=[(3,), (NOW,)])
     repository = _repository(cursor)
-    monkeypatch.setattr(
-        repository, "_load", lambda *_args, **_kwargs: _record(status="running")
-    )
+    monkeypatch.setattr(repository, "_load", lambda *_args, **_kwargs: _record(status="running"))
     write = EventWrite(
         run_id="run-1",
         project_id="project-1",
@@ -278,6 +315,108 @@ def test_append_event_validates_scope_state_and_persists_sequence(
         "message": "done",
         "created_at": NOW.isoformat(),
     }
+
+
+def test_execution_claim_distinguishes_claimed_busy_stale_and_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claimed_record = _record(status="running")
+    persisted_record = _record(status="running")
+    cursor = Cursor()
+    repository = _repository(cursor)
+    records = iter((claimed_record, persisted_record))
+    monkeypatch.setattr(repository, "_load", lambda *_args, **_kwargs: next(records))
+
+    claim = repository.claim_execution(
+        run_id="run-1",
+        executor_id="worker-1",
+        at=NOW,
+        lease_seconds=300,
+    )
+
+    assert claim.outcome == "claimed"
+    assert claim.record is persisted_record
+    assert "attempt_count = attempt_count + 1" in cursor.executions[0][0]
+
+    for outcome, record in (
+        (
+            "busy",
+            _record(
+                status="running",
+                execution_owner="worker-1",
+                lease_expires_at=NOW + timedelta(seconds=1),
+            ),
+        ),
+        (
+            "terminal",
+            _record(status="passed", completed_at=NOW),
+        ),
+    ):
+        repository = _repository(Cursor())
+        monkeypatch.setattr(repository, "_load", lambda *_args, value=record, **_kwargs: value)
+        result = repository.claim_execution(
+            run_id="run-1",
+            executor_id="worker-2",
+            at=NOW,
+            lease_seconds=300,
+        )
+        assert result.outcome == outcome
+
+    stale_cursor = Cursor()
+    repository = _repository(stale_cursor)
+    stale = _record(
+        status="running",
+        execution_owner="dead-worker",
+        lease_expires_at=NOW - timedelta(seconds=1),
+    )
+    monkeypatch.setattr(repository, "_load", lambda *_args, **_kwargs: stale)
+    result = repository.claim_execution(
+        run_id="run-1",
+        executor_id="recovery-worker",
+        at=NOW,
+        lease_seconds=300,
+    )
+    assert result.outcome == "stale"
+    assert "UPDATE test_data_execution_runs" in stale_cursor.executions[0][0]
+
+
+def test_execution_claim_and_heartbeat_validate_identity_and_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = _repository(Cursor())
+    for values, message in (
+        ({"run_id": " ", "executor_id": "worker", "at": NOW, "lease_seconds": 300}, "blank"),
+        (
+            {
+                "run_id": "run-1",
+                "executor_id": "worker",
+                "at": NOW.replace(tzinfo=None),
+                "lease_seconds": 300,
+            },
+            "timezone",
+        ),
+        (
+            {"run_id": "run-1", "executor_id": "worker", "at": NOW, "lease_seconds": 10},
+            "lease_seconds",
+        ),
+    ):
+        with pytest.raises(ValueError, match=message):
+            repository.claim_execution(**values)  # type: ignore[arg-type]
+
+    missing = _repository(Cursor())
+    monkeypatch.setattr(missing, "_load", lambda *_args, **_kwargs: None)
+    with pytest.raises(ValueError, match="does not exist"):
+        missing.claim_execution(run_id="run-1", executor_id="worker", at=NOW, lease_seconds=300)
+
+    heartbeat_cursor = Cursor(rowcount=1)
+    repository = _repository(heartbeat_cursor)
+    assert repository.heartbeat_execution(
+        run_id="run-1", executor_id="worker", at=NOW, lease_seconds=300
+    )
+    heartbeat_cursor.rowcount = 0
+    assert not repository.heartbeat_execution(
+        run_id="run-1", executor_id="worker", at=NOW, lease_seconds=300
+    )
 
 
 def test_events_and_recovery_are_normalized_for_web_output() -> None:
@@ -309,9 +448,7 @@ def test_events_and_recovery_are_normalized_for_web_output() -> None:
 
     repository = _repository(Cursor(one=[None]))
     assert repository.recovery("run-1") is None
-    repository = _repository(
-        Cursor(one=[("recovery-1", "operator", "stale", NOW, NOW)])
-    )
+    repository = _repository(Cursor(one=[("recovery-1", "operator", "stale", NOW, NOW)]))
     assert repository.recovery("run-1") == {
         "recovery_id": "recovery-1",
         "actor": "operator",
@@ -429,24 +566,15 @@ def test_load_created_by_and_normalized_comparison_helpers() -> None:
 
     with pytest.raises(RuntimeError, match="disappeared"):
         DataRepository._created_by(Cursor(one=[None]), "run-1")
-    assert (
-        DataRepository._created_by(
-            Cursor(one=[("operator",)]), "run-1"
-        )
-        == "operator"
-    )
+    assert DataRepository._created_by(Cursor(one=[("operator",)]), "run-1") == "operator"
 
     artifact = _result_artifact()
-    flows, steps, evidence = _normalized_rows(artifact)
+    flows, steps, bindings, evidence = _normalized_rows(artifact)
     assert DataRepository._normalized_matches(
-        Cursor(all_rows=[flows, steps, evidence]), "run-1", artifact
+        Cursor(all_rows=[flows, steps, bindings, evidence]), "run-1", artifact
     )
-    assert not DataRepository._normalized_matches(
-        Cursor(all_rows=[[]]), "run-1", artifact
-    )
-    assert not DataRepository._normalized_matches(
-        Cursor(all_rows=[flows, []]), "run-1", artifact
-    )
+    assert not DataRepository._normalized_matches(Cursor(all_rows=[[]]), "run-1", artifact)
+    assert not DataRepository._normalized_matches(Cursor(all_rows=[flows, []]), "run-1", artifact)
     assert not DataRepository._normalized_matches(
         Cursor(all_rows=[flows, steps, []]), "run-1", artifact
     )
@@ -455,9 +583,9 @@ def test_load_created_by_and_normalized_comparison_helpers() -> None:
     second = dict(first, step_id="a-later-step", sequence=2)
     first["step_id"] = "z-first-step"
     artifact["flow_results"][0]["step_results"].append(second)
-    flows, steps, evidence = _normalized_rows(artifact)
+    flows, steps, bindings, evidence = _normalized_rows(artifact)
     assert DataRepository._normalized_matches(
-        Cursor(all_rows=[flows, steps, evidence]), "run-1", artifact
+        Cursor(all_rows=[flows, steps, bindings, evidence]), "run-1", artifact
     )
 
 
@@ -465,9 +593,7 @@ def test_evidence_binding_and_scalar_helpers_reject_invalid_content() -> None:
     artifact = _result_artifact()
     _validate_evidence_bindings(artifact)
     assert len(_flow_steps(artifact["flow_results"][0])) == 2
-    assert _strings(["run_test", "record_evidence"]) == frozenset(
-        {"run_test", "record_evidence"}
-    )
+    assert _strings(["run_test", "record_evidence"]) == frozenset({"run_test", "record_evidence"})
     assert _timestamp("2026-07-25T08:00:00Z") == NOW
 
     with pytest.raises(PersistenceConflictError, match="allowed_actions"):
@@ -514,6 +640,44 @@ def test_completion_and_recovery_require_the_canonical_result_type() -> None:
                 stale_before=NOW,
             ),
         )
+    with pytest.raises(ValueError, match="completion owner"):
+        repository.complete(_result_artifact(), execution_owner=" ")
+
+
+def test_completion_update_requires_the_live_claim_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = Cursor()
+    repository = _repository(cursor)
+    repository._artifacts = SimpleNamespace(
+        get=lambda _artifact_id: {
+            "artifact_type": "TestDataPlan",
+            "project_id": "project-1",
+            "data_sets": [],
+        },
+        store=lambda **_values: None,
+    )
+    running = _record(
+        status="running",
+        execution_owner="worker-1",
+        heartbeat_at=NOW,
+        lease_expires_at=NOW + timedelta(minutes=5),
+    )
+    completed = _record(status="passed")
+    records = iter((running, completed))
+    monkeypatch.setattr(repository, "_load", lambda *_args, **_kwargs: next(records))
+
+    result = repository.complete(_result_artifact(), execution_owner="worker-1")
+
+    update = next(
+        (query, parameters)
+        for query, parameters in cursor.executions
+        if "UPDATE test_data_execution_runs" in query
+    )
+    assert "execution_owner = %s" in update[0]
+    assert "lease_expires_at > now()" in update[0]
+    assert update[1][-2:] == ("worker-1", "worker-1")
+    assert result.status == "passed"
 
 
 def _repository(cursor: Cursor) -> DataRepository:
@@ -541,25 +705,30 @@ def _run_write(**changes: Any) -> RunWrite:
     return RunWrite(**values)
 
 
-def _record(*, status: str, completed_at: datetime | None = None) -> object:
-    return SimpleNamespace(
-        run_id="run-1",
-        execution_result_id="result-1",
-        orchestration_id="orchestration-1",
-        test_data_plan_id="plan-1",
-        approval_grant_id="grant-1",
-        project_id="project-1",
-        analysis_case_id="case-1",
-        status=status,
-        started_at=NOW,
-        completed_at=completed_at,
-        replay_of_run_id=None,
-    )
+def _record(*, status: str, completed_at: datetime | None = None, **changes: object) -> object:
+    values: dict[str, object] = {
+        "run_id": "run-1",
+        "execution_result_id": "result-1",
+        "orchestration_id": "orchestration-1",
+        "test_data_plan_id": "plan-1",
+        "approval_grant_id": "grant-1",
+        "project_id": "project-1",
+        "analysis_case_id": "case-1",
+        "status": status,
+        "started_at": NOW,
+        "completed_at": completed_at,
+        "replay_of_run_id": None,
+        "execution_owner": None,
+        "heartbeat_at": None,
+        "lease_expires_at": None,
+        "attempt_count": 0,
+        "max_attempts": 3,
+    }
+    values.update(changes)
+    return SimpleNamespace(**values)
 
 
-def _record_row(
-    *, replay_of_run_id: str | None = None
-) -> tuple[object, ...]:
+def _record_row(*, replay_of_run_id: str | None = None) -> tuple[object, ...]:
     return (
         "result-1",
         "orchestration-1",
@@ -571,6 +740,11 @@ def _record_row(
         NOW,
         None,
         replay_of_run_id,
+        None,
+        None,
+        None,
+        0,
+        3,
     )
 
 
@@ -611,6 +785,16 @@ def _result_artifact() -> dict[str, Any]:
                 "cleanup_results": [cleanup],
             }
         ],
+        "data_bindings": [],
+        "data_coverage": {
+            "required_criterion_count": 0,
+            "covered_criterion_count": 0,
+            "coverage_percent": 0,
+            "condition_count": 0,
+            "passed_condition_count": 0,
+            "status": "not_applicable",
+            "proofs": [],
+        },
         "evidence": [
             {
                 "evidence_id": "evidence-1",
@@ -628,7 +812,12 @@ def _result_artifact() -> dict[str, Any]:
 
 def _normalized_rows(
     artifact: dict[str, Any],
-) -> tuple[list[tuple[object, ...]], list[tuple[object, ...]], list[tuple[object, ...]]]:
+) -> tuple[
+    list[tuple[object, ...]],
+    list[tuple[object, ...]],
+    list[tuple[object, ...]],
+    list[tuple[object, ...]],
+]:
     flow = artifact["flow_results"][0]
     flows = [
         (
@@ -667,4 +856,4 @@ def _normalized_rows(
             True,
         )
     ]
-    return flows, steps, evidence
+    return flows, steps, [], evidence

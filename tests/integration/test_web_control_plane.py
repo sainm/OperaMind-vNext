@@ -1,7 +1,6 @@
 import os
 import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 from uuid import uuid4
 
 import psycopg
@@ -33,7 +32,6 @@ pytestmark = pytest.mark.integration
 @pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
 def test_project_initialization_accepts_local_code_and_document_directories(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert DATABASE_URL is not None
     suffix = uuid4().hex
@@ -47,19 +45,6 @@ def test_project_initialization_accepts_local_code_and_document_directories(
     (workspace / "README.md").write_text("local project\n", encoding="utf-8")
     (documents / "screen-design.md").write_text("screen design\n", encoding="utf-8")
     (shared_documents / "api-design.md").write_text("api design\n", encoding="utf-8")
-    monkeypatch.setattr(
-        "operamind.application.web_control_plane.ProjectDocumentBaselineService",
-        lambda **_values: SimpleNamespace(
-            ensure=lambda **_arguments: SimpleNamespace(
-                snapshot_id="snapshot-local",
-                document_count=1,
-                index_build_id="index-local",
-                generated_vector_count=1,
-                embedding_profile_binding_key="embedding:document_search",
-            )
-        ),
-    )
-
     with psycopg.connect(DATABASE_URL) as connection:
         MigrationRunner(connection, MigrationCatalog.load(ROOT / "migrations")).apply()
         service = WebControlPlaneService(connection=connection, repository_root=ROOT)
@@ -93,6 +78,9 @@ def test_project_initialization_accepts_local_code_and_document_directories(
         ]
         assert project["source_control_kind"] == "local_files"
         assert project["test_base_url"] is None
+        assert project["settings_revision"] == 1
+        assert created["onboarding"]["status"] == "queued"
+        assert replay["onboarding"] == created["onboarding"]
         source_baselines = project["source_git_baselines"]
         assert len(source_baselines) == 3
         assert {item["source_kind"] for item in source_baselines} == {
@@ -114,7 +102,6 @@ def test_project_initialization_accepts_local_code_and_document_directories(
 @pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
 def test_local_files_project_creates_internal_digest_baseline(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert DATABASE_URL is not None
     suffix = uuid4().hex
@@ -125,19 +112,6 @@ def test_local_files_project_creates_internal_digest_baseline(
     documents.mkdir()
     (workspace / "README.md").write_text("local project\n", encoding="utf-8")
     (documents / "design.md").write_text("design\n", encoding="utf-8")
-    monkeypatch.setattr(
-        "operamind.application.web_control_plane.ProjectDocumentBaselineService",
-        lambda **_values: SimpleNamespace(
-            ensure=lambda **_arguments: SimpleNamespace(
-                snapshot_id="snapshot-local",
-                document_count=1,
-                index_build_id="index-local",
-                generated_vector_count=1,
-                embedding_profile_binding_key="embedding:document_search",
-            )
-        ),
-    )
-
     with psycopg.connect(DATABASE_URL) as connection:
         MigrationRunner(connection, MigrationCatalog.load(ROOT / "migrations")).apply()
         service = WebControlPlaneService(connection=connection, repository_root=ROOT)
@@ -308,6 +282,52 @@ def test_change_request_diff_waits_for_shared_human_confirmation() -> None:
         resumed_automation = automation["run"]
         automation_repository = ChangeAutomationRepository(connection)
         run_id = str(resumed_automation["automation_run_id"])
+        assert automation_repository.list_coordinator_candidates() == ()
+        automation_repository.transition(
+            run_id=run_id,
+            actor="integration-coordinator",
+            stage="test_data_execution",
+            status="waiting",
+            next_action="start_test_data_execution",
+            blocking_reason=None,
+            message="test data execution is ready",
+        )
+        candidates = automation_repository.list_coordinator_candidates()
+        assert [candidate.change_request_id for candidate in candidates] == [request_id]
+        assert candidates[0].selection_reason == "automatic_action"
+        automation_repository.transition(
+            run_id=run_id,
+            actor="integration-coordinator",
+            stage="planning",
+            status="running",
+            next_action="generate_orchestration",
+            blocking_reason=None,
+            message="planning is running",
+        )
+        candidates = automation_repository.list_coordinator_candidates()
+        assert candidates[0].selection_reason == "running_recovery"
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE orchestration_task_claims
+                SET claimed_at = now() - interval '2 seconds',
+                    lease_expires_at = now() - interval '1 second'
+                WHERE orchestration_task_id = %s AND status = 'active'
+                """,
+                (str(claimed_review_task["orchestration_task_id"]),),
+            )
+        candidates = automation_repository.list_coordinator_candidates()
+        assert candidates[0].selection_reason == "expired_retry"
+        automation_repository.transition(
+            run_id=run_id,
+            actor="integration-coordinator",
+            stage="requirement_confirmation",
+            status="waiting",
+            next_action="confirm_requirement",
+            blocking_reason=None,
+            message="requirement confirmation is waiting",
+        )
+        assert automation_repository.list_coordinator_candidates() == ()
         recorded = automation_repository.record_confirmation(
             confirmation_id=f"confirmation-{suffix}",
             run_id=run_id,
@@ -343,18 +363,27 @@ def test_change_request_diff_waits_for_shared_human_confirmation() -> None:
         assert stored["document_review"]["status"] == "pending"
         assert recorded["created"] is True
         assert replayed["created"] is False
-        assert automation_repository.current_confirmations(
-            run_id=run_id,
-            subject_digests={"requirement": "a" * 64},
-        )["requirement"]["surface"] == "web"
-        assert automation_repository.current_confirmations(
-            run_id=run_id,
-            subject_digests={"requirement": "b" * 64},
-        ) == {}
-        assert automation_repository.latest_confirmation(
-            run_id=run_id,
-            checkpoint="requirement",
-        )["subject_digest"] == "a" * 64
+        assert (
+            automation_repository.current_confirmations(
+                run_id=run_id,
+                subject_digests={"requirement": "a" * 64},
+            )["requirement"]["surface"]
+            == "web"
+        )
+        assert (
+            automation_repository.current_confirmations(
+                run_id=run_id,
+                subject_digests={"requirement": "b" * 64},
+            )
+            == {}
+        )
+        assert (
+            automation_repository.latest_confirmation(
+                run_id=run_id,
+                checkpoint="requirement",
+            )["subject_digest"]
+            == "a" * 64
+        )
         discovery = {
             "status": "ready",
             "mode": "requirement_hybrid_rag",
@@ -390,6 +419,7 @@ def test_change_request_diff_waits_for_shared_human_confirmation() -> None:
         assert first["copilot_task"] is None
         assert first["task_blocker"]
         connection.rollback()
+
 
 def _seed_scope(
     connection: psycopg.Connection[object],

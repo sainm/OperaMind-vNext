@@ -15,6 +15,7 @@
     "ImpactConfirmation": "schemas/impact-confirmation.schema.json",
     "CopilotEditPacket": "schemas/copilot-edit-packet.schema.json",
     "CopilotCodingTask": "schemas/copilot-coding-task.schema.json",
+    "DocumentProfileLearningDraft": "schemas/document-profile-learning-draft.schema.json",
     "ApprovalGrant": "schemas/approval-grant.schema.json",
     "UiVerificationResult": "schemas/ui-verification-result.schema.json",
     "TestPlan": "schemas/test-plan.schema.json",

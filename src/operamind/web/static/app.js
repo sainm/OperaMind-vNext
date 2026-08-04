@@ -8,8 +8,11 @@ const state = {
   requestId: null,
   flow: null,
   pollTimer: null,
+  projectPollTimer: null,
+  projectDialogMode: "create",
   revisionProposal: null,
   impactNodePath: null,
+  documentLearning: null,
   commandKeys: new Map()
 };
 
@@ -33,19 +36,39 @@ const elements = {
   projectSourceKind: document.getElementById("projectSourceKind"),
   projectWorkspaceSummary: document.getElementById("projectWorkspaceSummary"),
   projectTestBaseUrlSummary: document.getElementById("projectTestBaseUrlSummary"),
+  projectTargetDataSummary: document.getElementById("projectTargetDataSummary"),
   projectQualitySummary: document.getElementById("projectQualitySummary"),
+  projectOnboardingSummary: document.getElementById("projectOnboardingSummary"),
   projectDocumentRootSummary: document.getElementById("projectDocumentRootSummary"),
+  editProjectButton: document.getElementById("editProjectButton"),
+  projectPreflightButton: document.getElementById("projectPreflightButton"),
+  documentLearningButton: document.getElementById("documentLearningButton"),
+  projectRescanButton: document.getElementById("projectRescanButton"),
+  projectReindexButton: document.getElementById("projectReindexButton"),
+  projectRetryButton: document.getElementById("projectRetryButton"),
+  documentLearningDialog: document.getElementById("documentLearningDialog"),
+  documentLearningStatus: document.getElementById("documentLearningStatus"),
+  documentLearningContent: document.getElementById("documentLearningContent"),
+  relearnDocumentsButton: document.getElementById("relearnDocumentsButton"),
+  openLearningVsCodeButton: document.getElementById("openLearningVsCodeButton"),
+  confirmDocumentLearningButton: document.getElementById("confirmDocumentLearningButton"),
   emptyStateTitle: document.getElementById("emptyStateTitle"),
   emptyStateDescription: document.getElementById("emptyStateDescription"),
   emptyNewProjectButton: document.getElementById("emptyNewProjectButton"),
   emptyNewRequestButton: document.getElementById("emptyNewRequestButton"),
   projectDialog: document.getElementById("projectDialog"),
+  projectDialogEyebrow: document.getElementById("projectDialogEyebrow"),
+  projectDialogTitle: document.getElementById("projectDialogTitle"),
   projectForm: document.getElementById("projectForm"),
   projectId: document.getElementById("projectId"),
   projectName: document.getElementById("projectName"),
   projectWorkspaceRoot: document.getElementById("projectWorkspaceRoot"),
   projectDocumentRoots: document.getElementById("projectDocumentRoots"),
   projectTestBaseUrl: document.getElementById("projectTestBaseUrl"),
+  projectTargetDataAlias: document.getElementById("projectTargetDataAlias"),
+  projectTargetDataDsn: document.getElementById("projectTargetDataDsn"),
+  projectTargetDataBindings: document.getElementById("projectTargetDataBindings"),
+  projectTargetDataStatus: document.getElementById("projectTargetDataStatus"),
   projectFormStatus: document.getElementById("projectFormStatus"),
   submitProjectButton: document.getElementById("submitProjectButton"),
   requestDialog: document.getElementById("requestDialog"),
@@ -115,6 +138,9 @@ async function loadProjects(preferredId = null) {
   elements.projectSelect.value = selectedId || "";
   state.projectId = selectedId || null;
   renderProjectSummary(projects.find(project => project.project_id === state.projectId));
+  scheduleProjectPolling(projects.some(project =>
+    ["queued", "running", "waiting_for_profile"].includes(project.onboarding?.status)
+  ));
   if (!state.projectId) {
     elements.requestList.innerHTML = '<p class="empty">登録済みプロジェクトがありません。</p>';
     showEmptyState();
@@ -138,6 +164,10 @@ function renderProjectSummary(project) {
   elements.projectTestBaseUrlSummary.textContent = project.test_base_url
     ? `UI テスト: ${project.test_base_url}`
     : "UI テスト URL 未設定";
+  const targetData = project.target_data_profile;
+  elements.projectTargetDataSummary.textContent = targetData
+    ? `DB データ準備: ${targetData.connection_alias} · Binding ${Number(targetData.query_binding_ids?.length || 0).toLocaleString("ja-JP")} 件${targetData.secret_configured ? "" : " · Secret 未設定"}`
+    : "DB データ準備: 未設定（HTTP/UI のみ）";
   const targetProject = project.target_project || {};
   const qualityMissing = targetProject.quality_missing_signals || [];
   elements.projectQualitySummary.textContent = targetProject.quality_readiness === "ready"
@@ -145,6 +175,20 @@ function renderProjectSummary(project) {
     : qualityMissing.length
       ? `コード品質基線: blocked · ${qualityMissing.join("、")}`
       : "コード品質基線: 未判定";
+  const onboarding = project.onboarding || {};
+  const stageLabels = {discover: "構造抽出", learn: "設計書学習", documents: "Canonical 文書", index: "RAG 索引", complete: "完了"};
+  const statusLabels = {queued: "待機中", running: "実行中", waiting_for_profile: "学習確認待ち", ready: "準備完了", failed: "失敗", superseded: "設定更新済み"};
+  const onboardingCounts = onboarding.status === "ready"
+    ? ` · 設計書 ${Number(onboarding.document_count || 0).toLocaleString("ja-JP")} 件 · RAG Vector ${Number(onboarding.generated_vector_count || 0).toLocaleString("ja-JP")} 件`
+    : "";
+  elements.projectOnboardingSummary.className = `project-onboarding-summary ${onboarding.status || "queued"}`;
+  elements.projectOnboardingSummary.textContent = onboarding.status
+    ? `Onboarding: ${statusLabels[onboarding.status] || onboarding.status} · ${stageLabels[onboarding.current_stage] || onboarding.current_stage}${onboardingCounts}${onboarding.failure_reason ? ` · ${onboarding.failure_reason}` : ""}`
+    : "Onboarding はまだ開始されていません。";
+  elements.projectRetryButton.classList.toggle("hidden", onboarding.status !== "failed");
+  elements.projectReindexButton.disabled = onboarding.status !== "ready";
+  elements.projectRescanButton.disabled = ["queued", "running", "waiting_for_profile"].includes(onboarding.status);
+  elements.documentLearningButton.disabled = !project.document_roots?.length;
   elements.projectDocumentRootSummary.innerHTML = (project.document_roots || []).map(root => {
     const binding = baselines.find(item => item.source_kind === "document" && item.configured_root === root);
     const baselineLabel = binding?.baseline_revision
@@ -152,6 +196,76 @@ function renderProjectSummary(project) {
       : "旧登録 · Git 基線情報なし";
     return `<li>${view.escapeHtml(root)}<small>${view.escapeHtml(baselineLabel)}</small></li>`;
   }).join("");
+}
+
+async function openDocumentLearningDialog() {
+  if (!state.projectId) return;
+  const result = await api(`/api/v1/projects/${encodeURIComponent(state.projectId)}/document-learning`);
+  state.documentLearning = result.learning || null;
+  renderDocumentLearning(state.documentLearning);
+  elements.documentLearningDialog.showModal();
+}
+
+function renderDocumentLearning(learning) {
+  if (!learning) {
+    elements.documentLearningStatus.textContent = "まだ学習タスクがありません。構造を再学習してください。";
+    elements.documentLearningStatus.className = "learning-status waiting";
+    elements.documentLearningContent.innerHTML = "";
+    elements.confirmDocumentLearningButton.disabled = true;
+    return;
+  }
+  const statusLabels = {
+    pending: "VS Code 待ち", claimed: "Copilot 接続済み", in_progress: "学習中",
+    draft_ready: "確認可能", confirmed: "適用済み", failed: "失敗",
+    cancelled: "取消", superseded: "旧バージョン"
+  };
+  const coverage = Number(learning.coverage_percent || 0);
+  const ambiguities = Number(learning.ambiguity_count || 0);
+  elements.documentLearningStatus.className = `learning-status ${learning.status}`;
+  elements.documentLearningStatus.innerHTML = `
+    <strong>${view.escapeHtml(statusLabels[learning.status] || learning.status)}</strong>
+    <span>Sample ${Number(learning.sample_count || 0).toLocaleString("ja-JP")} 件 · Coverage ${coverage.toFixed(2)}% · 曖昧 ${ambiguities} 件</span>
+    <div class="learning-meter" aria-label="サンプル網羅率 ${coverage.toFixed(2)}%"><span style="width:${Math.min(100, coverage)}%"></span></div>`;
+  const draft = learning.draft || {};
+  const profiles = draft.profiles || [];
+  const assignments = draft.document_assignments || [];
+  const ambiguityItems = draft.ambiguities || [];
+  elements.documentLearningContent.innerHTML = profiles.length ? `
+    <div class="learning-profile-list">${profiles.map(profile => `
+      <article class="learning-profile-card">
+        <header><strong>${view.escapeHtml(profile.document_type || profile.profile_id)}</strong><span>v${view.escapeHtml(profile.profile_version || "—")}</span></header>
+        <small>${view.escapeHtml(profile.profile_id || "")}</small>
+        ${(profile.variants || []).map(variant => `
+          <section><h3>${view.escapeHtml(variant.variant_id || "Variant")}</h3>
+            <dl><dt>Field Mapping</dt><dd>${Object.entries(variant.field_aliases || {}).map(([field, aliases]) => `<code>${view.escapeHtml(field)} ← ${view.escapeHtml((aliases || []).join(" / "))}</code>`).join("") || "—"}</dd>
+            <dt>Stable Key</dt><dd>${(variant.stable_key_fields || []).map(field => `<code>${view.escapeHtml(field)}</code>`).join("") || "—"}</dd></dl>
+          </section>`).join("")}
+      </article>`).join("")}</div>
+    <div class="learning-evidence"><strong>Sample 割当 ${assignments.length} 件</strong><span>すべての実ファイルは Profile/Variant で再検証されます。</span></div>
+    ${ambiguityItems.length ? `<ul class="learning-ambiguities">${ambiguityItems.map(item => `<li>${view.escapeHtml(item.description || "曖昧な構造")}</li>`).join("")}</ul>` : ""}
+  ` : `<p class="empty">Copilot が Project 専用 Profile 草案を返すと、Field Mapping と Stable Key がここに表示されます。</p>`;
+  elements.confirmDocumentLearningButton.disabled = !(
+    learning.status === "draft_ready" && coverage === 100 && ambiguities === 0
+  );
+}
+
+async function confirmDocumentLearning() {
+  const learning = state.documentLearning;
+  if (!state.projectId || !learning?.learning_run_id) return;
+  const scope = `project-document-learning:${state.projectId}:${learning.learning_run_id}:confirm`;
+  try {
+    await api(`/api/v1/projects/${encodeURIComponent(state.projectId)}/document-learning/confirm`, {
+      method: "POST",
+      idempotencyScope: scope,
+      body: JSON.stringify({learning_run_id: learning.learning_run_id})
+    });
+    clearCommandKey(scope);
+    showNotice("設計書 Profile を適用しました。Canonical 化と RAG 索引を続行します。", "success");
+    elements.documentLearningDialog.close();
+    await loadProjects(state.projectId);
+  } catch (error) {
+    showNotice(error.message, "error");
+  }
 }
 
 function openSelectedProjectInVsCode() {
@@ -346,15 +460,65 @@ function bindImpactGraph(flow) {
   selectNode(selectedIndex);
 }
 
-function openProjectDialog() {
+function openNewProjectDialog() {
+  state.projectDialogMode = "create";
   elements.projectId.value = "";
   elements.projectName.value = "";
   elements.projectWorkspaceRoot.value = "";
   elements.projectDocumentRoots.value = "";
+  elements.projectTestBaseUrl.value = "";
+  elements.projectTargetDataAlias.value = "";
+  elements.projectTargetDataDsn.value = "";
+  elements.projectTargetDataBindings.value = "";
+  elements.projectTargetDataStatus.textContent = "必要な場合だけ Alias、接続 Secret、確認済み Binding を設定してください。";
+  elements.projectId.disabled = false;
+  elements.projectWorkspaceRoot.disabled = false;
+  elements.projectDialogEyebrow.textContent = "NEW PROJECT";
+  elements.projectDialogTitle.textContent = "新しいプロジェクト";
   setProjectFormStatus();
   setProjectSubmitting(false);
   elements.projectDialog.showModal();
   elements.projectId.focus();
+}
+
+async function openEditProjectDialog() {
+  const project = state.projects.find(item => item.project_id === state.projectId);
+  if (!project) return;
+  state.projectDialogMode = "edit";
+  elements.projectId.value = project.project_id;
+  elements.projectName.value = project.name || project.project_id;
+  elements.projectWorkspaceRoot.value = project.workspace_root || "";
+  elements.projectDocumentRoots.value = (project.document_roots || []).join("\n");
+  elements.projectTestBaseUrl.value = project.test_base_url || "";
+  elements.projectTargetDataAlias.value = project.target_data_profile?.connection_alias || "";
+  elements.projectTargetDataDsn.value = "";
+  elements.projectTargetDataBindings.value = "";
+  elements.projectTargetDataStatus.textContent = project.target_data_profile
+    ? "確認済み Binding を読み込んでいます。接続 Secret は画面へ戻しません。"
+    : "必要な場合だけ Alias、接続 Secret、確認済み Binding を設定してください。";
+  elements.projectId.disabled = true;
+  elements.projectWorkspaceRoot.disabled = true;
+  elements.projectDialogEyebrow.textContent = "PROJECT SETTINGS";
+  elements.projectDialogTitle.textContent = "プロジェクト設定";
+  setProjectFormStatus("Workspace は Evidence の識別子として固定されます。設計書、名称、UI URL を変更できます。");
+  setProjectSubmitting(false);
+  elements.projectDialog.showModal();
+  elements.projectName.focus();
+  if (project.target_data_profile) {
+    try {
+      const result = await api(`/api/v1/projects/${encodeURIComponent(project.project_id)}/target-data-profile`);
+      const profile = result.profile;
+      if (profile) {
+        elements.projectTargetDataAlias.value = profile.connection_alias || "";
+        elements.projectTargetDataBindings.value = JSON.stringify(profile.bindings || [], null, 2);
+        elements.projectTargetDataStatus.textContent = profile.secret_configured
+          ? "接続 Secret は設定済みです。空欄のまま保存すると現在の Secret を保持します。"
+          : "接続 Secret が未設定です。保存時に入力してください。";
+      }
+    } catch (error) {
+      elements.projectTargetDataStatus.textContent = error.message;
+    }
+  }
 }
 
 function setProjectFormStatus(message = "", kind = "info") {
@@ -368,8 +532,8 @@ function setProjectSubmitting(submitting) {
   elements.projectForm.setAttribute("aria-busy", String(submitting));
   elements.submitProjectButton.disabled = submitting;
   elements.submitProjectButton.innerHTML = submitting
-    ? '<span class="button-spinner" aria-hidden="true"></span><span>RAG 基線を準備しています</span>'
-    : '<span>初期化</span>';
+    ? '<span class="button-spinner" aria-hidden="true"></span><span>保存しています</span>'
+    : `<span>${state.projectDialogMode === "edit" ? "保存して再スキャン" : "初期化"}</span>`;
 }
 
 async function createProject(event) {
@@ -382,15 +546,39 @@ async function createProject(event) {
     .map(value => value.trim())
     .filter(Boolean);
   const testBaseUrl = elements.projectTestBaseUrl.value.trim();
+  const targetDataAlias = elements.projectTargetDataAlias.value.trim();
+  const targetDataDsn = elements.projectTargetDataDsn.value.trim();
+  const targetDataBindingsText = elements.projectTargetDataBindings.value.trim();
+  let targetDataBindings = null;
+  if (targetDataAlias || targetDataDsn || targetDataBindingsText) {
+    if (!targetDataAlias || !targetDataBindingsText) {
+      return setProjectFormStatus("DB データ準備には接続 Alias と確認済み Binding が必要です。", "error");
+    }
+    try {
+      targetDataBindings = JSON.parse(targetDataBindingsText);
+    } catch (_error) {
+      return setProjectFormStatus("確認済み SQL Binding は JSON 配列で入力してください。", "error");
+    }
+    if (!Array.isArray(targetDataBindings) || targetDataBindings.length === 0) {
+      return setProjectFormStatus("確認済み SQL Binding を一件以上入力してください。", "error");
+    }
+  }
   if (!projectId || !name || !workspaceRoot || documentRoots.length === 0) return;
   setProjectSubmitting(true);
-  setProjectFormStatus("設計書を解析し、検索用の RAG 基線を準備しています。この画面を閉じずにお待ちください。");
+  setProjectFormStatus("設定を保存し、バックグラウンド Onboarding を開始します。");
   try {
     const idempotencyScope = `project:${projectId}`;
-    const result = await api("/api/v1/projects", {
-      method: "POST",
+    const editing = state.projectDialogMode === "edit";
+    const current = state.projects.find(item => item.project_id === projectId);
+    const result = await api(editing ? `/api/v1/projects/${encodeURIComponent(projectId)}` : "/api/v1/projects", {
+      method: editing ? "PATCH" : "POST",
       idempotencyScope,
-      body: JSON.stringify({
+      body: JSON.stringify(editing ? {
+        name,
+        document_roots: documentRoots,
+        test_base_url: testBaseUrl || null,
+        expected_revision: current?.settings_revision
+      } : {
         project_id: projectId,
         name,
         workspace_root: workspaceRoot,
@@ -398,16 +586,26 @@ async function createProject(event) {
         test_base_url: testBaseUrl || null
       })
     });
+    if (targetDataBindings) {
+      await api(`/api/v1/projects/${encodeURIComponent(projectId)}/target-data-profile`, {
+        method: "PUT",
+        idempotencyScope: `project-target-data:${projectId}`,
+        body: JSON.stringify({
+          connection_alias: targetDataAlias,
+          ...(targetDataDsn ? {connection_dsn: targetDataDsn} : {}),
+          transaction_policy: "per_binding_transaction",
+          bindings: targetDataBindings
+        })
+      });
+      clearCommandKey(`project-target-data:${projectId}`);
+    }
     elements.projectDialog.close();
     await loadProjects(result.project.project_id);
     clearCommandKey(idempotencyScope);
-    const baseline = result.document_baseline || {};
     const targetProject = result.target_project || {};
-    const documentCount = Number(baseline.document_count);
-    const vectorCount = Number(baseline.generated_vector_count);
-    const initialized = Number.isInteger(documentCount) && Number.isInteger(vectorCount)
-      ? `プロジェクトを初期化しました。設計書 ${documentCount.toLocaleString("ja-JP")} 件、RAG Vector ${vectorCount.toLocaleString("ja-JP")} 件を準備しました。`
-      : "プロジェクトを初期化しました。";
+    const initialized = editing
+      ? "設定を保存しました。設計書の再スキャンをバックグラウンドで開始します。"
+      : "プロジェクトを登録しました。設計書と RAG の準備をバックグラウンドで開始します。";
     const qualityMissing = targetProject.quality_missing_signals || [];
     showNotice(
       qualityMissing.length
@@ -425,6 +623,9 @@ async function createProject(event) {
 function openRequestDialog() {
   if (!state.projectId) return showNotice("先にプロジェクトを登録してください。", "error");
   const project = state.projects.find(item => item.project_id === state.projectId);
+  if (project?.onboarding?.status !== "ready") {
+    return showNotice("Project Onboarding と RAG が準備完了になるまで変更要件を開始できません。", "error");
+  }
   elements.requestId.value = `change-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}`;
   elements.requirementText.value = "";
   elements.requestProjectName.textContent = project?.name || project?.project_id || state.projectId;
@@ -604,6 +805,63 @@ function schedulePolling(enabled) {
   state.pollTimer = enabled ? window.setTimeout(() => loadFlow().catch(error => showNotice(error.message, "error")), 3000) : null;
 }
 
+function scheduleProjectPolling(enabled) {
+  if (state.projectPollTimer) window.clearTimeout(state.projectPollTimer);
+  state.projectPollTimer = enabled
+    ? window.setTimeout(() => loadProjects(state.projectId).catch(error => showNotice(error.message, "error")), 2000)
+    : null;
+}
+
+async function requestProjectOnboarding(action) {
+  if (!state.projectId) return;
+  const scope = `project-onboarding:${state.projectId}:${action}`;
+  try {
+    await api(`/api/v1/projects/${encodeURIComponent(state.projectId)}/onboarding`, {
+      method: "POST",
+      idempotencyScope: scope,
+      body: JSON.stringify({action})
+    });
+    clearCommandKey(scope);
+    const message = action === "reindex"
+      ? "RAG 再索引を開始しました。"
+      : action === "relearn"
+        ? "Project 固有の設計書再学習を開始しました。"
+        : "設計書の再スキャンを開始しました。";
+    showNotice(message, "success");
+    await loadProjects(state.projectId);
+  } catch (error) {
+    showNotice(error.message, "error");
+  }
+}
+
+async function retryProjectOnboarding() {
+  if (!state.projectId) return;
+  const scope = `project-onboarding:${state.projectId}:retry`;
+  try {
+    await api(`/api/v1/projects/${encodeURIComponent(state.projectId)}/onboarding/retry`, {
+      method: "POST",
+      idempotencyScope: scope,
+      body: "{}"
+    });
+    clearCommandKey(scope);
+    await loadProjects(state.projectId);
+  } catch (error) {
+    showNotice(error.message, "error");
+  }
+}
+
+async function showProjectPreflight() {
+  if (!state.projectId) return;
+  try {
+    const result = await api(`/api/v1/projects/${encodeURIComponent(state.projectId)}/preflight`);
+    const details = (result.capabilities || []).map(item => `${item.capability}: ${item.status}`).join("、");
+    elements.projectOnboardingSummary.title = (result.document_discovery?.review_required || []).join("\n");
+    showNotice(`事前確認 ${result.status}: ${details}`, result.status === "ready" ? "success" : "error");
+  } catch (error) {
+    showNotice(error.message, "error");
+  }
+}
+
 elements.projectSelect.addEventListener("change", async () => {
   state.projectId = elements.projectSelect.value;
   state.requestId = null;
@@ -616,14 +874,27 @@ elements.requestForm.addEventListener("submit", createRequest);
 elements.requirementText.addEventListener("input", updateRequirementCount);
 elements.testCaseRevisionForm.addEventListener("submit", proposeTestCaseRevision);
 document.getElementById("newRequestButton").addEventListener("click", openRequestDialog);
-document.getElementById("newProjectButton").addEventListener("click", openProjectDialog);
-elements.emptyNewProjectButton.addEventListener("click", openProjectDialog);
+document.getElementById("newProjectButton").addEventListener("click", openNewProjectDialog);
+elements.emptyNewProjectButton.addEventListener("click", openNewProjectDialog);
+elements.editProjectButton.addEventListener("click", openEditProjectDialog);
+elements.projectPreflightButton.addEventListener("click", showProjectPreflight);
+elements.documentLearningButton.addEventListener("click", () => openDocumentLearningDialog().catch(error => showNotice(error.message, "error")));
+elements.projectRescanButton.addEventListener("click", () => requestProjectOnboarding("rescan"));
+elements.projectReindexButton.addEventListener("click", () => requestProjectOnboarding("reindex"));
+elements.projectRetryButton.addEventListener("click", retryProjectOnboarding);
+elements.relearnDocumentsButton.addEventListener("click", async () => {
+  elements.documentLearningDialog.close();
+  await requestProjectOnboarding("relearn");
+});
+elements.openLearningVsCodeButton.addEventListener("click", openSelectedProjectInVsCode);
+elements.confirmDocumentLearningButton.addEventListener("click", confirmDocumentLearning);
 elements.emptyNewRequestButton.addEventListener("click", openRequestDialog);
 document.getElementById("refreshButton").addEventListener("click", () => loadRequests(state.requestId));
 document.getElementById("closeDialogButton").addEventListener("click", () => elements.requestDialog.close());
 document.getElementById("cancelDialogButton").addEventListener("click", () => elements.requestDialog.close());
 document.getElementById("closeProjectDialogButton").addEventListener("click", () => elements.projectDialog.close());
 document.getElementById("cancelProjectDialogButton").addEventListener("click", () => elements.projectDialog.close());
+document.getElementById("closeDocumentLearningButton").addEventListener("click", () => elements.documentLearningDialog.close());
 document.getElementById("closeTestCaseRevisionButton").addEventListener("click", () => elements.testCaseRevisionDialog.close());
 document.getElementById("cancelTestCaseRevisionButton").addEventListener("click", () => elements.testCaseRevisionDialog.close());
 elements.confirmTestCaseRevisionButton.addEventListener("click", confirmTestCaseRevision);

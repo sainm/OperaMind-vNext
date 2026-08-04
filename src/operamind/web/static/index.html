@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>OperaMind 変更フロー</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23176b50'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='sans-serif' font-size='18' font-weight='700' fill='white'%3EO%3C/text%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/app.css?v=20260802-web-handoff-v1">
+  <link rel="stylesheet" href="/app.css?v=20260804-target-data-v1">
 </head>
 <body>
   <a class="skip-link" href="#main">メインコンテンツへ移動</a>
@@ -42,8 +42,18 @@
         </div>
         <strong id="projectWorkspaceSummary"></strong>
         <span id="projectTestBaseUrlSummary" class="muted"></span>
+        <span id="projectTargetDataSummary" class="muted"></span>
         <span id="projectQualitySummary" class="muted"></span>
+        <div id="projectOnboardingSummary" class="project-onboarding-summary"></div>
         <ul id="projectDocumentRootSummary"></ul>
+        <div class="project-summary-actions">
+          <button id="editProjectButton" class="secondary" type="button">設定</button>
+          <button id="projectPreflightButton" class="secondary" type="button">事前確認</button>
+          <button id="documentLearningButton" class="secondary learning-button" type="button">設計書学習</button>
+          <button id="projectRescanButton" class="secondary" type="button">再スキャン</button>
+          <button id="projectReindexButton" class="secondary" type="button">再索引</button>
+          <button id="projectRetryButton" class="secondary hidden" type="button">再試行</button>
+        </div>
       </section>
       <div id="requestList" class="request-list" aria-live="polite">
         <p class="empty">プロジェクトを読み込んでいます。</p>
@@ -99,7 +109,7 @@
   <dialog id="projectDialog" class="request-dialog" aria-labelledby="projectDialogTitle">
     <form id="projectForm" method="dialog">
       <div class="dialog-heading">
-        <div><span class="eyebrow">NEW PROJECT</span><h2 id="projectDialogTitle">新しいプロジェクト</h2></div>
+        <div><span id="projectDialogEyebrow" class="eyebrow">NEW PROJECT</span><h2 id="projectDialogTitle">新しいプロジェクト</h2></div>
         <button id="closeProjectDialogButton" class="icon-button" type="button" aria-label="閉じる">×</button>
       </div>
       <p>コードと設計書のローカル保存場所を登録します。既存 Git リポジトリやコンテナの準備は不要です。</p>
@@ -130,6 +140,33 @@
         <input id="projectTestBaseUrl" type="url" maxlength="2000"
           autocomplete="off" placeholder="例：http://127.0.0.1:8080">
       </label>
+      <details class="target-data-settings">
+        <summary>被テストシステム DB データ準備（任意）</summary>
+        <p>
+          AI は確認済み Binding ID だけを使用します。接続 Secret はこの端末のユーザー領域に保存され、
+          OperaMind DB、ログ、Copilot には保存・送信されません。
+        </p>
+        <label>
+          <span>接続 Alias</span>
+          <input id="projectTargetDataAlias" maxlength="160" autocomplete="off"
+            placeholder="例：expense_test_db">
+        </label>
+        <label>
+          <span>PostgreSQL 接続 Secret</span>
+          <input id="projectTargetDataDsn" type="password" maxlength="4000"
+            autocomplete="new-password"
+            placeholder="postgresql://user:password@127.0.0.1:5432/expense_test">
+          <small>既存設定では空欄のままにすると現在の Secret を保持します。</small>
+        </label>
+        <label>
+          <span>確認済み SQL Binding（JSON 配列）</span>
+          <textarea id="projectTargetDataBindings" rows="10" maxlength="100000"
+            spellcheck="false" placeholder='[{"query_binding_id":"upsert_expense",...}]'></textarea>
+        </label>
+        <div id="projectTargetDataStatus" class="dialog-note neutral">
+          write Binding には入力制約、回読 Assert、cleanup Binding、Transaction、冪等方針が必須です。
+        </div>
+      </details>
       <div class="dialog-note">
         Git 管理外のコードには、外部送信しないローカル差分基線を OperaMind が作成します。原本は移動せず、秘密ファイルと構築成果物は基線から除外します。
       </div>
@@ -205,6 +242,24 @@
     </form>
   </dialog>
 
+  <dialog id="documentLearningDialog" class="request-dialog learning-dialog"
+    aria-labelledby="documentLearningTitle">
+    <div class="learning-dialog-body">
+      <div class="dialog-heading">
+        <div><span class="eyebrow">PROJECT DOCUMENT PROFILE</span><h2 id="documentLearningTitle">設計書学習</h2></div>
+        <button id="closeDocumentLearningButton" class="icon-button" type="button" aria-label="閉じる">×</button>
+      </div>
+      <p>この Project の XLSX／DOCX 構造だけを学習します。別 Project のルールは使用しません。</p>
+      <div id="documentLearningStatus" class="learning-status"></div>
+      <div id="documentLearningContent" class="learning-content"></div>
+      <div class="dialog-actions">
+        <button id="relearnDocumentsButton" class="secondary" type="button">構造を再学習</button>
+        <button id="openLearningVsCodeButton" class="secondary" type="button">VS Code で学習</button>
+        <button id="confirmDocumentLearningButton" class="primary" type="button">確認して適用</button>
+      </div>
+    </div>
+  </dialog>
+
   <dialog id="testCaseRevisionDialog" class="request-dialog"
     aria-labelledby="testCaseRevisionDialogTitle">
     <form id="testCaseRevisionForm" method="dialog">
@@ -233,6 +288,6 @@
 
   <script src="/change-flow-view.js?v=20260802-test-data-rerun-v1"></script>
   <script src="/vscode-link.js?v=20260802-web-handoff-v1"></script>
-  <script src="/app.js?v=20260802-web-handoff-v1"></script>
+  <script src="/app.js?v=20260804-target-data-v1"></script>
 </body>
 </html>

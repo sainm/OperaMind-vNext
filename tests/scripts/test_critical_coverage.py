@@ -59,6 +59,56 @@ def test_critical_coverage_gate_reports_total_file_and_missing_failures(
     assert "Coverage gate failed" in completed.stderr
 
 
+def test_critical_coverage_gate_enforces_per_file_override(tmp_path: Path) -> None:
+    policy, report = _write_inputs(tmp_path, total=80, file_percent=89.9)
+    payload = json.loads(policy.read_text(encoding="utf-8"))
+    payload["file_minimum_percent_overrides"] = {"src/approval.py": 90}
+    policy.write_text(json.dumps(payload), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--config",
+            str(policy),
+            "--coverage-json",
+            str(report),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "src/approval.py 89.90% is below required 90.00%" in completed.stderr
+
+
+def test_critical_coverage_gate_rejects_override_for_unlisted_file(
+    tmp_path: Path,
+) -> None:
+    policy, report = _write_inputs(tmp_path, total=80, file_percent=90)
+    payload = json.loads(policy.read_text(encoding="utf-8"))
+    payload["file_minimum_percent_overrides"] = {"src/typo.py": 90}
+    policy.write_text(json.dumps(payload), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--config",
+            str(policy),
+            "--coverage-json",
+            str(report),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "override is not a capability file: src/typo.py" in completed.stderr
+
+
 def test_critical_coverage_gate_rejects_invalid_policy(tmp_path: Path) -> None:
     policy, report = _write_inputs(tmp_path, total=80, file_percent=80)
     policy.write_text("{}", encoding="utf-8")

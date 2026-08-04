@@ -71,6 +71,10 @@
     cleanup_status: "クリーンアップ",
     execution_actions: "再実行",
     generation_flows: "データ生成・UI 手順",
+    data_bindings: "固定データ識別子",
+    data_coverage_status: "実データ条件カバレッジ状態",
+    data_coverage_percent: "実データ条件カバレッジ",
+    data_coverage_proofs: "実 DB データ条件の検証結果",
     screenshots: "スクリーンショット",
     closure_status: "完了判定",
     business_coverage_status: "業務カバレッジ状態",
@@ -241,6 +245,12 @@
           <button type="button" class="secondary" data-open-test-case-revision>自然言語で修正</button>
         </div>`;
     }
+    if (key === "data_bindings" && Array.isArray(value)) {
+      return `<div class="plan-list">${value.map(renderDataBinding).join("")}</div>`;
+    }
+    if (key === "data_coverage_proofs" && Array.isArray(value)) {
+      return `<div class="plan-list">${value.map(renderDataCoverageProof).join("")}</div>`;
+    }
     if (key === "execution_actions" && typeof value === "object" && value !== null) {
       return value.can_rerun && value.rerun_run_id
         ? `<button type="button" class="primary" data-rerun-test-data="${escapeHtml(value.rerun_run_id)}">同じ計画で再実行</button>`
@@ -261,6 +271,52 @@
     const title = item.logical_name || item.text || item.summary || item.change_id || item.business_rule_id || item.evidence_id;
     const deltaCount = Array.isArray(item.field_deltas) ? item.field_deltas.length : 0;
     return `<strong>${escapeHtml(title || "項目")}</strong>${deltaCount ? `<small>変更フィールド ${deltaCount} 件</small>` : ""}`;
+  }
+
+  function renderDataBinding(item) {
+    if (typeof item !== "object" || item === null) return escapeHtml(item);
+    const primary = item.primary_key || {};
+    const screen = item.screen_key || {};
+    const business = Array.isArray(item.business_unique_keys)
+      ? item.business_unique_keys.map(value => `${value.name}: ${value.value}`).join(" · ")
+      : "";
+    const locator = item.screen_locator || {};
+    const digest = String(item.content_digest || "");
+    return `<article class="plan-card">
+      <div class="list-heading">
+        <strong>${escapeHtml(item.test_data_id || "テストデータ")}</strong>
+        <span class="status-badge passed">一意 ${escapeHtml(item.match_count || 0)} 件</span>
+      </div>
+      <small>${escapeHtml(item.binding_mode === "generated" ? "生成データ" : "既存データを接管")} · 実行時に固定</small>
+      <dl class="field-deltas">
+        <div><dt>DB 主キー</dt><dd>${escapeHtml(primary.name || "-")}: ${escapeHtml(primary.value ?? "-")}</dd></div>
+        <div><dt>業務一意キー</dt><dd>${escapeHtml(business || "-")}</dd></div>
+        <div><dt>画面識別キー</dt><dd>${escapeHtml(screen.name || "-")}: ${escapeHtml(screen.value ?? "-")}</dd></div>
+        <div><dt>厳密 Locator</dt><dd>${escapeHtml(locator.by || "-")} · ${escapeHtml(locator.value || "-")}</dd></div>
+      </dl>
+      <small>Evidence ${escapeHtml(item.evidence_ref || "-")} · digest ${escapeHtml(digest ? digest.slice(0, 12) : "-")}</small>
+    </article>`;
+  }
+
+  function renderDataCoverageProof(item) {
+    if (typeof item !== "object" || item === null) return escapeHtml(item);
+    const status = item.status === "passed" ? "passed" : "blocked";
+    return `<article class="plan-card">
+      <div class="list-heading">
+        <strong>${escapeHtml(item.condition_id || "データ条件")}</strong>
+        <span class="status-badge ${status}">${escapeHtml(item.status || "未検証")}</span>
+      </div>
+      <small>${escapeHtml(item.test_case_ref || "TestCase")} · ${escapeHtml(item.test_data_id || "TestData")}</small>
+      <dl class="field-deltas">
+        <div><dt>AcceptanceCriteria</dt><dd>${escapeHtml(item.criterion_ref || "-")}</dd></div>
+        <div><dt>実 DB Path</dt><dd>${escapeHtml(item.path || "-")}</dd></div>
+        <div><dt>条件</dt><dd>${escapeHtml(item.operator || "-")}</dd></div>
+        <div><dt>期待値</dt><dd>${escapeHtml(JSON.stringify(item.expected))}</dd></div>
+        <div><dt>実測値</dt><dd>${escapeHtml(JSON.stringify(item.actual))}</dd></div>
+        <div><dt>Evidence</dt><dd>${escapeHtml(item.evidence_ref || "-")}</dd></div>
+      </dl>
+      ${item.failure_reason ? `<p class="error-message">${escapeHtml(item.failure_reason)}</p>` : ""}
+    </article>`;
   }
 
   function renderDocumentChange(item) {

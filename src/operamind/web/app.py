@@ -26,6 +26,7 @@ from operamind.application.main_flow_execution import (
     default_test_data_executor_factory,
 )
 from operamind.application.orchestration_task import OrchestrationSchedulingPolicy
+from operamind.application.project_onboarding import ProjectOnboardingCoordinator
 from operamind.infrastructure.postgres.errors import PersistenceConflictError
 from operamind.local_installation import PRODUCT_ID, application_version
 from operamind.web.routers import (
@@ -61,31 +62,49 @@ def create_app(
         executor_factory=test_data_executor_factory,
         scheduling_policy=scheduling_policy,
     )
+    onboarding_coordinator = ProjectOnboardingCoordinator(
+        database_url=database_url,
+        repository_root=root,
+    )
     stop_event = threading.Event()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        thread: threading.Thread | None = None
+        threads: list[threading.Thread] = []
         if enable_internal_coordinator:
             stop_event.clear()
-            thread = threading.Thread(
-                target=coordinator.run_forever,
-                kwargs={
-                    "stop_event": stop_event,
-                    "poll_seconds": coordinator_poll_seconds,
-                },
-                name="operamind-main-flow",
-                daemon=True,
-            )
-            thread.start()
+            threads = [
+                threading.Thread(
+                    target=coordinator.run_forever,
+                    kwargs={
+                        "stop_event": stop_event,
+                        "poll_seconds": coordinator_poll_seconds,
+                    },
+                    name="operamind-main-flow",
+                    daemon=True,
+                ),
+                threading.Thread(
+                    target=onboarding_coordinator.run_forever,
+                    kwargs={
+                        "stop_event": stop_event,
+                        "poll_seconds": coordinator_poll_seconds,
+                    },
+                    name="operamind-project-onboarding",
+                    daemon=True,
+                ),
+            ]
+            for thread in threads:
+                thread.start()
         try:
             yield
         finally:
             stop_event.set()
-            if thread is not None:
+            for thread in threads:
                 thread.join(timeout=5)
                 if thread.is_alive():
-                    LOGGER.error("Internal main-flow coordinator did not stop within 5 seconds")
+                    LOGGER.error(
+                        "Internal coordinator %s did not stop within 5 seconds", thread.name
+                    )
 
     app = FastAPI(title="OperaMind Control Plane", version="1.0.0", lifespan=lifespan)
     app.state.repository_root = root
@@ -157,6 +176,7 @@ def create_app(
     app.include_router(local_environment.bridge_router)
     app.mount("/", StaticFiles(directory=static_root, html=True), name="web")
     return app
+
 
 def _error(
     request: Request,

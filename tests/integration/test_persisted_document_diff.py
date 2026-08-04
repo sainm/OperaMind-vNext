@@ -213,14 +213,14 @@ def test_persisted_document_diff_is_atomic_and_idempotent(tmp_path: Path) -> Non
         assert replay.artifact_digests == first.artifact_digests
         ingestion = first.ingestion_artifact
         ContractCatalog.load(ROOT / "contracts").validate_artifact(ingestion)
-        assert ingestion["document_profile_refs"] == ["screen-design-conventions-example@1.0.0"]
+        assert ingestion["document_profile_refs"] == ["screen-design-conventions-example@1.1.0"]
         assert ingestion["ingestion_result_event_id"] == first.initial_ingestion_event_id
         assert ingestion["document_profiles"] == [
             {
                 "profile_version_id": request.profile_version_id,
                 "binding_key": request.profile_binding_key,
                 "activation_event_id": request.profile_activation_event_id,
-                "profile_ref": "screen-design-conventions-example@1.0.0",
+                "profile_ref": "screen-design-conventions-example@1.1.0",
             }
         ]
         assert ingestion["source_content_digest"] == first.diff.source_content_digest

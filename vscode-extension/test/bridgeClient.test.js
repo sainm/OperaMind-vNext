@@ -21,9 +21,10 @@ test("Bridge client identifies a stale task response without treating server err
   assert.equal(isMissingBridgeResource(new Error("network failed")), false);
 });
 
-test("Change Task prompt carries identity, test planning, and MCP result tools", () => {
+test("Change Task prompt contains only the current document stage", () => {
   const prompt = buildCopilotPrompt(
     {
+      current_stage: "document_change",
       task: {
         coding_task_id: "task-1",
         execution_mode: "copilot_change_task",
@@ -54,25 +55,34 @@ test("Change Task prompt carries identity, test planning, and MCP result tools",
     "/workspace",
   );
   assert.match(prompt, /task-1/);
-  assert.match(prompt, /TestPlan/);
-  assert.match(prompt, /TestDataPlan/);
-  assert.match(prompt, /canonical_document facts/);
-  assert.match(prompt, /document_edits/);
-  assert.match(prompt, /OperaMind が限定セルだけ更新/);
-  assert.match(prompt, /Spring Boot 1\.5 \/ Thymeleaf \/ Gradle Wrapper/);
-  assert.match(prompt, /Framework を更新しない/);
-  assert.match(prompt, /\.\/gradlew classes testClasses --no-daemon/);
+  assert.match(prompt, /現在工程: 設計書変更/);
+  assert.match(prompt, /Canonical RAG 文書候補/);
+  assert.match(prompt, /document_change/);
   assert.match(prompt, /copilot_get_coding_task/);
-  assert.match(prompt, /返却自体を現在の authoritative context/);
-  assert.match(prompt, /next_context の欠落を停止理由にしない/);
-  assert.match(prompt, /current_stage=compile_test かつ execution_scope\.bound=true/);
-  assert.match(prompt, /状態を変更する MCP Tool が next_context を含めて返した場合だけ/);
-  assert.match(prompt, /copilot_record_task_result/);
-  assert.ok(
-    prompt.indexOf("copilot_record_task_result") < prompt.indexOf("output_stage=test_planning"),
+  assert.match(prompt, /stage_status\.next_action/);
+  assert.doesNotMatch(prompt, /TestPlan|TestDataPlan|compile_test|copilot_record_task_result/);
+  assert.doesNotMatch(prompt, /next_context|Edit Packet|Approval|Grant|automation/);
+  assert.ok(prompt.length < 900);
+});
+
+test("Change Task prompt switches to only the current compile stage", () => {
+  const prompt = buildCopilotPrompt(
+    {
+      current_stage: "compile_test",
+      task: {
+        coding_task_id: "task-compile",
+        execution_mode: "copilot_change_task",
+        task_summary: "差戻し検索を追加する",
+      },
+    },
+    "/workspace",
   );
-  assert.doesNotMatch(prompt, /ai-response\.json/);
-  assert.doesNotMatch(prompt, /Edit Packet|Approval|Grant|automation/);
+
+  assert.match(prompt, /現在工程: コード変更・コンパイル・テスト/);
+  assert.match(prompt, /copilot_record_task_result/);
+  assert.match(prompt, /reload_current_task/);
+  assert.doesNotMatch(prompt, /Canonical RAG 文書候補|test_planning/);
+  assert.ok(prompt.length < 1000);
 });
 
 test("Bridge client builds authenticated calls without a handoff file", async () => {
@@ -92,14 +102,15 @@ test("Bridge client builds authenticated calls without a handoff file", async ()
     "developer",
     "decision-1",
   );
-  await client.acceptTask("task-1", "/workspace", "vscode-1", "developer");
-  await client.resumeTask("task-1", "/workspace", "vscode-1");
+  await client.acceptTask("task-1", "/workspace", "vscode-1", "developer", "claim-1");
+  await client.resumeTask("task-1", "/workspace", "vscode-1", "claim-1");
   await client.cancelTask(
     "task-1",
     "/workspace",
     "vscode-1",
     "developer",
     "範囲を再確認する",
+    "claim-1",
   );
   await client.reportDiagnostics({consumer_id: "vscode-1"});
 
@@ -121,12 +132,15 @@ test("Bridge client builds authenticated calls without a handoff file", async ()
   assert.deepEqual(requests[3][4], {
     workspace_root: "/workspace",
     consumer_id: "vscode-1",
+    claim_token: "claim-1",
     accepted_by: "developer",
   });
   assert.match(requests[4][3], /tasks\/task-1\/resume/);
+  assert.match(requests[4][3], /claim_token=claim-1/);
   assert.deepEqual(requests[5][4], {
     workspace_root: "/workspace",
     consumer_id: "vscode-1",
+    claim_token: "claim-1",
     cancelled_by: "developer",
     reason: "範囲を再確認する",
   });
@@ -137,7 +151,7 @@ test("Bridge client builds authenticated calls without a handoff file", async ()
   ]);
 });
 
-test("UI TestPlan revision prompt is read-only and asks for complete Playwright plans", () => {
+test("UI TestPlan revision prompt stays compact and stage-specific", () => {
   const prompt = buildCopilotPrompt(
     {
       task: {
@@ -152,9 +166,55 @@ test("UI TestPlan revision prompt is read-only and asks for complete Playwright 
     "/workspace",
   );
   assert.match(prompt, /revision-1/);
-  assert.match(prompt, /source_ui_test_plan/);
-  assert.match(prompt, /output_stage=ui_test_revision/);
-  assert.match(prompt, /限定 Playwright action/);
-  assert.match(prompt, /コード、設計書.*変更せず/);
-  assert.doesNotMatch(prompt, /document_edits/);
+  assert.match(prompt, /現在工程: UI テスト計画の再作成/);
+  assert.match(prompt, /ui_test_revision/);
+  assert.match(prompt, /現行計画、確認済み修正、実行制約/);
+  assert.doesNotMatch(prompt, /document_change|code_scope|compile_test|next_context/);
+  assert.ok(prompt.length < 900);
+});
+
+test("Project document learning prompt is bounded and requires Web confirmation", () => {
+  const prompt = buildCopilotPrompt(
+    {
+      task: {
+        coding_task_id: "document-learning-001",
+        execution_mode: "copilot_change_task",
+        task_kind: "document_profile_learning",
+        initial_stage: "document_profile_learning",
+        task_summary: "Project 設計書構造を学習する",
+      },
+      current_stage: "document_profile_learning",
+      claim_token: "learning-claim-token",
+    },
+    "/workspace/demo",
+    "vscode-consumer-1",
+  );
+
+  assert.match(prompt, /Project 設計書学習/);
+  assert.match(prompt, /document_profile_learning/);
+  assert.match(prompt, /Coverage 100%/);
+  assert.match(prompt, /OperaMind Web の確認を待つ/);
+  assert.match(prompt, /consumer_id=vscode-consumer-1/);
+  assert.match(prompt, /claim_token=learning-claim-token/);
+  assert.doesNotMatch(prompt, /コード変更・コンパイル/);
+});
+
+test("Project document learning prompt fails closed without a Claim Token", () => {
+  assert.throws(
+    () =>
+      buildCopilotPrompt(
+        {
+          task: {
+            coding_task_id: "document-learning-001",
+            execution_mode: "copilot_change_task",
+            task_kind: "document_profile_learning",
+            task_summary: "Project 設計書構造を学習する",
+          },
+          current_stage: "document_profile_learning",
+        },
+        "/workspace/demo",
+        "vscode-consumer-1",
+      ),
+    /claim identity is missing/,
+  );
 });

@@ -16,6 +16,13 @@ from operamind.infrastructure.test_data.executors import (
     UiDataActionResult,
     UrllibHttpTransport,
 )
+from operamind.infrastructure.test_data.target_data import (
+    ProjectSqlTestDataExecutor,
+    TargetDataBinding,
+    TargetDataProfile,
+    TargetDataProfileRepository,
+    TargetDataSecretStore,
+)
 
 __all__ = [
     "BoundFixtureTestDataExecutor",
@@ -29,7 +36,12 @@ __all__ = [
     "PlaywrightCapabilityError",
     "PlaywrightSession",
     "PlaywrightUiTestDataExecutor",
+    "ProjectSqlTestDataExecutor",
     "SafeHttpTestDataExecutor",
+    "TargetDataBinding",
+    "TargetDataProfile",
+    "TargetDataProfileRepository",
+    "TargetDataSecretStore",
     "UiDataActionResult",
     "UrllibHttpTransport",
 ]

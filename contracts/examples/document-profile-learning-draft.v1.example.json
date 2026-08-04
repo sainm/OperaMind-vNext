@@ -1,0 +1,46 @@
+{
+  "artifact_type": "DocumentProfileLearningDraft",
+  "schema_version": "v1",
+  "learning_run_id": "document-learning-example",
+  "project_id": "example-project",
+  "source_structure_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "generated_by": "vscode_github_copilot",
+  "profiles": [
+    {
+      "profile_type": "DocumentConventionProfile",
+      "profile_id": "project-example-project-screen-design",
+      "profile_version": "1.0.0",
+      "document_type": "screen_design",
+      "fact_type": "screen_element",
+      "minimum_auto_match_score": 0.8,
+      "variants": [
+        {
+          "variant_id": "screen-items",
+          "signals": [
+            {"type": "sheet_name", "values": ["Screen Items"], "weight": 0.4},
+            {"type": "headers", "values": ["Screen ID", "Element ID"], "weight": 0.6}
+          ],
+          "field_aliases": {
+            "screen_id": ["Screen ID"],
+            "element_id": ["Element ID"]
+          },
+          "stable_key_fields": ["screen_id", "element_id"],
+          "stable_key_normalizers": {
+            "screen_id": "casefold",
+            "element_id": "casefold"
+          }
+        }
+      ],
+      "unmatched_policy": "canonical_text_needs_review"
+    }
+  ],
+  "document_assignments": [
+    {
+      "sample_id": "sample-example",
+      "profile_id": "project-example-project-screen-design",
+      "variant_id": "screen-items",
+      "reason": "Sheet and required headers match"
+    }
+  ],
+  "ambiguities": []
+}

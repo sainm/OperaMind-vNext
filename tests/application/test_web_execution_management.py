@@ -309,6 +309,42 @@ def test_test_case_revision_preview_hides_internal_ids_and_confirmation_restarts
     }
 
 
+def test_document_learning_claim_uses_the_same_bridge_task_envelope(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    learning_view: dict[str, object] = {
+        "task": {
+            "coding_task_id": "document-learning-001",
+            "task_kind": "document_profile_learning",
+        },
+        "state": "claimed",
+        "current_stage": "document_profile_learning",
+        "claim_token": "claim-token-001",
+    }
+
+    class LearningService:
+        def __init__(self, **_values: object) -> None:
+            pass
+
+        def claim_next(self, **_values: object) -> dict[str, object]:
+            return learning_view
+
+    monkeypatch.setattr(
+        "operamind.application.web_control_plane.DocumentProfileLearningService",
+        LearningService,
+    )
+    service = object.__new__(WebControlPlaneService)
+    service._connection = object()  # type: ignore[attr-defined]
+    service._root = tmp_path  # type: ignore[attr-defined]
+
+    result = service.claim_copilot_task(
+        workspace_root=tmp_path,
+        consumer_id="vscode-1",
+    )
+
+    assert result == {"task": learning_view}
+
+
 def _service(root: Path, *, stale_closure: bool = False) -> WebControlPlaneService:
     service = object.__new__(WebControlPlaneService)
     service._root = root  # type: ignore[attr-defined]

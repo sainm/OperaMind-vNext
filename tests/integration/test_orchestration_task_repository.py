@@ -207,6 +207,55 @@ def test_task_claim_lease_result_and_single_agent_policy() -> None:
                 """,
                 (expiring_task_id,),
             )
+            cursor.execute(
+                """
+                UPDATE orchestration_tasks
+                SET attempt_count = max_attempts
+                WHERE orchestration_task_id = %s
+                """,
+                (expiring_task_id,),
+            )
+        assert task_repository.view(str(expiring_task_id))["effective_state"] == "failed"
+        exhausted_ready = task_repository.list_management(
+            project_id=project_id,
+            states=("ready",),
+            capability="requirement_review",
+            blocking_reason=None,
+            limit=50,
+        )
+        assert expiring_task_id not in {
+            value["orchestration_task_id"] for value in exhausted_ready
+        }
+        exhausted_failed = task_repository.list_management(
+            project_id=project_id,
+            states=("failed",),
+            capability="requirement_review",
+            blocking_reason=None,
+            limit=50,
+        )
+        assert expiring_task_id in {
+            value["orchestration_task_id"] for value in exhausted_failed
+        }
+        exhausted_graph = task_repository.dependency_graph(
+            project_id=project_id,
+            automation_run_id=None,
+            limit=50,
+        )
+        exhausted_graph_task = next(
+            value
+            for value in exhausted_graph["tasks"]
+            if value["orchestration_task_id"] == expiring_task_id
+        )
+        assert exhausted_graph_task["effective_state"] == "failed"
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE orchestration_tasks
+                SET attempt_count = 1
+                WHERE orchestration_task_id = %s
+                """,
+                (expiring_task_id,),
+            )
         recovered = task_repository.list_ready(
             executor_kind="agent",
             capabilities=("requirement_review",),

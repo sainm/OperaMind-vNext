@@ -30,6 +30,7 @@ EXAMPLE_NAMES = {
     "DocumentConventionProfile": (
         "document-convention-profile.example.json",
         "screen-design-convention-profile.example.json",
+        "program-design-convention-profile.example.json",
     ),
     "DocumentRelationProfile": ("document-relation-profile.example.json",),
     "CodeFrameworkProfile": (

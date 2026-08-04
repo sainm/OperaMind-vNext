@@ -45,6 +45,7 @@ class ProjectInitializationRecord:
     source_control_kind: str
     test_base_url: str | None
     source_git_baselines: tuple[dict[str, object], ...]
+    settings_revision: int
     created: bool
 
 
@@ -166,7 +167,7 @@ class WebControlPlaneRepository:
             cursor.execute(
                 """
                 SELECT project.name, workspace.workspace_root, workspace.source_control_kind,
-                       workspace.test_base_url
+                       workspace.test_base_url, workspace.settings_revision
                 FROM project_workspaces AS workspace
                 JOIN projects AS project ON project.project_id = workspace.project_id
                 WHERE workspace.project_id = %s
@@ -296,7 +297,132 @@ class WebControlPlaneRepository:
             source_control_kind=source_control_kind,
             test_base_url=test_base_url,
             source_git_baselines=stored_baselines,
+            settings_revision=int(workspace_row[4]) if workspace_row is not None else 1,
             created=created,
+        )
+
+    def update_project_settings(
+        self,
+        *,
+        project_id: str,
+        name: str,
+        document_roots: tuple[str, ...],
+        test_base_url: str | None,
+        expected_revision: int,
+        updated_by: str,
+        document_source_git_baselines: tuple[dict[str, object], ...],
+    ) -> ProjectInitializationRecord:
+        """Atomically replace mutable Project settings under optimistic concurrency."""
+
+        if not all(value.strip() for value in (project_id, name, updated_by)):
+            raise ValueError("Project settings values must not be blank")
+        if expected_revision <= 0:
+            raise ValueError("Project settings revision must be positive")
+        if not document_roots or len(document_roots) != len(set(document_roots)):
+            raise ValueError("Project document roots must be non-empty and unique")
+        with self._connection.transaction(), self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT workspace_root, source_control_kind, settings_revision
+                FROM project_workspaces
+                WHERE project_id = %s
+                FOR UPDATE
+                """,
+                (project_id,),
+            )
+            workspace = cursor.fetchone()
+            if workspace is None:
+                raise ValueError("Project does not exist")
+            if int(workspace[2]) != expected_revision:
+                raise PersistenceConflictError("Project settings changed; reload before saving")
+            cursor.execute(
+                "UPDATE projects SET name = %s WHERE project_id = %s", (name, project_id)
+            )
+            cursor.execute(
+                """
+                UPDATE project_workspaces
+                SET test_base_url = %s, settings_revision = settings_revision + 1,
+                    updated_by = %s, updated_at = clock_timestamp()
+                WHERE project_id = %s
+                """,
+                (test_base_url, updated_by, project_id),
+            )
+            cursor.execute(
+                "DELETE FROM project_document_roots WHERE project_id = %s", (project_id,)
+            )
+            cursor.executemany(
+                """
+                INSERT INTO project_document_roots (
+                    document_root_id, project_id, root_path, position
+                ) VALUES (%s, %s, %s, %s)
+                """,
+                [
+                    (_project_document_root_id(project_id, root), project_id, root, position)
+                    for position, root in enumerate(document_roots)
+                ],
+            )
+            cursor.execute(
+                "DELETE FROM project_source_git_baselines "
+                "WHERE project_id = %s AND source_kind = 'document'",
+                (project_id,),
+            )
+            if document_source_git_baselines:
+                cursor.executemany(
+                    """
+                    INSERT INTO project_source_git_baselines (
+                        source_binding_id, project_id, source_kind, configured_root,
+                        repository_root, repository_identity, baseline_revision,
+                        management_kind, position
+                    ) VALUES (%s, %s, 'document', %s, %s, %s, %s, %s, %s)
+                    """,
+                    [
+                        (
+                            _project_source_binding_id(
+                                project_id, "document", str(item["configured_root"])
+                            ),
+                            project_id,
+                            item["configured_root"],
+                            item["repository_root"],
+                            item["repository_identity"],
+                            item["baseline_revision"],
+                            item["management_kind"],
+                            item["position"],
+                        )
+                        for item in document_source_git_baselines
+                    ],
+                )
+            cursor.execute(
+                """
+                SELECT source_kind, configured_root, repository_root,
+                       repository_identity, baseline_revision, management_kind, position
+                FROM project_source_git_baselines
+                WHERE project_id = %s
+                ORDER BY CASE source_kind WHEN 'code' THEN 0 ELSE 1 END, position
+                """,
+                (project_id,),
+            )
+            baselines = tuple(
+                {
+                    "source_kind": str(row[0]),
+                    "configured_root": str(row[1]),
+                    "repository_root": str(row[2]),
+                    "repository_identity": str(row[3]),
+                    "baseline_revision": str(row[4]),
+                    "management_kind": str(row[5]),
+                    "position": int(row[6]),
+                }
+                for row in cursor.fetchall()
+            )
+        return ProjectInitializationRecord(
+            project_id=project_id,
+            name=name,
+            workspace_root=str(workspace[0]),
+            document_roots=document_roots,
+            source_control_kind=str(workspace[1]),
+            test_base_url=test_base_url,
+            source_git_baselines=baselines,
+            settings_revision=expected_revision + 1,
+            created=False,
         )
 
     def get_change_request(self, request_id: str) -> dict[str, object]:
@@ -372,7 +498,7 @@ class WebControlPlaneRepository:
                        count(DISTINCT analysis_case.analysis_case_id) AS case_count,
                        count(DISTINCT request.change_request_id) AS request_count,
                        workspace.workspace_root, workspace.source_control_kind,
-                       workspace.test_base_url,
+                       workspace.test_base_url, workspace.settings_revision,
                        COALESCE(
                            (
                                SELECT jsonb_agg(root.root_path ORDER BY root.position)
@@ -411,7 +537,7 @@ class WebControlPlaneRepository:
                   ON request.project_id = project.project_id
                 GROUP BY project.project_id, project.name,
                          workspace.workspace_root, workspace.source_control_kind,
-                         workspace.test_base_url
+                         workspace.test_base_url, workspace.settings_revision
                 ORDER BY project.name, project.project_id
                 LIMIT %s
                 """,
@@ -427,8 +553,9 @@ class WebControlPlaneRepository:
                 "workspace_root": str(row[4]) if row[4] is not None else None,
                 "source_control_kind": str(row[5]) if row[5] is not None else None,
                 "test_base_url": str(row[6]) if row[6] is not None else None,
-                "document_roots": [str(value) for value in row[7]],
-                "source_git_baselines": [dict(value) for value in row[8]],
+                "settings_revision": int(row[7]) if row[7] is not None else None,
+                "document_roots": [str(value) for value in row[8]],
+                "source_git_baselines": [dict(value) for value in row[9]],
             }
             for row in rows
         )
@@ -456,9 +583,7 @@ class WebControlPlaneRepository:
             )
         return unique[0]
 
-    def project_workspace_registration(
-        self, project_id: str
-    ) -> dict[str, str | None] | None:
+    def project_workspace_registration(self, project_id: str) -> dict[str, object] | None:
         """Return the initialized Workspace and its source-control mode."""
 
         if not project_id.strip():
@@ -467,7 +592,7 @@ class WebControlPlaneRepository:
             cursor.execute(
                 """
                 SELECT project.name, workspace.workspace_root, workspace.source_control_kind,
-                       workspace.test_base_url
+                       workspace.test_base_url, workspace.settings_revision
                 FROM project_workspaces AS workspace
                 JOIN projects AS project ON project.project_id = workspace.project_id
                 WHERE workspace.project_id = %s
@@ -482,6 +607,57 @@ class WebControlPlaneRepository:
             "workspace_root": str(row[1]),
             "source_control_kind": str(row[2]),
             "test_base_url": str(row[3]) if row[3] is not None else None,
+            "settings_revision": int(row[4]),
+        }
+
+    def project_configuration(self, project_id: str) -> dict[str, object]:
+        """Return one Project's current settings and source bindings."""
+
+        registration = self.project_workspace_registration(project_id)
+        if registration is None:
+            raise ValueError("Project does not exist")
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT root_path
+                FROM project_document_roots
+                WHERE project_id = %s
+                ORDER BY position
+                """,
+                (project_id,),
+            )
+            roots = [str(row[0]) for row in cursor.fetchall()]
+            cursor.execute(
+                """
+                SELECT source_kind, configured_root, repository_root,
+                       repository_identity, baseline_revision, management_kind, position
+                FROM project_source_git_baselines
+                WHERE project_id = %s
+                ORDER BY CASE source_kind WHEN 'code' THEN 0 ELSE 1 END, position
+                """,
+                (project_id,),
+            )
+            baselines = [
+                {
+                    "source_kind": str(row[0]),
+                    "configured_root": str(row[1]),
+                    "repository_root": str(row[2]),
+                    "repository_identity": str(row[3]),
+                    "baseline_revision": str(row[4]),
+                    "management_kind": str(row[5]),
+                    "position": int(row[6]),
+                }
+                for row in cursor.fetchall()
+            ]
+        return {
+            "project_id": project_id,
+            "name": registration["project_name"],
+            "workspace_root": registration["workspace_root"],
+            "source_control_kind": registration["source_control_kind"],
+            "test_base_url": registration["test_base_url"],
+            "settings_revision": registration["settings_revision"],
+            "document_roots": roots,
+            "source_git_baselines": baselines,
         }
 
     def project_test_base_url(self, project_id: str) -> str | None:
@@ -857,9 +1033,7 @@ class WebControlPlaneRepository:
                 "tests_passed": row["edit_tests_passed"],
                 "result_revision": _optional(row["result_repository_revision"]),
                 "command_evidence_status": _optional(row["command_evidence_status"]),
-                "changed_line_coverage_status": _optional(
-                    row["changed_line_coverage_status"]
-                ),
+                "changed_line_coverage_status": _optional(row["changed_line_coverage_status"]),
             },
         }
 
@@ -893,12 +1067,10 @@ def _project_document_root_id(project_id: str, root_path: str) -> str:
     return f"project-document-root-{digest}"
 
 
-def _project_source_binding_id(
-    project_id: str, source_kind: str, configured_root: str
-) -> str:
-    digest = hashlib.sha256(
-        f"{project_id}\0{source_kind}\0{configured_root}".encode()
-    ).hexdigest()[:24]
+def _project_source_binding_id(project_id: str, source_kind: str, configured_root: str) -> str:
+    digest = hashlib.sha256(f"{project_id}\0{source_kind}\0{configured_root}".encode()).hexdigest()[
+        :24
+    ]
     return f"project-source-git-{digest}"
 
 

@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 
 class StrictModel(BaseModel):
@@ -44,6 +44,44 @@ class ProjectCreate(StrictModel):
                 "test_base_url must not contain credentials, a query, or a fragment"
             )
         return value.rstrip("/")
+
+
+class ProjectUpdate(StrictModel):
+    """Mutable settings; Workspace identity remains immutable for audit safety."""
+
+    name: str = Field(min_length=1, max_length=300)
+    document_roots: list[str] = Field(min_length=1, max_length=20)
+    test_base_url: str | None = Field(default=None, min_length=1, max_length=2000)
+    expected_revision: int = Field(ge=1)
+
+    @field_validator("document_roots")
+    @classmethod
+    def validate_document_roots(cls, value: list[str]) -> list[str]:
+        return ProjectCreate.validate_document_roots(value)
+
+    @field_validator("test_base_url")
+    @classmethod
+    def validate_test_base_url(cls, value: str | None) -> str | None:
+        return ProjectCreate.validate_test_base_url(value)
+
+
+class ProjectOnboardingRequest(StrictModel):
+    action: Literal["rescan", "reindex", "relearn"]
+
+
+class ProjectDocumentLearningConfirm(StrictModel):
+    learning_run_id: str = Field(min_length=1, max_length=200)
+
+
+class TargetDataProfileUpdate(StrictModel):
+    """Reviewed SQL bindings plus a write-only local target connection secret."""
+
+    connection_alias: str = Field(
+        min_length=1, max_length=160, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$"
+    )
+    connection_dsn: SecretStr | None = None
+    transaction_policy: Literal["per_binding_transaction"] = "per_binding_transaction"
+    bindings: list[dict[str, object]] = Field(min_length=1, max_length=100)
 
 
 class LocalEnvironmentExtensionDiagnostic(StrictModel):
@@ -132,11 +170,13 @@ class TestCaseRevisionConfirm(StrictModel):
 class BridgeTaskAccept(StrictModel):
     workspace_root: str = Field(min_length=1, max_length=4000)
     consumer_id: str = Field(min_length=1, max_length=200)
+    claim_token: str | None = Field(default=None, min_length=1, max_length=200)
     accepted_by: str = Field(min_length=1, max_length=200)
 
 
 class BridgeTaskCancel(StrictModel):
     workspace_root: str = Field(min_length=1, max_length=4000)
     consumer_id: str = Field(min_length=1, max_length=200)
+    claim_token: str | None = Field(default=None, min_length=1, max_length=200)
     cancelled_by: str = Field(min_length=1, max_length=200)
     reason: str = Field(min_length=1, max_length=2_000)

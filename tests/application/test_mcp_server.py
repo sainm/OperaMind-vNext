@@ -12,11 +12,13 @@ from operamind.mcp.server import (
     MCP_TOOL_NAME_PATTERN,
     TOOLS,
     OperaMindMcpServer,
-    _can_load_next_context,
+    _accepted_stage_status,
+    _flow_requires_confirmation,
     _public_change_output,
     _public_command_result,
     _public_edit_result,
-    _public_flow_status,
+    _stage_context_envelope,
+    _tool_result,
     _tool_validation_error_message,
 )
 
@@ -96,9 +98,7 @@ def test_mcp_lists_bounded_annotated_copilot_tools_after_initialization() -> Non
         "copilot_validate_task_diff",
         "copilot_record_task_result",
     }
-    result_properties = by_name["copilot_record_task_result"]["inputSchema"][
-        "properties"
-    ]
+    result_properties = by_name["copilot_record_task_result"]["inputSchema"]["properties"]
     assert result_properties["coverage_report_command_execution_id"] == {
         "type": "string",
         "minLength": 1,
@@ -110,8 +110,9 @@ def test_mcp_lists_bounded_annotated_copilot_tools_after_initialization() -> Non
         "code_scope",
         "test_planning",
         "ui_test_revision",
+        "document_profile_learning",
     ]
-    assert len(outputs["oneOf"]) == 4
+    assert len(outputs["oneOf"]) == 5
     assert outputs["oneOf"][0]["required"] == ["document_ids", "document_edits"]
     assert outputs["properties"]["document_edits"]["items"]["required"] == [
         "document_id",
@@ -119,6 +120,13 @@ def test_mcp_lists_bounded_annotated_copilot_tools_after_initialization() -> Non
         "field",
         "new_value",
     ]
+    assert outputs["oneOf"][4]["required"] == [
+        "document_profile_draft",
+        "consumer_id",
+        "claim_token",
+    ]
+    get_task = by_name["copilot_get_coding_task"]["inputSchema"]
+    assert {"consumer_id", "claim_token"}.issubset(get_task["properties"])
     test_plan_schema = outputs["properties"]["test_plan"]
     assert test_plan_schema["additionalProperties"] is False
     assert set(test_plan_schema["required"]) == {
@@ -135,9 +143,10 @@ def test_mcp_lists_bounded_annotated_copilot_tools_after_initialization() -> Non
     assert test_data_schema["properties"]["generation_flows"]["items"]["$ref"] == (
         "#/properties/test_data_plan/$defs/generationFlow"
     )
-    assert "ui_test_result_refs" not in by_name["copilot_record_task_result"][
-        "inputSchema"
-    ]["properties"]
+    assert (
+        "ui_test_result_refs"
+        not in by_name["copilot_record_task_result"]["inputSchema"]["properties"]
+    )
     assert {
         name for name, tool in by_name.items() if tool["annotations"]["readOnlyHint"] is True
     } == set()
@@ -156,9 +165,7 @@ def test_mcp_lists_bounded_annotated_copilot_tools_after_initialization() -> Non
 
 
 def test_mcp_rejects_non_contract_test_planning_shape_with_actionable_location() -> None:
-    tool = next(
-        tool for tool in TOOLS if tool["name"] == "copilot_record_change_outputs"
-    )
+    tool = next(tool for tool in TOOLS if tool["name"] == "copilot_record_change_outputs")
     arguments = {
         "coding_task_id": "task-1",
         "workspace_root": "/workspace",
@@ -241,66 +248,101 @@ def test_command_tool_does_not_wrap_child_process_in_dispatcher_transaction(
     assert connection.entered == 0
 
 
-def test_mcp_flow_status_drops_internal_automation_and_scheduler_fields() -> None:
-    status = _public_flow_status(
+def test_mcp_stage_status_waits_at_confirmation_without_internal_state() -> None:
+    flow = {
+        "status": "in_progress",
+        "current_stage": "document_change",
+        "blocking_reasons": [],
+        "stages": [
+            {
+                "stage_id": "document_change",
+                "details": {"confirmation": {"checkpoint": "document_diff"}},
+            }
+        ],
+        "automation_run_id": "run-internal",
+        "approval_grant_id": "grant-internal",
+    }
+
+    status = _accepted_stage_status(
         {
-            "status": "in_progress",
+            "state": "in_progress",
             "current_stage": "code_scope",
-            "progress_percent": 33,
-            "blocking_reasons": [],
-            "automation_run_id": "run-internal",
-            "approval_grant_id": "grant-internal",
-            "orchestration_tasks": [{"lease_token": "secret"}],
-            "current_task": {"worker_id": "worker-internal"},
-        }
+            "task": {"approval_grant_id": "grant-internal"},
+        },
+        flow=flow,
+        message="設計書差分を受け付けました。",
     )
 
     assert status == {
-        "status": "in_progress",
-        "current_stage": "code_scope",
-        "progress_percent": 33,
+        "task_stage": "code_scope",
+        "flow_stage": "document_change",
+        "task_state": "in_progress",
+        "outcome": "accepted",
+        "requires_confirmation": True,
+        "next_action": "wait_for_confirmation",
+        "message": "設計書差分を受け付けました。 OperaMind Web の確認を待ってください。",
         "blocking_reasons": [],
     }
+    assert "internal" not in repr(status)
 
 
-def test_mcp_does_not_load_next_context_at_a_human_confirmation_checkpoint() -> None:
-    assert not _can_load_next_context(
-        coding_task_state="in_progress",
-        flow={
-            "status": "in_progress",
-            "stages": [
-                {
-                    "stage_id": "document_change",
-                    "details": {"confirmation": {"checkpoint": "document_diff"}},
-                }
-            ],
-        },
+@pytest.mark.parametrize(
+    ("status", "verification_only", "accepted"),
+    [
+        ("in_scope", False, True),
+        ("no_changes", True, True),
+        ("no_changes", False, False),
+        ("out_of_scope", True, False),
+    ],
+)
+def test_mcp_diff_accepts_no_changes_only_for_verification_scope(
+    status: str, verification_only: bool, accepted: bool
+) -> None:
+    from operamind.mcp.server import _edit_diff_accepted
+
+    assert _edit_diff_accepted(status, verification_only=verification_only) is accepted
+
+
+def test_mcp_stage_status_requests_reload_without_embedding_next_context() -> None:
+    flow = {
+        "status": "in_progress",
+        "current_stage": "compile_test",
+        "blocking_reasons": [],
+        "stages": [{"stage_id": "compile_test", "details": {"confirmation": None}}],
+    }
+
+    assert not _flow_requires_confirmation(flow)
+    status = _accepted_stage_status(
+        {"state": "in_progress", "current_stage": "test_planning"},
+        flow=flow,
+        message="コード結果を受け付けました。",
     )
 
+    assert status["next_action"] == "reload_current_task"
+    assert status["requires_confirmation"] is False
+    assert "next_context" not in status
 
-def test_mcp_never_loads_code_scope_immediately_after_document_change() -> None:
-    assert not _can_load_next_context(
-        coding_task_state="in_progress",
-        output_stage="document_change",
-        flow={
-            "status": "running",
-            "stages": [
-                {"stage_id": "document_change", "details": {"confirmation": None}}
-            ],
+
+def test_mcp_task_load_uses_the_common_result_and_stage_status_envelope() -> None:
+    context = {
+        "coding_task": {"coding_task_id": "task-1"},
+        "stage_contract": {"id": "document_change"},
+        "inputs": {"requirement": {"requirement_text": "状態で検索する"}},
+        "constraints": {"execution_scope": {"bound": False}},
+        "stage_status": {
+            "task_stage": "document_change",
+            "outcome": "ready",
+            "next_action": "perform_current_stage",
         },
-    )
+    }
 
+    envelope = _stage_context_envelope(context)
 
-def test_mcp_loads_next_context_when_no_human_confirmation_is_pending() -> None:
-    assert _can_load_next_context(
-        coding_task_state="in_progress",
-        flow={
-            "status": "in_progress",
-            "stages": [
-                {"stage_id": "document_change", "details": {"confirmation": None}}
-            ],
-        },
-    )
+    assert set(envelope) == {"result", "stage_status"}
+    assert envelope["result"] == {
+        key: value for key, value in context.items() if key != "stage_status"
+    }
+    assert envelope["stage_status"] == context["stage_status"]
 
 
 def test_mcp_tool_outputs_hide_internal_artifact_profile_and_scope_fields() -> None:
@@ -366,9 +408,7 @@ def test_mcp_tool_outputs_hide_internal_artifact_profile_and_scope_fields() -> N
     )
 
     assert change_output == {
-        "recorded_stage": "document_change",
-        "next_stage": "code_scope",
-        "coding_task_state": "in_progress",
+        "output_stage": "document_change",
         "document_count": 1,
         "document_change_count": 1,
     }
@@ -385,7 +425,6 @@ def test_mcp_tool_outputs_hide_internal_artifact_profile_and_scope_fields() -> N
         "output_truncated",
         "started_at",
         "completed_at",
-        "coding_task_state",
     }
     assert set(edit) == {
         "edit_result_id",
@@ -395,11 +434,25 @@ def test_mcp_tool_outputs_hide_internal_artifact_profile_and_scope_fields() -> N
         "changed_paths",
         "out_of_scope_files",
         "result_repository_revision",
-        "coding_task_state",
         "committed_edit_result_id",
         "changed_line_coverage",
     }
     assert "internal" not in repr((change_output, command, edit))
+
+
+def test_mcp_tool_result_does_not_duplicate_structured_output_in_visible_text() -> None:
+    payload = {
+        "result": {"large_business_payload": ["value"] * 20},
+        "stage_status": {"message": "設計書差分を受け付けました。"},
+    }
+
+    result = _tool_result(payload, is_error=False)
+
+    assert result["structuredContent"] == payload
+    assert result["content"] == [
+        {"type": "text", "text": "OperaMind: 設計書差分を受け付けました。"}
+    ]
+    assert "large_business_payload" not in result["content"][0]["text"]
 
 
 def test_mcp_tool_business_error_is_a_tool_result_not_protocol_failure() -> None:

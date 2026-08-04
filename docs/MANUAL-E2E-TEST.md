@@ -147,16 +147,29 @@ macOS／Linux 例:
 - コード Workspace が上位 Repository の Subdirectory の場合は Nested Git を作らず、選択すべき Repository Root を表示して停止する。
 - 存在しない Path、File Path、重複する Document Root は拒否される。
 
-この時点で Git 基線と Canonical RAG 基線まで作成される。コード解析と変更要件の実行はまだ開始しない。
+この時点では Git 基線と Project 設定が保存され、Onboarding がバックグラウンドで開始される。左側の表示が `構造抽出 → 設計書学習` へ進み、「設計書学習」から Sample 数と現在状態を確認できること。VS Code 上の GitHub Copilot が草案を返した後、Field Mapping、Stable Key、曖昧点、Coverage を確認する。Coverage 100%／曖昧 0 件だけ「確認して適用」が有効になり、確認後は `Canonical 文書 → RAG 索引 → 準備完了` を自動継続する。Browser を閉じても処理条件は失われない。
 
 ### 5.4 工程と文書の Profile 準備を確認する
 
-現在の製品フローでは、利用者が Profile ファイルを手作業で登録しない。Project 初期化で DocumentConventionProfile と Embedding Binding が使われ、最初の変更要件登録時に Workspace の実ファイルから CodeFrameworkProfile と CommandExecutionProfile が自動準備される。
+現在の製品フローでは、利用者が Profile ファイルを手作業で登録しない。Project 初期化で実設計書の構造を抽出し、VS Code 上の GitHub Copilot が Project 専用 DocumentConventionProfile 草案を作る。確認済み Version は PostgreSQL に保存され、Canonical Data と RAG Index を更新する。最初の変更要件登録時には Workspace の実ファイルから CodeFrameworkProfile と CommandExecutionProfile が自動準備される。
 
 確認事項:
 
 - 利用者に JSON、SQL、Shell Script の Import を要求しない。
+- 別 Project の DocumentConventionProfile が候補に混入しない。
+- 設計書の業務値だけを変更した再スキャンは現行 Profile を再利用し、Sheet、Heading、Header を変更した再スキャンは再学習で停止する。
 - production、test、UI、設定、SQL、ビルド定義を含む scan root が生成される。
+
+被テストシステムの DB へ直接データを準備する Project では、Project 設定の「被テストシステム DB データ準備」を開く。通常の変更利用者が SQL を毎回入力するのではなく、管理者／QA が事前レビューした Binding 定義を一度登録する。接続 Alias と PostgreSQL 接続 Secret を入力し、write Binding ごとに `query_binding_id`、命名 Parameter、入力制約、対象 Table／Column、read-after-write、cleanup Binding、Transaction、冪等方針が揃うことを確認する。Secret は保存後に画面へ再表示されず、空欄で再保存すると現在値を維持する。
+
+確認点：
+
+- Project 一覧には Alias、Binding 件数、Secret 設定有無だけが表示され、Password や SQL 本文は表示されない。
+- VS Code 上の GitHub Copilot の `target_data_bindings` には Binding ID と制約だけがあり、接続 URL、Password、SQL 本文がない。
+- Copilot が `target` に任意 SQL を出力した Plan は未登録 Binding として確認前に失敗する。
+- write Step に対応する cleanup Step がない、入力値が型／長さ／必須／列挙・業務制約に反する、実 DB の Table／Column が変わった、回読結果が不一致の場合は実 UI Test へ進まない。
+- 同じ Run／同じ業務 Key の再実行は Binding の冪等方針に従い、cleanup は失敗した setup の後でも既存の実行 Engine 規則に従って試行される。
+- Fixture Channel は製品画面から設定できず、自動テストの明示注入だけに限定される。
 - 固定 Command は対象 Workspace に存在する Wrapper／Build 定義から作られる。
 - Coverage Command が参照する Task と機械可読 Report が対象工程に実在し、少なくとも一つの Test Source がある場合だけ CommandExecutionProfile が ready になる。
 - TestData と UI Binding は生成された Plan に明示され、未登録 Binding を推測実行しない。
@@ -560,17 +573,22 @@ TestDataPlan には次を含める。
 - 依存順に並んだデータ生成 Step
 - 被テストシステムを実際に変更する Setup Step の構造化 `data_effect`（`creates` または `updates`）、必須 Output Binding、および同じ観測値を検証する Assertion。Action 名の「登録」「create」などの文字列だけではデータ生成と判定しない
 - Step 間の変数
+- 各 `test_data_id` を、確認済み SQL readback の実 DB 主キー・業務一意キー・画面識別キーへ結ぶ `identity_binding`。readback と `match_count` は必ず 1 件であること
+- 確定した全 AcceptanceCriteria／TestCase／`test_data_id` の組合せに対応する `coverage_conditions`。業務項目、状態、境界値、関連関係を、Identity Binding と同じ確認済み SQL readback の列で検証すること
+- 全 UI Step の `operation_scope=screen|bound_record`。跨画面および表 UI Step は `bound_record` と `data_binding_ref` を持ち、画面識別キーから生成した exact Locator の Scope 内だけを操作し、行番号・曖昧 Text・AI 推測を使用しないこと
 - 後置および最終 Assertion
 - UI Step と UI Assertion
 - 各 UI Step の限定 Playwright Action、Screenshot
 - 各自然言語 Step を指す `test_step_refs`（未対応 Step が 0 件であること）
-- Playwright で表現できない Step だけに、理由・自然言語 Objective・最大操作数・観測項目を固定した `computer_use_fallback`（通常 Step には設定しない）
+- Playwright で表現できない未 Binding Step だけに、理由・自然言語 Objective・最大操作数・観測項目を固定した `computer_use_fallback`（通常 Step および `data_binding_ref` を持つ Step には設定しない）
 - 逆順 Cleanup
 - 実行不能時の blocking reason
 
 複数画面のデータを別々の手動ファイルに分けない。一つの TestDataPlan Flow の変数、依存関係、Assertion、Cleanup として表現する。
 
 Web の `テストデータ・UI 検証` を開き、自然言語手順、生成 Flow、変数、Assertion、Cleanup、Playwright Action と AI 画面操作への限定フォールバックを確認する。Web または VS Code で UiTestPlan／TestDataPlan を確認し、`確認して進む` を押す。確認後に実ブラウザ実行が開始され、Screenshot と最終レポートが生成されることを確認する。
+
+実行後は同画面の `固定データ識別子` で、主キー、業務一意キー、画面識別キー、exact Locator、`match_count=1`、digest、Evidence 参照を確認する。続けて `実 DB データ条件の検証結果` で AcceptanceCriteria、TestCase、TestData、実 DB Path、条件、期待値、実測値、Evidence を確認する。Test Data Coverage は OperaMind がこれらの実測 Proof から算出し、100% 未満では TestPlan の UI Step、Screenshot、最終成功へ進まない。対象 DB では 1 件でも、画面上で 0 件または複数件になった場合も UI Step が `blocked` となる。
 
 ### Step 8: 自然言語テストケース修正を確認する
 
@@ -699,6 +717,7 @@ OperaMind: 現在のタスクを再開
 - 新しい Change Task が過去 Analysis Case／ImpactReport と衝突する
 - Copilot が `code_scope` 受理前に production code を変更する
 - TestDataPlan の UI Step に Binding、Origin、唯一 Locator がない
+- DB readback または画面 Scope が 0 件／複数件、あるいは固定 Binding の digest が drift した
 
 ## 12. テスト記録テンプレート
 
@@ -840,8 +859,8 @@ Migration 後に参照用 Profile や Schema 管理行が存在してもよい�
 6. `設計書の場所` に一行一 Folder で実在する絶対 Path を入力する。
 7. UI 影響を確認する場合は `UI テスト対象 URL` に対象 Origin を入力する。
 8. 入力内容を再確認し、`初期化` を一回だけ押す。
-9. Button が `RAG 基線を準備しています` に変わり、連打できないことを確認する。
-10. Dialog を閉じず、処理完了まで待つ。
+9. Button が `保存しています` に変わり、連打できないことを確認する。
+10. Dialog が閉じ、Project Source の Onboarding が `待機中` または `実行中` になることを確認する。Dialog を開いたまま待つ必要はない。
 
 期待結果:
 
@@ -850,7 +869,11 @@ Migration 後に参照用 Profile や Schema 管理行が存在してもよい�
 - 左側の Project Source に Workspace、UI Test URL、すべての Document Root が表示される。
 - Git 管理外 Workspace は `OperaMind 内部 Git` と表示され、初回 Commit が作成される。
 - 既存 Git Root は変更を追加 Commit せず、その現在 Commit を基線として表示する。
-- 初期化成功通知に Canonical 設計書数と RAG Vector 数が表示され、どちらも 0 より大きい。
+- Onboarding が `設計書識別`、`Canonical 文書`、`RAG 索引` の順に進み、最後に `準備完了` になる。
+- `準備完了` の Project Source に Canonical 設計書数と RAG Vector 数が表示され、どちらも 0 より大きい。
+- `事前確認` で Workspace、Document Profile、Embedding Provider が `ready` になる。部分一致または複数 Profile 同点の文書は `review_required` として表示される。
+- `設定` で設計書 Folder または UI URL を変更すると設定 Revision が増え、旧 Onboarding は再利用されず新しい再スキャンが開始される。
+- `再スキャン` は文書識別から、`再索引` は ready の Document Snapshot から開始される。失敗時は理由と `再試行` が表示される。
 - Project Source に `コード品質基線` が表示され、`blocked` の場合は不足項目が初期化通知にも表示される。
 - Project を再選択しても同じ情報が表示される。
 - Browser を更新しても Project が Database から再読込される。

@@ -21,9 +21,21 @@ from operamind.application.test_data_execution import (
     TestDataExecutionRequest as DataExecutionRequest,
 )
 from operamind.application.test_data_execution import (
+    TestDataStepBlockedError as DataStepBlockedError,
+)
+from operamind.application.test_data_execution import (
     TestDataStepExecution as DataStepExecution,
 )
-from operamind.application.test_data_execution import _assert_postcondition, _extract
+from operamind.application.test_data_execution import (
+    _assert_postcondition,
+    _extract,
+    _freeze_step_bindings,
+    _is_identity_source_step,
+    _render_bound_locator,
+    _resolve_variables,
+    _TestDataBindingBlockedError,
+    _validate_evidence_identity,
+)
 from operamind.contracts import ContractCatalog
 
 ROOT = Path(__file__).parents[2]
@@ -65,6 +77,257 @@ def test_count_equals_accepts_playwright_numeric_count_and_collections() -> None
     _assert_postcondition(assertion, {"ui": {"expense_rows": ["pending", "returned"]}}, {})
     with pytest.raises(AssertionError, match="count did not equal"):
         _assert_postcondition(assertion, {"ui": {"expense_rows": 1}}, {})
+
+
+def test_postcondition_edge_cases_fail_closed() -> None:
+    _assert_postcondition(
+        {
+            "assertion_id": "deferred",
+            "observe_via": "test",
+            "subject": "case-1",
+            "operator": "satisfies",
+            "expected": "passed",
+        },
+        {},
+        {},
+    )
+    with pytest.raises(AssertionError, match="expected existence"):
+        _assert_postcondition(
+            {
+                "assertion_id": "required",
+                "observe_via": "database",
+                "subject": "row",
+                "operator": "exists",
+                "expected": True,
+            },
+            {"database": {}},
+            {},
+        )
+    contains = {
+        "assertion_id": "contains",
+        "observe_via": "database",
+        "subject": "value",
+        "operator": "contains",
+        "expected": "expected",
+    }
+    with pytest.raises(AssertionError, match="does not support contains"):
+        _assert_postcondition(contains, {"database": {"value": 41}}, {})
+    with pytest.raises(AssertionError, match="did not contain"):
+        _assert_postcondition(contains, {"database": {"value": "other"}}, {})
+    with pytest.raises(AssertionError, match="does not have a count"):
+        _assert_postcondition(
+            {
+                "assertion_id": "count",
+                "observe_via": "database",
+                "subject": "value",
+                "operator": "count_equals",
+                "expected": 1,
+            },
+            {"database": {"value": None}},
+            {},
+        )
+    _assert_postcondition(
+        {
+            "assertion_id": "literal-satisfies",
+            "observe_via": "database",
+            "subject": "state",
+            "operator": "satisfies",
+            "expected": "ready",
+        },
+        {"database": {"state": "ready"}},
+        {},
+    )
+    with pytest.raises(ValueError, match="clock must return timezone-aware"):
+        DataExecutionEngine._iso(datetime(2026, 8, 4))
+
+
+def test_identity_binding_freezes_real_readback_into_run_scoped_evidence() -> None:
+    plan = {"data_sets": [_identity_data_set()]}
+
+    bindings, evidence = _freeze_step_bindings(
+        plan=plan,
+        request=_request(),
+        flow_id="identity-flow",
+        step_id="read-expense",
+        observations={
+            "database": {
+                "row_count": 1,
+                "rows": [{"id": 41, "expense_number": "EXP-041"}],
+            }
+        },
+        variables={},
+        frozen_bindings={},
+        clock=lambda: datetime(2026, 8, 4, tzinfo=UTC),
+        source_evidence=(),
+    )
+
+    binding = bindings[0]
+    assert binding["run_id"] == "run-cross-screen"
+    assert binding["primary_key"] == {"name": "id", "value": 41}
+    assert binding["business_unique_keys"] == [
+        {"name": "expense_number", "value": "EXP-041"}
+    ]
+    assert binding["screen_locator"] == {
+        "by": "css",
+        "value": "[data-expense-number='EXP-041']",
+        "exact": True,
+    }
+    assert evidence[0].evidence_type == "data_binding"
+    assert evidence[0].content_digest == binding["content_digest"]
+    assert _is_identity_source_step(
+        plan=plan,
+        flow_id="identity-flow",
+        step_id="read-expense",
+    )
+
+
+@pytest.mark.parametrize(
+    ("database", "message"),
+    [
+        ({"row_count": 0, "rows": []}, "exactly one database row"),
+        (
+            {"row_count": 1, "rows": [{"id": 41}]},
+            "identity source was not observed",
+        ),
+        (
+            {
+                "row_count": 1,
+                "rows": [{"id": [41], "expense_number": "EXP-041"}],
+            },
+            "primary key must be a scalar",
+        ),
+        (
+            {"row_count": 1, "rows": [{"id": 41, "expense_number": " "}]},
+            "business unique key must not be blank",
+        ),
+    ],
+)
+def test_identity_binding_blocks_incomplete_or_non_unique_readback(
+    database: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(_TestDataBindingBlockedError, match=message):
+        _freeze_step_bindings(
+            plan={"data_sets": [_identity_data_set()]},
+            request=_request(),
+            flow_id="identity-flow",
+            step_id="read-expense",
+            observations={"database": database},
+            variables={},
+            frozen_bindings={},
+            clock=lambda: datetime(2026, 8, 4, tzinfo=UTC),
+            source_evidence=(),
+        )
+
+
+def test_identity_binding_rejects_clock_replay_and_unsafe_locator_values() -> None:
+    plan = {"data_sets": [_identity_data_set()]}
+    observations = {
+        "database": {
+            "row_count": 1,
+            "rows": [{"id": 41, "expense_number": "EXP-041"}],
+        }
+    }
+    request = _request()
+
+    with pytest.raises(_TestDataBindingBlockedError, match="clock must be timezone-aware"):
+        _freeze_step_bindings(
+            plan=plan,
+            request=request,
+            flow_id="identity-flow",
+            step_id="read-expense",
+            observations=observations,
+            variables={},
+            frozen_bindings={},
+            clock=lambda: datetime(2026, 8, 4),
+            source_evidence=(),
+        )
+    bindings, _ = _freeze_step_bindings(
+        plan=plan,
+        request=request,
+        flow_id="identity-flow",
+        step_id="read-expense",
+        observations=observations,
+        variables={},
+        frozen_bindings={},
+        clock=lambda: datetime(2026, 8, 4, tzinfo=UTC),
+        source_evidence=(),
+    )
+    with pytest.raises(_TestDataBindingBlockedError, match="already frozen"):
+        _freeze_step_bindings(
+            plan=plan,
+            request=request,
+            flow_id="identity-flow",
+            step_id="read-expense",
+            observations=observations,
+            variables={},
+            frozen_bindings={"expense-bound": bindings[0]},
+            clock=lambda: datetime(2026, 8, 4, tzinfo=UTC),
+            source_evidence=(),
+        )
+    with pytest.raises(ValueError, match="unsafe"):
+        _render_bound_locator(
+            "expense-bound",
+            {"by": "css", "value": "[data-key='{{value}}']", "exact": True},
+            "EXP' OTHER",
+        )
+    with pytest.raises(ValueError, match="exact matching"):
+        _render_bound_locator(
+            "expense-bound",
+            {"by": "text", "value": "{{value}}", "exact": False},
+            "EXP-041",
+        )
+
+
+def test_execution_boundary_values_fail_closed_without_adapter_calls() -> None:
+    with pytest.raises(ValueError, match="event type"):
+        DataExecutionProgress(" ")
+    with pytest.raises(ValueError, match="phase is invalid"):
+        DataExecutionProgress("step", phase="verify")
+    with pytest.raises(ValueError, match="requires flow and phase"):
+        DataExecutionProgress("step", step_id="step-1")
+    with pytest.raises(ValueError, match="identity must not be blank"):
+        DataExecutionEvidence(" ", "flow", "step", "setup", "sql", "ref", "a" * 64)
+    with pytest.raises(ValueError, match="phase is invalid"):
+        DataExecutionEvidence("id", "flow", "step", "verify", "sql", "ref", "a" * 64)
+    with pytest.raises(ValueError, match="ref/digest"):
+        DataExecutionEvidence("id", "flow", "step", "setup", "sql", "", "invalid")
+    with pytest.raises(ValueError, match="must be sanitized"):
+        DataExecutionEvidence(
+            "id", "flow", "step", "setup", "sql", "ref", "a" * 64, sanitized=False
+        )
+    with pytest.raises(ValueError, match="identity must not be blank"):
+        DataExecutionRequest("result", " ", "project")
+    with pytest.raises(ValueError, match="include a timezone"):
+        DataExecutionRequest("result", "run", "project", started_at=datetime(2026, 8, 4))
+
+
+def test_variable_and_evidence_identity_helpers_reject_ambiguous_runtime_state() -> None:
+    assert _resolve_variables(
+        {"ids": ["{{expense_id}}"], "label": "expense-{{expense_id}}"},
+        {"expense_id": 41},
+    ) == {"ids": [41], "label": "expense-41"}
+    with pytest.raises(DataStepBlockedError, match="Variable missing is not available"):
+        _resolve_variables("{{missing}}", {})
+    with pytest.raises(DataStepBlockedError, match="Variables are not available"):
+        _resolve_variables("expense-{{missing}}", {})
+    assert _extract({"value": 1}, "$") == (True, {"value": 1})
+    assert _extract(["first", "second"], "1") == (True, "second")
+    assert _extract(["first", "second"], "[1]") == (False, None)
+    assert _extract({}, "broken[abc]") == (False, None)
+    assert _extract({}, "a..b") == (False, None)
+
+    evidence = DataExecutionEvidence(
+        "duplicate",
+        "flow",
+        "step",
+        "setup",
+        "sql",
+        "evidence://duplicate",
+        "a" * 64,
+    )
+    with pytest.raises(ValueError, match="must be unique"):
+        _validate_evidence_identity([evidence, evidence])
 
 
 @dataclass
@@ -353,6 +616,40 @@ def _engine(executors: dict[str, FakeExecutor]) -> DataExecutionEngine:
     )
 
 
+def _identity_data_set() -> dict[str, object]:
+    return {
+        "test_data_id": "expense-bound",
+        "identity_binding": {
+            "binding_mode": "generated",
+            "source_flow_id": "identity-flow",
+            "source_step_id": "read-expense",
+            "primary_key": {
+                "name": "id",
+                "source": "database",
+                "path": "rows[0].id",
+            },
+            "business_unique_keys": [
+                {
+                    "name": "expense_number",
+                    "source": "database",
+                    "path": "rows[0].expense_number",
+                }
+            ],
+            "screen_key": {
+                "name": "expense_number",
+                "source": "database",
+                "path": "rows[0].expense_number",
+                "locator_template": {
+                    "by": "css",
+                    "value": "[data-expense-number='{{value}}']",
+                    "exact": True,
+                },
+            },
+            "match_count": {"source": "database", "path": "row_count"},
+        },
+    }
+
+
 def _request() -> DataExecutionRequest:
     return DataExecutionRequest(
         execution_result_id="result-cross-screen",
@@ -508,5 +805,5 @@ def _assertion(
         "observe_via": observe_via,
         "subject": subject,
         "operator": operator,
-        "expected": expected,
-    }
+       "expected": expected,
+   }

@@ -25,7 +25,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         policy = _load_object(args.config, "coverage policy")
         report = _load_object(args.coverage_json, "coverage report")
-        overall_minimum, file_minimum, capabilities = _parse_policy(policy)
+        overall_minimum, file_minimum, file_overrides, capabilities = _parse_policy(
+            policy
+        )
         files = _coverage_files(report)
         total = _percent(_required_object(report, "totals"), "percent_covered")
     except (OSError, ValueError, json.JSONDecodeError) as error:
@@ -47,12 +49,13 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"FAIL {capability} {path} missing")
                 continue
             percent = _percent(summary, "percent_covered")
-            passed = percent >= file_minimum
+            required = file_overrides.get(path, file_minimum)
+            passed = percent >= required
             print(f"{'PASS' if passed else 'FAIL'} {capability} {path} {percent:.2f}%")
             if not passed:
                 failures.append(
                     f"{capability}: {path} {percent:.2f}% is below "
-                    f"required {file_minimum:.2f}%"
+                    f"required {required:.2f}%"
                 )
 
     if failures:
@@ -72,7 +75,7 @@ def _load_object(path: Path, label: str) -> dict[str, Any]:
 
 def _parse_policy(
     policy: dict[str, Any],
-) -> tuple[float, float, dict[str, tuple[str, ...]]]:
+) -> tuple[float, float, dict[str, float], dict[str, tuple[str, ...]]]:
     if policy.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"coverage policy schema_version must be {SCHEMA_VERSION}")
     overall = _bounded_percent(policy.get("overall_minimum_percent"), "overall minimum")
@@ -98,7 +101,24 @@ def _parse_policy(
             seen.add(path)
             paths.append(path)
         capabilities[raw_name] = tuple(paths)
-    return overall, file_minimum, capabilities
+
+    raw_overrides = policy.get("file_minimum_percent_overrides", {})
+    if not isinstance(raw_overrides, dict):
+        raise ValueError("coverage policy file minimum overrides must be an object")
+    overrides: dict[str, float] = {}
+    for raw_path, raw_percent in raw_overrides.items():
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ValueError("coverage policy file minimum override has an invalid file")
+        path = raw_path.replace("\\", "/")
+        if path not in seen:
+            raise ValueError(
+                f"coverage policy file minimum override is not a capability file: {path}"
+            )
+        overrides[path] = _bounded_percent(
+            raw_percent,
+            f"file minimum override for {path}",
+        )
+    return overall, file_minimum, overrides, capabilities
 
 
 def _coverage_files(report: dict[str, Any]) -> dict[str, dict[str, Any]]:

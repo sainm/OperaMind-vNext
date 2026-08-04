@@ -489,6 +489,108 @@ def test_publish_rejects_missing_scope_or_repository_registration(
 
 
 @pytest.mark.parametrize(
+    ("actor", "provider_id"),
+    [(" ", "vscode_github_copilot"), ("mcp:github-copilot", " ")],
+)
+def test_publish_rejects_blank_impact_provenance(
+    tmp_path: Path,
+    actor: str,
+    provider_id: str,
+) -> None:
+    service = _service(tmp_path)
+
+    with pytest.raises(ValueError, match="provenance must not be blank"):
+        service.publish(
+            project_id="project-1",
+            analysis_case_id="analysis-1",
+            change_request_id="change-request-1",
+            coding_task_id="coding-task-1",
+            workspace_root=tmp_path,
+            source_document_snapshot_id="document-before",
+            target_document_snapshot_id="document-after",
+            search_index_build_id="index-1",
+            document_change_refs=("structured-change-1",),
+            code_scope=_scope(),
+            actor=actor,
+            provider_id=provider_id,
+        )
+
+
+def test_build_graph_requires_exactly_one_active_framework_profile() -> None:
+    service: Any = CopilotImpactService.__new__(CopilotImpactService)
+    service._profile_repository = SimpleNamespace(
+        list_active_by_type=lambda **values: ()
+    )
+
+    with pytest.raises(ValueError, match="exactly one active CodeFrameworkProfile"):
+        service._build_graph(
+            project_id="project-1",
+            coding_task_id="coding-task-1",
+            graph_id="graph-1",
+            repository_id="repository-1",
+            repository_revision_id="revision-1",
+            workspace_root=Path("/workspace"),
+        )
+
+
+def test_build_graph_rejects_incomplete_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = {
+        "default_scan_roots": ["src/main", "src/test"],
+        "languages": ["java"],
+    }
+    service: Any = CopilotImpactService.__new__(CopilotImpactService)
+    service._connection = object()
+    service._contracts = object()
+    service._profiles = object()
+    service._profile_repository = SimpleNamespace(
+        list_active_by_type=lambda **values: (
+            SimpleNamespace(
+                profile=profile,
+                profile_version_id="profile-version-1",
+                binding_key="binding-1",
+            ),
+        )
+    )
+    captured: dict[str, object] = {}
+
+    def build_service(**values: object) -> SimpleNamespace:
+        captured["dependencies"] = values
+
+        def run(request: object, *, profile: object) -> SimpleNamespace:
+            captured["request"] = request
+            captured["profile"] = profile
+            return SimpleNamespace(
+                scan=SimpleNamespace(artifact={"scan_status": "partial"})
+            )
+
+        return SimpleNamespace(run=run)
+
+    monkeypatch.setattr(
+        "operamind.application.copilot_impact.CodeGraphBuildService",
+        build_service,
+    )
+
+    with pytest.raises(ValueError, match="Code Graph is not complete"):
+        service._build_graph(
+            project_id="project-1",
+            coding_task_id="coding-task-1",
+            graph_id="graph-1",
+            repository_id="repository-1",
+            repository_revision_id="revision-1",
+            workspace_root=Path("/workspace"),
+        )
+
+    assert captured["profile"] is profile
+    assert captured["dependencies"] == {
+        "connection": service._connection,
+        "contracts": service._contracts,
+        "profiles": service._profiles,
+    }
+
+
+@pytest.mark.parametrize(
     ("remote_url", "revision_id", "expected"),
     [
         ("git@example.test:other/repository.git", "revision-1", "remote differs"),

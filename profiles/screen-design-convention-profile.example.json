@@ -1,8 +1,9 @@
 {
   "profile_type": "DocumentConventionProfile",
   "profile_id": "screen-design-conventions-example",
-  "profile_version": "1.0.0",
+  "profile_version": "1.1.0",
   "document_type": "screen_design",
+  "fact_type": "screen_element",
   "minimum_auto_match_score": 0.8,
   "variants": [
     {
@@ -32,6 +33,40 @@
         "default_value": ["初期値", "Default", "Default Value"],
         "validation": ["バリデーション", "Validation"],
         "description": ["備考", "Description", "Notes"]
+      },
+      "stable_key_fields": ["screen_id", "element_id"],
+      "stable_key_normalizers": {
+        "screen_id": "casefold",
+        "element_id": "casefold"
+      }
+    },
+    {
+      "variant_id": "screen-item-table-en",
+      "signals": [
+        {"type": "sheet_name", "values": ["Screen Items"], "weight": 0.35},
+        {"type": "headers", "values": ["Element ID", "Type", "Default Value", "Notes"], "weight": 0.45},
+        {"type": "filename_token", "values": ["Screen Design"], "weight": 0.2}
+      ],
+      "field_aliases": {
+        "screen_id": ["Screen ID", "画面ID"],
+        "screen_name": ["Screen Name", "画面名"],
+        "element_id": ["Element ID", "Control ID", "項目名"],
+        "business_name": ["Business Name", "業務項目名"],
+        "label": ["Label", "表示ラベル"],
+        "accessible_role": ["Accessible Role", "ARIAロール"],
+        "accessible_name": ["Accessible Name", "アクセシブル名"],
+        "test_id": ["Test ID", "テストID"],
+        "placeholder": ["Placeholder", "プレースホルダー"],
+        "trigger_path": ["Trigger Path", "画面パス"],
+        "business_attribute_name": ["Business Attribute Name", "業務属性名"],
+        "business_attribute_value": ["Business Attribute Value", "業務属性値"],
+        "kind": ["Type", "Control Type", "種別"],
+        "data_type": ["Data Type", "データ型"],
+        "length": ["Length", "桁数"],
+        "required": ["Required", "必須"],
+        "default_value": ["Default Value", "Default", "初期値"],
+        "validation": ["Validation", "バリデーション"],
+        "description": ["Notes", "Description", "備考"]
       },
       "stable_key_fields": ["screen_id", "element_id"],
       "stable_key_normalizers": {

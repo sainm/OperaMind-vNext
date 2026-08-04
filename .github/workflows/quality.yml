@@ -49,23 +49,36 @@ jobs:
           ruff check .
           mypy
       - name: Regression coverage
-        run: >-
-          pytest -q
-          --ignore=tests/integration/test_live_embedding_provider.py
-          --ignore=tests/integration/test_golden_screen_change.py
-          --cov=operamind
-          --cov-report=term-missing
-          --cov-report=json:coverage.json
-          --cov-fail-under=80
+        run: |
+          mkdir -p quality-results
+          pytest -q \
+            --ignore=tests/integration/test_live_embedding_provider.py \
+            --ignore=tests/integration/test_golden_screen_change.py \
+            --junitxml=quality-results/python.xml \
+            --cov=operamind \
+            --cov-report=term-missing \
+            --cov-report=json:coverage.json \
+            --cov-fail-under=80
       - name: Critical capability coverage
+        if: always()
         run: python scripts/check_critical_coverage.py
-      - name: Upload coverage report
+      - name: Write quality summary
+        if: always()
+        run: >-
+          python scripts/write_quality_summary.py
+          --junit "Python=quality-results/python.xml"
+          --coverage-json coverage.json
+          --output "$GITHUB_STEP_SUMMARY"
+          --allow-missing
+      - name: Upload quality reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-json
-          path: coverage.json
-          if-no-files-found: error
+          name: quality-results-ubuntu
+          path: |
+            coverage.json
+            quality-results/
+          if-no-files-found: warn
 
   windows-compatibility:
     runs-on: windows-2022
@@ -89,10 +102,12 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check -r requirements.lock
           python -m pip install --no-deps -e .
-      - name: Windows runtime regression
+      - name: Windows Python regression
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force quality-results | Out-Null
           python -m pytest -q `
+            --junitxml=quality-results/windows-python.xml `
             tests/application/test_environment_file.py `
             tests/application/test_launcher.py `
             tests/application/test_local_installation.py `
@@ -101,5 +116,26 @@ jobs:
             tests/application/test_project_stack.py `
             tests/application/test_command_execution_runner.py `
             tests/infrastructure/test_orchestration_worker.py
+      - name: VS Code Extension regression
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force quality-results | Out-Null
           npm ci --prefix vscode-extension
-          npm test --prefix vscode-extension
+          npm run test:junit --prefix vscode-extension
+      - name: Write Windows quality summary
+        if: always()
+        shell: pwsh
+        run: |
+          python scripts/write_quality_summary.py `
+            --junit "Windows Python=quality-results/windows-python.xml" `
+            --junit "VS Code Extension=quality-results/vscode-extension.xml" `
+            --output "$env:GITHUB_STEP_SUMMARY" `
+            --allow-missing
+      - name: Upload Windows quality reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-results-windows
+          path: quality-results/
+          if-no-files-found: warn

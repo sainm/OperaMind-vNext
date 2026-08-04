@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Any, Protocol, cast
 
 from psycopg import Connection
 
+from operamind.application.change_automation import CHANGE_FLOW_STATE_MACHINE
 from operamind.application.change_coverage import ChangedLineCoverageEvidence
 from operamind.application.command_execution import (
     ApprovedCommandRequest,
@@ -43,6 +45,9 @@ from operamind.application.planned_business_coverage import (
     uncovered_business_rules,
 )
 from operamind.application.project_stack import detect_project_stack
+from operamind.application.test_data_coverage import (
+    validate_test_data_coverage_alignment,
+)
 from operamind.application.test_data_flow import (
     test_data_plan_channels,
     validate_test_data_plan_artifact,
@@ -69,6 +74,11 @@ from operamind.infrastructure.postgres.profile_repository import ProfileReposito
 from operamind.infrastructure.postgres.search_index_repository import SearchIndexRepository
 from operamind.infrastructure.postgres.web_control_plane_repository import (
     WebControlPlaneRepository,
+)
+from operamind.infrastructure.test_data.target_data import (
+    TargetDataProfile,
+    TargetDataProfileRepository,
+    TargetDataSecretStore,
 )
 from operamind.profiles import ProfileCatalog
 
@@ -593,42 +603,27 @@ class CopilotCodingTaskService:
                 str(context["source_orchestration_id"])
             )
             return {
-                "coding_task": _public_task_artifact(immutable_task),
-                "current_stage": task.current_stage,
-                "execution_scope": {"bound": False, "read_only": True},
+                "coding_task": _public_mcp_task(immutable_task),
+                "stage_status": _ready_stage_status(
+                    task_stage=task.current_stage,
+                    task_state=task.state,
+                ),
+                "stage_contract": _stage_contract(task.current_stage),
                 "workspace": {"root": task.workspace_root},
-                "source_ui_test_plan": bundle["test_plan"],
-                "source_test_data_plan": bundle["test_data_plan"],
-                "revision_instruction": context["instruction"],
-                "confirmed_change_summary": json.loads(str(context["confirmed_operations_json"])),
-                "change_plan": {
-                    "mode": "ui_test_plan_revision",
-                    "stage": "ui_test_revision",
-                    "steps": [
-                        (
-                            "Apply every confirmed operation to the complete natural-language UI "
-                            "TestPlan, including generation steps, variables, assertions, and "
-                            "cleanup."
-                        ),
-                        (
-                            "Regenerate the complete TestDataPlan, including cross-screen data, "
-                            "Playwright actions, UI assertions, screenshots, and cleanup."
-                        ),
-                        (
-                            "Keep one stable step_id beside every TestPlan step and map every one "
-                            "to at least one executable Playwright UI step through test_step_refs."
-                        ),
-                        (
-                            "Preserve Playwright as the primary driver. Add computer_use_fallback "
-                            "only when the confirmed change requires a non-DOM or visual operation."
-                        ),
-                        "Do not modify code or design documents.",
-                        (
-                            "Call copilot_record_change_outputs with "
-                            "output_stage=ui_test_revision, test_plan, and test_data_plan."
-                        ),
-                    ],
+                "inputs": {
+                    "source_ui_test_plan": bundle["test_plan"],
+                    "source_test_data_plan": bundle["test_data_plan"],
+                    "revision_instruction": context["instruction"],
+                    "confirmed_change_summary": json.loads(
+                        str(context["confirmed_operations_json"])
+                    ),
+                    "target_data_bindings": _public_target_data_profile(
+                        TargetDataProfileRepository(self._connection).get(
+                            str(immutable_task["project_id"])
+                        )
+                    ),
                 },
+                "constraints": {"execution_scope": {"bound": False, "read_only": True}},
             }
         automation_repository = ChangeAutomationRepository(self._connection)
         automation = automation_repository.latest_for_request(pending_task.change_request_id)
@@ -650,17 +645,19 @@ class CopilotCodingTaskService:
                     "note": confirmation.get("note"),
                     "created_at": confirmation.get("created_at"),
                 }
-        allowed_automation_stages = {
-            "document_change": {"document_generation", "document_revision"},
-            "code_scope": {"impact_analysis"},
-        }
-        if pending_task.approval_grant_id is None and automation is not None:
-            allowed = allowed_automation_stages.get(pending_task.current_stage, set())
-            if automation.get("current_stage") not in allowed and review_feedback is None:
-                raise ValueError(
-                    "現在の人工確認が完了するまで Copilot Task を実行できません: "
-                    f"{automation.get('current_stage')}"
-                )
+        if (
+            pending_task.approval_grant_id is None
+            and automation is not None
+            and not CHANGE_FLOW_STATE_MACHINE.allows_copilot_stage(
+                task_stage=pending_task.current_stage,
+                automation_stage=automation.get("current_stage"),
+                has_review_feedback=review_feedback is not None,
+            )
+        ):
+            raise ValueError(
+                "現在の人工確認が完了するまで Copilot Task を実行できません: "
+                f"{automation.get('current_stage')}"
+            )
         task = self._tasks.begin_mcp(
             coding_task_id=coding_task_id,
             workspace_root=workspace_root,
@@ -668,65 +665,33 @@ class CopilotCodingTaskService:
         )
         task_view = self._tasks.view(coding_task_id)
         if task.approval_grant_id is None:
-            if task.current_stage == "document_change":
+            if task.current_stage in {"document_change", "code_scope"}:
                 document_discovery = self._document_discovery_for_task(
                     coding_task_id, task.change_request_id
                 )
-                discovery_ready = document_discovery["status"] == "ready"
-                steps = [
-                    "Read the requirement and business rules.",
-                    (
-                        "Use only the Canonical RAG candidates in document_discovery."
-                        if discovery_ready
-                        else "Stop before editing and report the document_discovery blocker."
-                    ),
-                    (
-                        "For XLSX documents, derive bounded field updates from each "
-                        "canonical_document fact; OperaMind applies them without requiring "
-                        "the source file inside the code Workspace."
-                    ),
-                    (
-                        "Call copilot_record_change_outputs with "
-                        "output_stage=document_change, document_ids, and document_edits."
-                    ),
-                ]
-            elif task.current_stage == "code_scope":
-                document_discovery = self._document_discovery_for_task(
-                    coding_task_id, task.change_request_id
-                )
-                steps = [
-                    "Read the recorded design-document diff returned by OperaMind.",
-                    "Inspect the code Workspace without modifying it.",
-                    (
-                        "Propose only Graph-verifiable production paths, symbols, test files, "
-                        "actions, rationales, and whether each item affects UI."
-                    ),
-                    (
-                        "Call copilot_record_change_outputs with "
-                        "output_stage=code_scope and code_scope."
-                    ),
-                    "Wait for OperaMind to validate and bind the exact code execution scope.",
-                ]
             else:
                 raise ValueError(
                     "Unbound Copilot Change Task has an invalid current stage: "
                     f"{task.current_stage}"
                 )
-            return {
-                "coding_task": _public_task_artifact(cast(dict[str, object], task_view["task"])),
-                "current_stage": task.current_stage,
-                "execution_scope": {"bound": False},
-                "workspace": {"root": task.workspace_root},
-                "context_package_available": False,
+            inputs: dict[str, object] = {
+                "requirement": _public_requirement_context(immutable_task),
                 "document_discovery": _public_document_discovery(document_discovery),
-                "review_feedback": review_feedback,
-                "change_plan": {
-                    "mode": "copilot_change_task",
-                    "stage": task.current_stage,
-                    "steps": steps,
-                    "stage_order": list(CHANGE_TASK_STAGE_ORDER),
-                    "required_outputs": list(CHANGE_TASK_REQUIRED_OUTPUTS),
-                },
+            }
+            if task.current_stage == "code_scope":
+                inputs["design_changes"] = self._public_document_changes(coding_task_id)
+            if review_feedback is not None:
+                inputs["review_feedback"] = review_feedback
+            return {
+                "coding_task": _public_mcp_task(cast(dict[str, object], task_view["task"])),
+                "stage_status": _ready_stage_status(
+                    task_stage=task.current_stage,
+                    task_state=task.state,
+                ),
+                "stage_contract": _stage_contract(task.current_stage),
+                "workspace": {"root": task.workspace_root},
+                "inputs": inputs,
+                "constraints": {"execution_scope": {"bound": False}},
             }
         case_id, edit_packet_id, approval_grant_id = _bound_task_scope(task)
         context = CopilotTaskContextService(
@@ -746,16 +711,8 @@ class CopilotCodingTaskService:
         approval = cast(dict[str, object], context["approval"])
         task_workspace = cast(dict[str, object], context["workspace"])
         verification_only = not bool(packet.get("editable_files"))
-        planning_contract = (
-            _planning_contract_examples(
-                contracts_root=self._contracts.root,
-                project_id=task.project_id,
-                change_request_id=task.change_request_id,
-            )
-            if task.current_stage == "test_planning"
-            else None
-        )
-        if planning_contract is not None:
+        planning_input: dict[str, object] | None = None
+        if task.current_stage == "test_planning":
             request_record = self._requests.get_change_request(task.change_request_id)
             request_artifact = cast(dict[str, Any], request_record["artifact"])
             code_refs = self._code_scope_output(coding_task_id)
@@ -764,126 +721,119 @@ class CopilotCodingTaskService:
                 for command in cast(list[dict[str, Any]], task_view["commands"])
                 if command.get("status") == "passed" and command.get("exit_code") == 0
             )
-            planning_contract["business_coverage_contract"] = {
-                "required_coverage_percent": 100,
-                "business_requirements": copy.deepcopy(request_artifact.get("business_rules", [])),
-                "allowed_evidence": {
-                    "code_test_files": sorted(
-                        str(value) for value in cast(list[object], approval.get("test_files", []))
+            planning_input = {
+                "schema_source": "copilot_record_change_outputs.inputSchema",
+                "required_ui_scenario_ids": [],
+                "target_data_bindings": _public_target_data_profile(
+                    TargetDataProfileRepository(self._connection).get(task.project_id)
+                ),
+                "business_coverage": {
+                    "required_coverage_percent": 100,
+                    "business_requirements": copy.deepcopy(
+                        request_artifact.get("business_rules", [])
                     ),
-                    "passed_command_refs": passed_command_refs,
-                    "canonical_artifact_refs": sorted(
-                        canonical_artifact_refs_from_output(code_refs)
+                    "allowed_evidence": {
+                        "code_test_files": sorted(
+                            str(value)
+                            for value in cast(list[object], approval.get("test_files", []))
+                        ),
+                        "passed_command_refs": passed_command_refs,
+                        "canonical_artifact_refs": sorted(
+                            canonical_artifact_refs_from_output(code_refs)
+                        ),
+                        "plan_component_refs": [
+                            "ui_test_plan",
+                            "test_data_plan",
+                            "generation_flows",
+                            "cleanup",
+                            "playwright_observations",
+                        ],
+                    },
+                },
+                "test_data_coverage": {
+                    "required_coverage_percent": 100,
+                    "calculated_by": "operamind_execution_engine",
+                    "required_binding": (
+                        "every acceptance_criteria_ref x test_case_id x test_data_id"
                     ),
-                    "plan_component_refs": [
-                        "ui_test_plan",
-                        "test_data_plan",
-                        "generation_flows",
-                        "cleanup",
-                        "playwright_observations",
+                    "allowed_condition_kinds": [
+                        "field",
+                        "status",
+                        "boundary",
+                        "relationship",
                     ],
+                    "source": "actual reviewed SQL readback only",
                 },
                 "rules": [
                     (
-                        "Cover every business_rule_id with its own executable UI case. Typed "
-                        "requirement_evidence is supplemental audit context and never replaces "
-                        "an executable UI case."
+                        "各 business_rule_id を実行可能な browser UI Case で覆い、"
+                        "自然言語の全 step_id を TestDataPlan の Playwright Step に対応させる。"
                     ),
                     (
-                        "A UI case counts only when all natural-language step_ids map to "
-                        "executable TestDataPlan Playwright steps."
-                    ),
-                    "Use only the listed current-scope Evidence refs; never invent or infer refs.",
-                    (
-                        "Use code_test only with an approved test file and passed command. Use "
-                        "command_evidence, canonical_evidence, or plan_evidence only as "
-                        "supplemental audit context; none of these raises business coverage."
+                        "テストデータの項目、列挙値、関連、HTTP 形式、Locator は"
+                        "限定済み設計・コード根拠から取得し、推測しない。"
                     ),
                     (
-                        "If OperaMind reports uncovered rules, regenerate both complete plans and "
-                        "resubmit them without asking the user to find omissions."
+                        "各 test_data_id は生成または接管後、確認済み SQL readback から"
+                        "実 DB 主キー、業務 UNIQUE キー、画面キー、row_count=1 を"
+                        " identity_binding に定義する。"
                     ),
                     (
-                        "Human confirmation and UI execution are unavailable until calculated "
-                        "coverage is exactly 100 percent."
+                        "各 acceptance_criteria_ref x test_case_id x test_data_id に"
+                        " coverage_conditions を定義する。Identity Key だけの存在確認は"
+                        " Coverage に数えず、同じ SQL readback の業務項目、状態、境界値、"
+                        "関連を機械判定できる path/operator/expected で示す。全条件を正式な"
+                        " UI Step より前に実行する。Coverage 値は出力せず OperaMind が"
+                        "実 DB 値から計算する。"
+                    ),
+                    (
+                        "全 UI Step に operation_scope=screen|bound_record を明示する。"
+                        "跨画面・表レコード操作は bound_record と data_binding_ref を"
+                        "必須とし、画面キーの"
+                        " exact scope 内だけを操作する。行番号、曖昧 text、推測 locator、"
+                        "binding 対象の computer-use fallback は禁止する。"
+                    ),
+                    (
+                        "SQL を使う場合は target_data_bindings の query_binding_id と"
+                        "入力項目だけを使用し、SQL 文や接続情報を生成・要求しない。"
+                    ),
+                    (
+                        "Playwright を優先し、DOM で実行できない確認済み操作だけに"
+                        " computer_use_fallback を使う。Screenshot は機密表示を mask する。"
+                    ),
+                    (
+                        "不足要件が返った場合は両計画の完全版を再生成する。"
+                        "業務 Coverage 100% 未満では人工確認へ進まない。"
                     ),
                 ],
             }
             impact = self._artifacts.get(str(code_refs["impact_report_id"]))
             if impact is None or impact.get("artifact_type") != "ImpactReport":
                 raise RuntimeError("Copilot Change Task Impact Report Artifact is missing")
-            planning_contract["required_ui_scenario_ids"] = copy.deepcopy(
+            planning_input["required_ui_scenario_ids"] = copy.deepcopy(
                 impact.get("required_ui_scenario_refs", [])
             )
-        execution_steps = (
-            [
-                "Do not modify any file; this is a verification-only execution scope.",
-                "Call copilot_validate_task_diff and require the returned status to be no_changes.",
-            ]
-            if verification_only
-            else [
-                "Use only the editable and test paths in the validated execution scope.",
-                "Modify the code and tests required by the recorded design diff.",
-                "Call copilot_validate_task_diff before running project commands.",
-            ]
-        )
+        inputs = {
+            "requirement": _public_requirement_context(immutable_task),
+            "design_changes": self._public_document_changes(coding_task_id),
+        }
+        if planning_input is not None:
+            inputs["planning"] = planning_input
         return {
-            "coding_task": _public_task_artifact(cast(dict[str, object], task_view["task"])),
-            "current_stage": task.current_stage,
-            "execution_scope": _public_execution_scope(packet, approval),
+            "coding_task": _public_mcp_task(cast(dict[str, object], task_view["task"])),
+            "stage_status": _ready_stage_status(
+                task_stage=task.current_stage,
+                task_state=task.state,
+            ),
+            "stage_contract": _stage_contract(
+                task.current_stage,
+                verification_only=verification_only,
+            ),
             "workspace": _public_workspace(task_workspace),
-            "context_package_available": False,
-            "planning_contract": planning_contract,
-            "change_plan": {
-                "mode": "copilot_change_task",
-                "stage": task.current_stage,
-                "steps": [
-                    *execution_steps,
-                    (
-                        "Keep the returned committed_edit_result_id; use that distinct ID when "
-                        "calling copilot_record_task_result after the commit."
-                    ),
-                    (
-                        "Run every required compile/test/coverage command with "
-                        "copilot_run_task_command."
-                    ),
-                    (
-                        "After every required command passes, preserve the exact validated "
-                        "revision and call copilot_record_task_result with all command Evidence."
-                    ),
-                    (
-                        "Continue only after next_context enters test_planning. Then generate a "
-                        "natural-language UI TestPlan and executable Playwright TestDataPlan from "
-                        "the requirement, recorded design diff, and committed code diff."
-                    ),
-                    (
-                        "Give every natural-language UI TestPlan step a stable parallel step_id; "
-                        "reference it from at least one TestDataPlan UI step through "
-                        "test_step_refs, with a concrete Playwright action."
-                    ),
-                    (
-                        "Describe data generation and cleanup in business language, bind outputs "
-                        "to named variables for later screens, and include UI assertions and "
-                        "screenshot-ready observations."
-                    ),
-                    (
-                        "Use the bounded Playwright action set first. Declare "
-                        "computer_use_fallback "
-                        "only for a known DOM capability gap, with a reviewed reason, objective, "
-                        "observation set, and small max_actions limit."
-                    ),
-                    (
-                        "Call copilot_record_change_outputs with "
-                        "output_stage=test_planning, test_plan, and test_data_plan."
-                    ),
-                    (
-                        "OperaMind calculates business coverage from executable UI mappings and "
-                        "current-scope Evidence. If coverage is below 100%, use the returned "
-                        "uncovered business rules to regenerate and resubmit both complete plans."
-                    ),
-                ],
-                "stage_order": list(CHANGE_TASK_STAGE_ORDER),
-                "required_outputs": list(CHANGE_TASK_REQUIRED_OUTPUTS),
+            "inputs": inputs,
+            "constraints": {
+                "execution_scope": _public_execution_scope(packet, approval),
+                "target_project": immutable_task.get("target_project", {}),
             },
         }
 
@@ -1500,6 +1450,14 @@ class CopilotCodingTaskService:
         )
         _validate_required_ui_scenario_scope(test_plan=test_plan, impact=impact)
         blockers = validate_test_data_plan_artifact(test_data_plan)
+        if "sql" in test_data_plan_channels(test_data_plan):
+            blockers.extend(
+                _project_target_data_blockers(
+                    connection=self._connection,
+                    project_id=task.project_id,
+                    plan=test_data_plan,
+                )
+            )
         if test_data_plan_channels(test_data_plan) & {"http", "ui"} and not (
             self._requests.project_test_base_url(task.project_id)
         ):
@@ -1519,9 +1477,7 @@ class CopilotCodingTaskService:
             canonical_artifact_refs=canonical_artifact_refs_from_output(code_refs),
             required_ui_scenario_refs=tuple(
                 str(value)
-                for value in cast(
-                    list[object], impact.get("required_ui_scenario_refs", [])
-                )
+                for value in cast(list[object], impact.get("required_ui_scenario_refs", []))
             ),
         )
         if coverage["status"] != "passed" or coverage["coverage_percent"] != 100:
@@ -1622,6 +1578,14 @@ class CopilotCodingTaskService:
             ui_impacted=True,
         )
         blockers = validate_test_data_plan_artifact(test_data_plan)
+        if "sql" in test_data_plan_channels(test_data_plan):
+            blockers.extend(
+                _project_target_data_blockers(
+                    connection=self._connection,
+                    project_id=task.project_id,
+                    plan=test_data_plan,
+                )
+            )
         if test_data_plan_channels(test_data_plan) & {"http", "ui"} and not (
             self._requests.project_test_base_url(task.project_id)
         ):
@@ -1697,6 +1661,43 @@ class CopilotCodingTaskService:
                 raise
             return dict(cast(dict[str, object], basis))
 
+    def _public_document_changes(self, coding_task_id: str) -> dict[str, object]:
+        """Return the confirmed business diff needed by later Copilot stages."""
+
+        try:
+            output = self._recorded_output(coding_task_id, "document_change")
+        except ValueError:
+            output = self._code_scope_output(coding_task_id)
+        references = [
+            str(value) for value in cast(list[object], output.get("document_change_refs", []))
+        ]
+        changes: list[dict[str, object]] = []
+        for reference in references:
+            artifact = self._artifacts.get(reference)
+            if artifact is None or artifact.get("artifact_type") != "StructuredChange":
+                raise RuntimeError(
+                    f"Copilot Change Task StructuredChange input is missing: {reference}"
+                )
+            changes.append(
+                {
+                    key: copy.deepcopy(artifact[key])
+                    for key in (
+                        "change_id",
+                        "stable_key",
+                        "fact_type",
+                        "domain",
+                        "change_type",
+                        "before",
+                        "after",
+                        "summary",
+                        "confidence",
+                        "unknowns",
+                    )
+                    if key in artifact
+                }
+            )
+        return {"artifact_refs": references, "changes": changes}
+
     def _bound_change_request_case(self, change_request_id: str) -> str:
         case_id = self._requests.get_change_request(change_request_id).get("analysis_case_id")
         if not isinstance(case_id, str):
@@ -1718,6 +1719,15 @@ class CopilotCodingTaskService:
             **result,
             "committed_edit_result_id": f"{edit_result_id}-committed",
         }
+
+    def is_verification_only(self, coding_task_id: str) -> bool:
+        """Return whether the confirmed execution scope intentionally has no writable files."""
+
+        task = self._tasks.get(coding_task_id)
+        approval = self._artifacts.get(str(task.approval_grant_id))
+        if approval is None or approval.get("artifact_type") != "ApprovalGrant":
+            raise RuntimeError("Copilot Change Task Approval Grant Artifact is missing")
+        return not bool(approval.get("editable_files"))
 
     def record_result(
         self,
@@ -1957,6 +1967,14 @@ def _validate_planning_alignment(
                 "UI test case requires an executable Playwright UI step and bounded UI "
                 f"assertion: {case_id}"
             )
+    coverage_reasons = validate_test_data_coverage_alignment(
+        test_plan=test_plan,
+        test_data_plan=test_data_plan,
+    )
+    if coverage_reasons:
+        raise ValueError(
+            "Test data coverage alignment failed: " + "; ".join(coverage_reasons)
+        )
 
 
 def _validate_required_ui_scenario_scope(
@@ -1999,184 +2017,6 @@ def _payload_digest(value: object) -> str:
         default=str,
     )
     return hashlib.sha256(canonical.encode()).hexdigest()
-
-
-def _planning_contract_examples(
-    *,
-    contracts_root: Path,
-    project_id: str,
-    change_request_id: str,
-) -> dict[str, object]:
-    """Return canonical v2 shapes so Copilot never has to guess nested fields."""
-
-    examples_root = contracts_root / "examples"
-    test_plan = json.loads(
-        (examples_root / "test-plan.v2.example.json").read_text(encoding="utf-8")
-    )
-    test_data_plan = json.loads(
-        (examples_root / "test-data-plan.v2.example.json").read_text(encoding="utf-8")
-    )
-    if not isinstance(test_plan, dict) or not isinstance(test_data_plan, dict):
-        raise RuntimeError("Canonical planning examples must be JSON objects")
-    test_plan["project_id"] = project_id
-    test_plan["change_request_id"] = change_request_id
-    test_data_plan["project_id"] = project_id
-    test_data_plan["test_plan_id"] = test_plan["test_plan_id"]
-    return {
-        "instruction": (
-            "Copy these exact object shapes, replace IDs and business content, and do not add "
-            "properties. A generation step permits test_step_refs but not test_data_refs; "
-            "test_data_refs belongs on the generation flow. data_sets.setup_actions is a "
-            "declarative summary and is never executed by itself; every HTTP setup and cleanup "
-            "must also be an ordered generation_flows.steps or cleanup_steps entry. For HTTP "
-            "responses, source=response addresses the decoded response body, so bind a body ID "
-            "with path=id rather than path=body.id. Screenshots are executor Evidence and are "
-            "not a Playwright observation kind. Derive every test-data field, enum value, "
-            "required relation, and request shape from the bounded design/code evidence; never "
-            "invent an endpoint, field, status, or foreign-key ID. A mutating HTTP setup step "
-            "must assert the successful status and the returned business identity/state fields. "
-            "Use DELETE only in cleanup_steps with data_effect=deletes; setup POST/PUT/PATCH "
-            "steps must declare data_effect=creates or updates. Every target-system setup step "
-            "must declare data_effect=creates or updates and "
-            "bind a required identity from an actual response or Playwright observation; action "
-            "wording alone never proves data generation. "
-            "If the mutation response does not return those fields, add a dependent HTTP read-back "
-            "step and assert them before browser execution. If a required master-data reference "
-            "cannot be proved or looked up by an executable step, return a blocking reason instead "
-            "of generating data. Do not assume that unnamed existing target-system rows satisfy a "
-            "precondition: every v2 flow must explicitly create its required business data before "
-            "the mapped UI test steps. Use unique business-visible values, bind every created ID, "
-            "and delete every created row in cleanup_steps unless the Project explicitly provides "
-            "a disposable isolated environment. Every cleanup step must depend_on the setup step "
-            "whose side effect it reverses: a delete depends on the matching create step, and a UI "
-            "reset depends on the first UI navigation/action that establishes that page state. "
-            "This lets execution skip cleanup safely when setup stopped before that resource or "
-            "UI state "
-            "existed. The approved Project test_base_url supplies the "
-            "HTTP origin; put only origin-relative paths in the plan."
-            " Resolve locator strategies and visible labels from the bounded UI source; do not "
-            "copy locator text from the examples unless that exact label or selector exists in "
-            "the target DOM. Use every required_ui_scenario_id exactly once as a TestPlan "
-            "test_case_id; do not invent replacement scenario IDs. Every Playwright action must "
-            "declare mask_locators. Include every reviewed locator that may display credentials "
-            "or private target-system data; an empty array explicitly declares that the captured "
-            "screen has no additional sensitive content beyond the built-in password masks."
-        ),
-        "test_plan_example": test_plan,
-        "test_data_plan_example": test_data_plan,
-        "cleanup_step_example": {
-            "step_id": "reset-expense-status-filter",
-            "sequence": 1,
-            "channel": "ui",
-            "business_action": "状態の検索条件をすべてに戻す",
-            "test_step_refs": [],
-            "screen_ref": "expense-list",
-            "ui_action_ref": "reset-status-filter",
-            "playwright": {
-                "action": "select_option",
-                "locator": {"by": "label", "value": "状態"},
-                "value": "",
-                "mask_locators": [],
-                "observations": [
-                    {
-                        "key": "reset_status",
-                        "kind": "value",
-                        "locator": {"by": "label", "value": "状態"},
-                    }
-                ],
-            },
-            "inputs": {},
-            "depends_on": ["open-expense-list"],
-            "output_bindings": [],
-            "postconditions": [
-                {
-                    "assertion_id": "status-reset",
-                    "observe_via": "ui",
-                    "subject": "reset_status",
-                    "operator": "equals",
-                    "expected": "",
-                }
-            ],
-        },
-        "http_setup_step_example": {
-            "step_id": "create-expense",
-            "sequence": 1,
-            "channel": "http",
-            "business_action": "UI 検証用の経費を作成する",
-            "data_effect": "creates",
-            "test_step_refs": [],
-            "target": "POST /expense/api/save",
-            "inputs": {
-                "method": "POST",
-                "path": "/expense/api/save",
-                "json": {
-                    "expense": {
-                        "applyDate": "2026-08-02",
-                        "description": "UI 検証用",
-                        "totalAmount": 1000,
-                        "status": "申請中",
-                    },
-                    "details": [],
-                },
-            },
-            "depends_on": [],
-            "output_bindings": [
-                {
-                    "variable": "created_expense_id",
-                    "source": "response",
-                    "path": "id",
-                    "required": True,
-                }
-            ],
-            "postconditions": [
-                {
-                    "assertion_id": "expense-created",
-                    "observe_via": "api",
-                    "subject": "status_code",
-                    "operator": "equals",
-                    "expected": 200,
-                },
-                {
-                    "assertion_id": "created-expense-status",
-                    "observe_via": "response",
-                    "subject": "status",
-                    "operator": "equals",
-                    "expected": "申請中",
-                },
-                {
-                    "assertion_id": "created-expense-description",
-                    "observe_via": "response",
-                    "subject": "description",
-                    "operator": "equals",
-                    "expected": "UI 検証用",
-                },
-            ],
-        },
-        "http_cleanup_step_example": {
-            "step_id": "delete-expense",
-            "sequence": 1,
-            "channel": "http",
-            "business_action": "UI 検証用の経費を削除する",
-            "data_effect": "deletes",
-            "test_step_refs": [],
-            "target": "DELETE /expense/api/{{created_expense_id}}",
-            "inputs": {
-                "method": "DELETE",
-                "path": "/expense/api/{{created_expense_id}}",
-            },
-            "depends_on": ["create-expense"],
-            "output_bindings": [],
-            "postconditions": [
-                {
-                    "assertion_id": "expense-deleted",
-                    "observe_via": "api",
-                    "subject": "status_code",
-                    "operator": "equals",
-                    "expected": 200,
-                }
-            ],
-        },
-    }
 
 
 def _validate_planning_artifact_scope(
@@ -2225,6 +2065,210 @@ def _public_task_artifact(task: dict[str, object]) -> dict[str, object]:
         )
         if key in task
     }
+
+
+def _public_mcp_task(task: dict[str, object]) -> dict[str, object]:
+    """Expose only task identity; stage-specific business data lives in inputs."""
+
+    return {
+        key: task[key]
+        for key in (
+            "coding_task_id",
+            "change_request_id",
+            "project_id",
+            "task_summary",
+            "attempt_number",
+        )
+        if key in task
+    }
+
+
+def _public_requirement_context(task: dict[str, object]) -> dict[str, object]:
+    value = task.get("change_context")
+    context = cast(dict[str, object], value) if isinstance(value, dict) else {}
+    return {
+        key: copy.deepcopy(context[key])
+        for key in (
+            "requirement_text",
+            "source_document_ref",
+            "target_document_ref",
+            "business_rules",
+            "ambiguity_status",
+        )
+        if key in context
+    }
+
+
+def _ready_stage_status(*, task_stage: str, task_state: str) -> dict[str, object]:
+    return {
+        "task_stage": task_stage,
+        "task_state": task_state,
+        "outcome": "ready",
+        "requires_confirmation": False,
+        "next_action": "perform_current_stage",
+        "message": "現在工程の入力と制約を取得しました。",
+        "blocking_reasons": [],
+    }
+
+
+def _public_target_data_profile(profile: TargetDataProfile | None) -> dict[str, object]:
+    """Expose binding names and input contracts to Copilot, never SQL or secrets."""
+
+    if profile is None:
+        return {
+            "available": False,
+            "connection_alias": None,
+            "transaction_policy": None,
+            "bindings": [],
+        }
+    return {
+        "available": True,
+        "connection_alias": profile.connection_alias,
+        "transaction_policy": profile.transaction_policy,
+        "bindings": [
+            {
+                "query_binding_id": value.query_binding_id,
+                "operation": value.operation,
+                "target": f"{value.target_schema}.{value.target_table}",
+                "input_constraints": {
+                    key: dict(item) for key, item in value.input_constraints.items()
+                },
+                "read_assertion": dict(value.read_assertion),
+                "identity_contract": dict(value.identity_contract),
+                "cleanup_binding_id": value.cleanup_binding_id,
+                "idempotency_policy": value.idempotency_policy,
+            }
+            for value in profile.bindings
+        ],
+    }
+
+
+def _project_target_data_blockers(
+    *, connection: Connection[Any], project_id: str, plan: Mapping[str, object]
+) -> list[str]:
+    repository = TargetDataProfileRepository(connection)
+    reasons = repository.validate_plan(project_id=project_id, plan=plan)
+    if "sql" not in test_data_plan_channels(cast(dict[str, Any], plan)):
+        return reasons
+    profile = repository.get(project_id)
+    if profile is not None and not TargetDataSecretStore().configured(
+        project_id=project_id,
+        connection_alias=profile.connection_alias,
+    ):
+        reasons.append(
+            "Project Target Data connection Secret is not configured for SQL execution"
+        )
+    return sorted(set(reasons))
+
+
+def _stage_contract(stage: str, *, verification_only: bool = False) -> dict[str, object]:
+    contracts: dict[str, dict[str, object]] = {
+        "document_change": {
+            "label": "設計書変更",
+            "goal": "Canonical RAG の対象設計書を業務要件に合わせて更新する。",
+            "input_fields": ["requirement", "document_discovery"],
+            "output": {
+                "tool": "copilot_record_change_outputs",
+                "output_stage": "document_change",
+            },
+            "stop_condition": "設計書差分の記録後は人工確認を待つ。",
+            "rules": [
+                "document_discovery の ready 候補だけを使う。",
+                "XLSX は canonical_document の stable_key、field、new_value で限定更新する。",
+            ],
+        },
+        "code_scope": {
+            "label": "コード影響範囲",
+            "goal": "確認済み設計差分に対応するコードとテストを特定する。",
+            "input_fields": ["requirement", "design_changes", "document_discovery"],
+            "output": {
+                "tool": "copilot_record_change_outputs",
+                "output_stage": "code_scope",
+            },
+            "stop_condition": "影響範囲の記録後は人工確認を待つ。",
+            "rules": [
+                "Workspace のコードを変更せず読み取る。",
+                "Code Graph で検証できる Path、Symbol、Test、根拠だけを返す。",
+            ],
+        },
+        "compile_test": {
+            "label": "コード変更・コンパイル・テスト",
+            "goal": (
+                "確認済み範囲だけを変更し、差分、必須 Command、変更行 Coverage、commit を検証する。"
+            ),
+            "input_fields": ["requirement", "design_changes", "execution_scope"],
+            "output": {"tool": "copilot_record_task_result"},
+            "stop_condition": (
+                "stage_status.next_action が reload_current_task なら Task を再取得する。"
+            ),
+            "rules": [
+                (
+                    "編集可能 Path と Test Path のみを変更し、差分検証後に"
+                    "全 required_command_refs を実行する。"
+                ),
+                "全 Command 成功後に commit し、committed_edit_result_id と Evidence を記録する。",
+            ],
+        },
+        "test_planning": {
+            "label": "UI テスト計画",
+            "goal": "全業務要件を覆う実ブラウザ用 UI TestPlan と TestDataPlan を作成する。",
+            "input_fields": ["requirement", "design_changes", "planning"],
+            "output": {
+                "tool": "copilot_record_change_outputs",
+                "output_stage": "test_planning",
+            },
+            "stop_condition": "業務 Coverage 100% で計画受理後は人工確認を待つ。",
+            "rules": [
+                "copilot_record_change_outputs の inputSchema を計画形式の正とする。",
+                (
+                    "全 test_data_id に SQL readback identity_binding を定義し、"
+                    "全 UI Step の operation_scope を明示し、record UI Step は"
+                    " bound_record と data_binding_ref で一意に scope する。"
+                ),
+                (
+                    "全 AcceptanceCriteria/TestCase/TestData の組合せに、実 SQL"
+                    " readback を使う coverage_conditions を定義する。Coverage は"
+                    "自己申告せず OperaMind の実行結果に従う。"
+                ),
+                "不足要件が返った場合は両計画の完全版を再送信する。",
+            ],
+        },
+        "ui_test_revision": {
+            "label": "UI テスト計画の再作成",
+            "goal": "確認済み自然言語修正を反映し、完全な両計画を再作成する。",
+            "input_fields": [
+                "source_ui_test_plan",
+                "source_test_data_plan",
+                "revision_instruction",
+                "confirmed_change_summary",
+            ],
+            "output": {
+                "tool": "copilot_record_change_outputs",
+                "output_stage": "ui_test_revision",
+            },
+            "stop_condition": "再作成した計画の記録後は人工確認を待つ。",
+            "rules": [
+                "コード、設計書、Git 履歴を変更しない。",
+                "既存の identity_binding と data_binding_ref の決定性を維持する。",
+                (
+                    "全 AcceptanceCriteria/TestCase/TestData に対応する"
+                    " coverage_conditions を完全版で維持し、Coverage を自己申告しない。"
+                ),
+                "Playwright を優先し、確認済みの capability gap だけを fallback にする。",
+            ],
+        },
+    }
+    if stage not in contracts:
+        raise ValueError(f"Unsupported Copilot Change Task stage: {stage}")
+    result = copy.deepcopy(contracts[stage])
+    result["id"] = stage
+    if stage == "compile_test" and verification_only:
+        result["goal"] = "ファイルを変更せず、差分なしと必須 Command の成功を検証する。"
+        result["rules"] = [
+            "ファイルを変更せず、copilot_validate_task_diff の no_changes を必須とする。",
+            *cast(list[str], result["rules"])[1:],
+        ]
+    return result
 
 
 def _is_rejected_code_scope_revision(

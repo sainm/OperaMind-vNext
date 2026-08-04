@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
@@ -11,6 +12,12 @@ _HTTP_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
 _HTTP_MUTATION_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _HTTP_GENERATION_METHODS = frozenset({"POST", "PUT", "PATCH"})
 _DATA_GENERATION_EFFECTS = frozenset({"creates", "updates"})
+_UNSAFE_ORDINAL_LOCATOR = re.compile(
+    r"(?i)(:nth-(?:child|of-type)|aria-rowindex|data-(?:row-)?index|row[_-]?number)"
+)
+_TABLE_LOCATOR = re.compile(
+    r"(?i)(?:^|[\s>+~.#\[])(?:table|tbody|tr|td|grid|row)(?:$|[\s>+~.#:\[])"
+)
 
 
 class TestDataFlowSource(Protocol):
@@ -179,14 +186,23 @@ def validate_test_data_plan_artifact(plan: dict[str, Any]) -> list[str]:
         for collection in ("steps", "cleanup_steps")
         for step in cast(list[dict[str, Any]], flow.get(collection, []))
     }
-    unavailable = sorted(channels - {"http", "ui"})
+    # SQL is executable only after the Project-aware Target Data Profile gate.
+    # Fixture remains an explicitly injected test adapter, never a production channel.
+    unavailable = sorted(channels - {"http", "sql", "ui"})
     reasons.extend(
         f"Test data channel has no project-bound executor: {channel}" for channel in unavailable
     )
     if plan.get("schema_version") == "v2":
         reasons.extend(
             _validate_v2_generation_contract(
-                cast(list[dict[str, Any]], plan.get("generation_flows", []))
+                data_sets,
+                cast(list[dict[str, Any]], plan.get("generation_flows", [])),
+            )
+        )
+        reasons.extend(
+            _validate_v2_data_coverage_contract(
+                data_sets,
+                cast(list[dict[str, Any]], plan.get("generation_flows", [])),
             )
         )
     return sorted(set(reasons))
@@ -211,20 +227,59 @@ def _variables_in(value: object) -> set[str]:
     return set()
 
 
-def _validate_v2_generation_contract(flows: list[dict[str, Any]]) -> list[str]:
+def _validate_v2_generation_contract(
+    data_sets: list[dict[str, Any]],
+    flows: list[dict[str, Any]],
+) -> list[str]:
     """Reject UI plans that merely assume target-system data already exists."""
 
     reasons: list[str] = []
+    data_by_id = {str(value.get("test_data_id", "")): value for value in data_sets}
+    source_positions: dict[str, tuple[str, int]] = {}
+    bound_ui_refs: set[str] = set()
+    for test_data_id, data_set in data_by_id.items():
+        identity = data_set.get("identity_binding")
+        if not isinstance(identity, dict):
+            reasons.append(f"{test_data_id}: v2 test data requires an identity_binding")
+            continue
+        source_flow_id = str(identity.get("source_flow_id", ""))
+        source_step_id = str(identity.get("source_step_id", ""))
+        matching_flow = next(
+            (flow for flow in flows if str(flow.get("flow_id", "")) == source_flow_id),
+            None,
+        )
+        if matching_flow is None or test_data_id not in {
+            str(value) for value in cast(list[object], matching_flow.get("test_data_refs", []))
+        }:
+            reasons.append(
+                f"{test_data_id}: identity source flow must exist and reference the test data"
+            )
+            continue
+        steps = cast(list[dict[str, Any]], matching_flow.get("steps", []))
+        source_index = next(
+            (index for index, step in enumerate(steps) if step.get("step_id") == source_step_id),
+            None,
+        )
+        if source_index is None:
+            reasons.append(f"{test_data_id}: identity source step does not exist in setup")
+            continue
+        source_step = steps[source_index]
+        if source_step.get("channel") != "sql":
+            reasons.append(f"{test_data_id}: identity source must be a reviewed SQL readback step")
+        if identity.get("binding_mode") == "generated" and not any(
+            _is_explicit_data_generation_step(step) for step in steps[: source_index + 1]
+        ):
+            reasons.append(
+                f"{test_data_id}: generated identity requires an earlier explicit data "
+                "generation step"
+            )
+        source_positions[test_data_id] = (source_flow_id, source_index)
+        reasons.extend(_validate_identity_definition(test_data_id, identity))
     for flow in flows:
         flow_id = str(flow.get("flow_id", "<unknown>"))
         steps = cast(list[dict[str, Any]], flow.get("steps", []))
-        if not any(_is_explicit_data_generation_step(step) for step in steps):
-            reasons.append(
-                f"{flow_id}: v2 UI flow requires an explicit target-system data generation "
-                "step; unproved existing data is not executable test data"
-            )
         for collection in ("steps", "cleanup_steps"):
-            for step in cast(list[dict[str, Any]], flow.get(collection, [])):
+            for step_index, step in enumerate(cast(list[dict[str, Any]], flow.get(collection, []))):
                 if step.get("channel") == "http":
                     reasons.extend(
                         _validate_http_step(
@@ -233,6 +288,245 @@ def _validate_v2_generation_contract(flows: list[dict[str, Any]]) -> list[str]:
                             cleanup=collection == "cleanup_steps",
                         )
                     )
+                if step.get("channel") != "ui":
+                    continue
+                reasons.extend(_validate_ui_locator_safety(flow_id, step))
+                operation_scope = str(step.get("operation_scope", ""))
+                binding_ref = str(step.get("data_binding_ref", ""))
+                if operation_scope not in {"screen", "bound_record"}:
+                    reasons.append(
+                        f"{flow_id}/{step.get('step_id')}: v2 UI operation requires an "
+                        "explicit screen or bound_record operation_scope"
+                    )
+                elif operation_scope == "bound_record" and not binding_ref:
+                    reasons.append(
+                        f"{flow_id}/{step.get('step_id')}: bound_record operation requires "
+                        "data_binding_ref"
+                    )
+                elif operation_scope == "screen" and binding_ref:
+                    reasons.append(
+                        f"{flow_id}/{step.get('step_id')}: screen operation cannot carry "
+                        "data_binding_ref"
+                    )
+                if not binding_ref:
+                    continue
+                bound_ui_refs.add(binding_ref)
+                source = source_positions.get(binding_ref)
+                if binding_ref not in {
+                    str(value) for value in cast(list[object], flow.get("test_data_refs", []))
+                }:
+                    reasons.append(
+                        f"{flow_id}/{step.get('step_id')}: data_binding_ref is outside the flow"
+                    )
+                if (
+                    source is None
+                    or source[0] != flow_id
+                    or collection != "steps"
+                    or (step_index <= source[1])
+                ):
+                    reasons.append(
+                        f"{flow_id}/{step.get('step_id')}: bound UI operation must follow its "
+                        "identity source step in the same setup flow"
+                    )
+                action = step.get("playwright")
+                if not isinstance(action, dict) or not isinstance(action.get("locator"), dict):
+                    reasons.append(
+                        f"{flow_id}/{step.get('step_id')}: bound UI operation requires a "
+                        "relative Playwright locator"
+                    )
+                if step.get("computer_use_fallback") is not None:
+                    reasons.append(
+                        f"{flow_id}/{step.get('step_id')}: bound UI operation cannot use AI "
+                        "computer-use fallback"
+                    )
+    for test_data_id, source in source_positions.items():
+        source_flow = next(flow for flow in flows if flow.get("flow_id") == source[0])
+        later_ui = any(
+            step.get("channel") == "ui"
+            for step in cast(list[dict[str, Any]], source_flow.get("steps", []))[source[1] + 1 :]
+        )
+        if later_ui and test_data_id not in bound_ui_refs:
+            reasons.append(
+                f"{test_data_id}: post-binding UI flow requires at least one exact bound "
+                "record operation"
+            )
+    return reasons
+
+
+def _validate_v2_data_coverage_contract(
+    data_sets: list[dict[str, Any]],
+    flows: list[dict[str, Any]],
+) -> list[str]:
+    reasons: list[str] = []
+    flow_by_id = {str(value.get("flow_id", "")): value for value in flows}
+    positions: dict[tuple[str, str], int] = {}
+    test_ui_positions: list[int] = []
+    position = 0
+    for flow in flows:
+        flow_id = str(flow.get("flow_id", ""))
+        for step in cast(list[dict[str, Any]], flow.get("steps", [])):
+            positions[(flow_id, str(step.get("step_id", "")))] = position
+            if step.get("channel") == "ui" and cast(list[object], step.get("test_step_refs", [])):
+                test_ui_positions.append(position)
+            position += 1
+
+    condition_ids: list[str] = []
+    coverage_positions: list[int] = []
+    kind_operators = {
+        "field": {"equals", "not_equals", "contains", "exists", "in"},
+        "status": {"equals", "not_equals", "in"},
+        "boundary": {
+            "greater_than",
+            "greater_than_or_equal",
+            "less_than",
+            "less_than_or_equal",
+            "between",
+        },
+        "relationship": {"equals_path", "not_equals_path"},
+    }
+    for data_set in data_sets:
+        test_data_id = str(data_set.get("test_data_id", ""))
+        identity = cast(dict[str, Any], data_set.get("identity_binding") or {})
+        conditions = cast(list[dict[str, Any]], data_set.get("coverage_conditions", []))
+        if not conditions:
+            reasons.append(f"{test_data_id}: v2 test data requires executable coverage_conditions")
+        for condition in conditions:
+            condition_id = str(condition.get("condition_id", ""))
+            condition_ids.append(condition_id)
+            prefix = f"{test_data_id}/{condition_id or '<unknown>'}"
+            if condition.get("test_data_id") != test_data_id:
+                reasons.append(f"{prefix}: condition test_data_id differs from its data set")
+            if condition.get("test_case_ref") not in cast(
+                list[object], data_set.get("test_case_refs", [])
+            ):
+                reasons.append(f"{prefix}: condition TestCase is outside its data set")
+            source = (
+                str(condition.get("source_flow_id", "")),
+                str(condition.get("source_step_id", "")),
+            )
+            if source != (
+                str(identity.get("source_flow_id", "")),
+                str(identity.get("source_step_id", "")),
+            ):
+                reasons.append(
+                    f"{prefix}: condition must use the frozen identity SQL readback step"
+                )
+            source_position = positions.get(source)
+            if source_position is None:
+                reasons.append(f"{prefix}: coverage source step does not exist")
+            else:
+                coverage_positions.append(source_position)
+                flow = flow_by_id.get(source[0], {})
+                source_step = next(
+                    (
+                        value
+                        for value in cast(list[dict[str, Any]], flow.get("steps", []))
+                        if value.get("step_id") == source[1]
+                    ),
+                    None,
+                )
+                if source_step is None or source_step.get("channel") != "sql":
+                    reasons.append(f"{prefix}: coverage source must be a SQL readback")
+            kind = str(condition.get("condition_kind", ""))
+            operator = str(condition.get("operator", ""))
+            if operator not in kind_operators.get(kind, set()):
+                reasons.append(
+                    f"{prefix}: {operator or '<blank>'} is invalid for {kind or '<blank>'}"
+                )
+    if len(condition_ids) != len(set(condition_ids)):
+        reasons.append("Test data coverage condition IDs must be globally unique")
+    if (
+        coverage_positions
+        and test_ui_positions
+        and max(coverage_positions) >= min(test_ui_positions)
+    ):
+        reasons.append(
+            "All real database data coverage conditions must execute before the first "
+            "TestPlan UI step"
+        )
+    return reasons
+
+
+def _validate_identity_definition(test_data_id: str, identity: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    values = [
+        cast(dict[str, Any], identity.get("primary_key") or {}),
+        *cast(list[dict[str, Any]], identity.get("business_unique_keys") or []),
+        cast(dict[str, Any], identity.get("screen_key") or {}),
+    ]
+    names = [str(value.get("name", "")) for value in values]
+    business_names = [
+        str(value.get("name", ""))
+        for value in cast(list[dict[str, Any]], identity.get("business_unique_keys") or [])
+    ]
+    if any(not name for name in names) or len(business_names) != len(set(business_names)):
+        reasons.append(
+            f"{test_data_id}: identity key names must be non-empty and business keys unique"
+        )
+    if any(value.get("source") != "database" for value in values):
+        reasons.append(
+            f"{test_data_id}: primary, business and screen keys must come from SQL readback"
+        )
+    match_count = cast(dict[str, Any], identity.get("match_count") or {})
+    if match_count.get("source") != "database" or match_count.get("path") != "row_count":
+        reasons.append(f"{test_data_id}: unique binding must use database.row_count")
+    screen = cast(dict[str, Any], identity.get("screen_key") or {})
+    template = screen.get("locator_template")
+    if isinstance(template, dict):
+        placeholder_count = sum(
+            str(template.get(key, "")).count("{{value}}") for key in ("value", "name")
+        )
+        if placeholder_count != 1:
+            reasons.append(
+                f"{test_data_id}: screen locator template must contain exactly one "
+                "{{value}} placeholder"
+            )
+        reasons.extend(f"{test_data_id}: {reason}" for reason in _locator_safety_reasons(template))
+    return reasons
+
+
+def _validate_ui_locator_safety(flow_id: str, step: dict[str, Any]) -> list[str]:
+    action = step.get("playwright")
+    if not isinstance(action, dict):
+        return []
+    locators: list[dict[str, Any]] = []
+    for key in ("locator", "target_locator"):
+        if isinstance(action.get(key), dict):
+            locators.append(cast(dict[str, Any], action[key]))
+    locators.extend(
+        cast(dict[str, Any], observation["locator"])
+        for observation in cast(list[dict[str, Any]], action.get("observations", []))
+        if isinstance(observation.get("locator"), dict)
+    )
+    locators.extend(
+        cast(dict[str, Any], value)
+        for value in cast(list[object], action.get("mask_locators", []))
+        if isinstance(value, dict)
+    )
+    prefix = f"{flow_id}/{step.get('step_id')}"
+    reasons = [
+        f"{prefix}: {reason}" for locator in locators for reason in _locator_safety_reasons(locator)
+    ]
+    if not step.get("data_binding_ref") and any(
+        locator.get("by") == "css" and _TABLE_LOCATOR.search(str(locator.get("value", "")))
+        for locator in locators
+    ):
+        reasons.append(f"{prefix}: table locator requires data_binding_ref")
+    return reasons
+
+
+def _locator_safety_reasons(locator: Mapping[str, object]) -> list[str]:
+    value = str(locator.get("value", ""))
+    reasons: list[str] = []
+    if locator.get("exact") is False:
+        reasons.append("fuzzy locator matching is forbidden")
+    if (
+        locator.get("by") in {"text", "label", "placeholder", "alt_text", "title", "role"}
+        and locator.get("exact") is not True
+    ):
+        reasons.append("semantic/text locators must declare exact=true")
+    if _UNSAFE_ORDINAL_LOCATOR.search(value):
+        reasons.append("row-number and ordinal locators are forbidden")
     return reasons
 
 
@@ -252,6 +546,11 @@ def _is_explicit_data_generation_step(step: dict[str, Any]) -> bool:
         method, _path = _planned_http_target(step)
         return method in _HTTP_GENERATION_METHODS and any(
             value.get("source") == "response" and value.get("required") is True
+            for value in bindings
+        )
+    if step.get("channel") == "sql":
+        return any(
+            value.get("source") == "database" and value.get("required") is True
             for value in bindings
         )
     if step.get("channel") != "ui":

@@ -12,8 +12,8 @@ OperaMind の製品境界を、次の一つの変更閉ループに固定する�
   → RAG / Code Graph によるコード範囲
   → VS Code GitHub Copilot によるコード変更
   → コード差分検証
+  → コンパイル・テスト・コード Coverage 検証
   → VS Code GitHub Copilot による TestPlan / TestDataPlan 生成
-  → コンパイル・テスト
   → テストデータ生成
   → 有限 UI Step / Assertion 実行
   → 最終レポート
@@ -88,13 +88,18 @@ Web API と画面は、次の六つだけを公開する。
 - [x] Stack が確定し Profile Binding が未設定の場合だけ Code Framework／Command Profile を内部で自動登録
 - [x] Copilot Change Task に対象 Stack と固定 compile／test／build コマンドを付与（公開 Flow には内部連携情報を返さない）
 - [x] Project Stack 判定、六工程 Read Model、公開 Change Request／Project Router を逐ファイル 80% coverage gate に追加
+- [x] Project 初期化を Profile 駆動 XLSX／DOCX Onboarding に変更し、設計書識別・Canonical 文書・RAG 索引を PostgreSQL Lease 付きバックグラウンド Stage として保存。設定更新、再スキャン、再索引、Preflight、失敗 Stage 再試行を Web に追加
 - [x] Copilot 可視 MCP を統一 Change Task 用の五 Tool に限定し、旧 Case／Impact／Grant／Packet／UI 直接 Tool を削除
 - [x] Web の `flow/progress` 変更 API を削除し、TestDataPlan の予約・実行・Closure 更新を Web プロセス内の内部 Coordinator に移管
 - [x] 自動化済み Approval／Impact／EditPacket／Orchestration／UI／Closure の旧手動 CLI 12 件と専用 CLI テストを削除（内部サービス、監査、readiness、復旧 Worker は維持）
 - [x] 新 Change Task と競合する旧 dual-entry Change Loop CLI、停止済み monolithic P6 Executor、専用 Canonical Authorizer を削除
 - [x] 呼び出し元と設定を失った汎用 Orchestration Worker CLI を削除し、Profile drift 復旧用の専用 Worker と共通安全実装だけを維持
 - [x] Web の工程／成果物フィールドを六工程の allowlist に固定し、未知の内部フィールドを既定で非表示化
-- [x] Copilot MCP の進捗応答を六工程 `flow_status`、編集 Context を有効なファイル／Command 制約だけに限定し、Automation Run／Edit Packet／Approval／Task／Lease／Worker の返却と旧手動 Automation 参照／再開メソッドを削除
+- [x] Copilot MCP の応答を共通 `stage_status` と工程別 `inputs`／`constraints`／`stage_contract` に統一し、Automation Run／Edit Packet／Approval／Task／Lease／Worker を非公開化
+- [x] VS Code Copilot の起動 Prompt を現在工程の目的・入力・出力・停止条件に限定し、MCP の重複 `next_context` と完全 JSON テキスト出力を削除
+- [x] `ChangeFlowStateMachine` を Automation 遷移、Web 六工程、MCP 確認待ち、Copilot 実行可否、Coordinator 自動実行の唯一の状態解釈にし、未知 Stage／Status と矛盾する終端状態を fail closed にする
+- [x] Coordinator の全 Project／Change Request 走査を廃止し、自動実行待ち・実行中復旧・期限切れ Lease を DB の有界候補 Query と専用 Index で取得する
+- [x] TestDataPlan 実行を PostgreSQL の Owner Lease／Heartbeat で排他し、期限切れまたは試行上限到達時はデータ操作を再実行せず中断結果へ fail closed に回復する
 - [x] 五つの Copilot MCP Tool の Context／Command／Diff／Result 応答と Bridge 通知を allowlist 化し、Snapshot、Search Index、内部 Artifact、Authorization、Claim／Lease 情報を非公開化
 - [x] 残存していた Dataset の documents／requirement dual-entry、手動 Analysis Start、StructuredChange Review、Code Scope CLI と専用 Planner／Batch／テスト／文書を削除
 - [x] 旧 MCP／Web の公開先を失った Control Plane Case／Impact／UI Plan／Validation Query と UI Knowledge Review Query 層を削除
@@ -116,14 +121,19 @@ Web API と画面は、次の六つだけを公開する。
 - [x] Copilot Impact と並存していた旧 deterministic Impact Report／Code Scope／Code Graph Query 管線を削除し、現行 Orchestration の Impact と graph artifact に統一
 - [x] 内部 XLSX Proposal Writer／Workspace Editor を削除し、文書・コード変更は VS Code GitHub Copilot の限定 Change Task と受領差分だけに統一
 - [x] production package 内の PostgreSQL テスト helper を `tests/support` へ移し、`BusinessDataTemplate` を廃止して跨画面データを直接 TestDataPlan へ統合
+- [x] Project Target Data Profile を追加し、確認済み `query_binding_id` だけを SQL TestDataPlan に公開。対象 DB Secret はユーザー領域へ隔離し、型／長さ／必須／列挙・業務制約、実 Column、read-after-write、cleanup、Transaction、冪等方針を Plan 確認と production 実行の共通 Gate にした。Fixture は test injection 専用のまま維持
+- [x] TestDataPlan の各 Test Data を実 DB 主キー／業務一意キー／画面識別キーへ一意に Binding し、Run 固有 digest と Evidence を固定。跨画面／表 UI を exact Binding Scope に限定し、0 件・複数件・drift・行番号・曖昧 Text・AI 推測を fail closed にした
+- [x] AcceptanceCriteria／TestCase／TestData の全組合せを Test Data Coverage の母数に固定し、確認済み SQL readback の実測値で項目／状態／境界値／関連関係を検証。期待値・実測値・判定・digest・Evidence を永続化し、100% 未満では TestPlan UI Step を開始しない Gate を追加
 - [x] 過去 source tree に結び付いた自動生成 UI／TestData／full-regression Evidence を削除し、再採取が必要な Readiness gate を pending へ戻す
 - [x] 未登録だった `CopilotImpactContext` を Core Contract に追加し、Task Scheduler の旧 `UiExecutionPlan`／誤った `ChangeOrchestration` 出力型を現行五 Artifact に修正
 - [x] テストだけが利用していた Application の Unresolved Evidence 再 export wrapper を削除し、実装と Repository の直接依存へ統一
 - [ ] 対象 Spring Boot 工程の Repository パスを Project に登録し、Gradle Wrapper による実ビルド Evidence を採取
-- [ ] Microsoft Edge / Playwright live E2E Evidence（検証端末に Edge が未導入）
+- [ ] 現在の Embedding Profile と実ローカル Provider を使った RAG 検索 Evidence を最終ソース Commit に再固定
+- [ ] Microsoft Edge / Playwright live E2E と Screenshot Evidence を現在の対象 Deployment に再固定
 - [ ] VS Code GitHub Copilot による一件の実変更閉ループを完走し、六工程と最終レポートを確認
 - [ ] 最終ソース Commit と対象 Deployment に結び付いた zero-failure／zero-skip の `full_local_regression` Evidence を再生成
 - [x] `local_files` Workspace に外部送信しない内部 Git 基線を作成し、前後 Diff、Code Scope、結果 Revision と Command Evidence を同じ方式で固定する
+- [x] Project ごとの設計書構造を Copilot Task で学習し、100% Sample Coverage の確認済み Profile Version Set だけで Canonical／RAG を更新する
 - [ ] Windows native で Web、MCP、Command 実行、Process tree 停止を統合確認し、POSIX 固有の実行 Path と Signal 前提を解消
 
 未完了項目が残る間、この文書を「再構成完了」の証拠として扱わない。

@@ -108,6 +108,15 @@ class WorksheetDocumentSignalExtractor(DocumentSignalExtractor, Protocol):
     ) -> tuple[ObservedRecord, ...]: ...
 
 
+@runtime_checkable
+class LearningStructureSignalExtractor(DocumentSignalExtractor, Protocol):
+    """Optional structure-only view that excludes changing business row values."""
+
+    def extract_learning_structure(
+        self, path: Path
+    ) -> tuple[tuple[str, DocumentSignals], ...]: ...
+
+
 class DocumentSignalExtractorRegistry:
     """Select a format adapter by exact, case-insensitive file suffix."""
 
@@ -154,6 +163,16 @@ class DocumentSignalExtractorRegistry:
             return ()
         return extractor.extract_sheet_signals(path)
 
+    def extract_learning_structure(
+        self, path: Path
+    ) -> tuple[tuple[str, DocumentSignals], ...]:
+        """Return headings and header rows without mutable business data."""
+
+        extractor = self._extractor_for(path)
+        if not isinstance(extractor, LearningStructureSignalExtractor):
+            return ((path.name, extractor.extract(path)),)
+        return extractor.extract_learning_structure(path)
+
     def extract_records_for_sheet(
         self,
         path: Path,
@@ -172,6 +191,12 @@ class DocumentSignalExtractorRegistry:
         """Return the implementation and parser-library version selected for one path."""
 
         return self._extractor_for(path).extractor_ref
+
+    @property
+    def supported_suffixes(self) -> frozenset[str]:
+        """Return the exact, normalized file suffixes accepted by this registry."""
+
+        return frozenset(self._by_suffix)
 
     def _extractor_for(self, path: Path) -> DocumentSignalExtractor:
         extractor = self._by_suffix.get(path.suffix.casefold())
@@ -296,6 +321,62 @@ class XlsxSignalExtractor:
                             headings=tuple(headings),
                             headers=tuple(headers),
                             business_terms=tuple(business_terms),
+                        ),
+                    )
+                )
+        finally:
+            workbook.close()
+        return tuple(result)
+
+    def extract_learning_structure(
+        self, path: Path
+    ) -> tuple[tuple[str, DocumentSignals], ...]:
+        checked_path = _validate_office_archive(path, self.limits)
+        try:
+            workbook = load_workbook(
+                checked_path,
+                read_only=True,
+                data_only=False,
+                keep_links=False,
+            )
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            SyntaxError,
+            ParseError,
+            InvalidFileException,
+            zipfile.BadZipFile,
+        ) as error:
+            raise OfficeDocumentError(f"Cannot parse XLSX document: {checked_path}") from error
+        result: list[tuple[str, DocumentSignals]] = []
+        try:
+            for worksheet in workbook.worksheets:
+                headings: list[str] = []
+                headers: tuple[str, ...] = ()
+                for row in worksheet.iter_rows(
+                    min_row=1,
+                    max_row=self.limits.max_scan_rows,
+                    max_col=self.limits.max_scan_columns,
+                    values_only=True,
+                ):
+                    values = _text_values(row)
+                    if not values:
+                        continue
+                    if len(values) == 1 and not headers:
+                        headings.extend(values)
+                        continue
+                    if len(values) >= 2:
+                        headers = tuple(values)
+                        break
+                result.append(
+                    (
+                        worksheet.title,
+                        DocumentSignals.from_raw(
+                            filename=checked_path.name,
+                            sheet_names=(worksheet.title,),
+                            headings=tuple(headings),
+                            headers=headers,
                         ),
                     )
                 )
@@ -696,6 +777,52 @@ class DocxSignalExtractor:
                         )
                     )
         return tuple(records)
+
+    def extract_learning_structure(
+        self, path: Path
+    ) -> tuple[tuple[str, DocumentSignals], ...]:
+        checked_path = _validate_office_archive(path, self.limits)
+        try:
+            document = Document(str(checked_path))
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            SyntaxError,
+            ParseError,
+            OpcError,
+            zipfile.BadZipFile,
+        ) as error:
+            raise OfficeDocumentError(f"Cannot parse DOCX document: {checked_path}") from error
+        headings = tuple(
+            value
+            for paragraph in document.paragraphs[: self.limits.max_paragraphs]
+            if (value := _text_value(paragraph.text)) is not None
+            if (
+                (paragraph.style.name if paragraph.style is not None else "")
+                .casefold()
+                .startswith("heading")
+                or "見出し" in (paragraph.style.name if paragraph.style is not None else "")
+            )
+        )
+        headers = tuple(
+            value
+            for table in document.tables
+            if table.rows
+            for value in _text_values(
+                cell.text for cell in table.rows[0].cells[: self.limits.max_scan_columns]
+            )
+        )
+        return (
+            (
+                "document",
+                DocumentSignals.from_raw(
+                    filename=checked_path.name,
+                    headings=headings,
+                    headers=headers,
+                ),
+            ),
+        )
 
 
 def _validate_office_archive(path: Path, limits: ExtractionLimits) -> Path:

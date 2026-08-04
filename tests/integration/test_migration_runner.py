@@ -49,6 +49,35 @@ def test_migrations_apply_once_and_record_checksum() -> None:
                 """
             )
             event_constraint = str(cursor.fetchone()[0])
+            cursor.execute(
+                """
+                SELECT data_type
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'project_target_data_query_bindings'
+                  AND column_name = 'identity_contract'
+                """
+            )
+            identity_contract_type = cursor.fetchone()
+            cursor.execute(
+                """
+                SELECT conname
+                FROM pg_constraint
+                WHERE connamespace = current_schema()::regnamespace
+                  AND conrelid = 'test_data_identity_bindings'::regclass
+                ORDER BY conname
+                """
+            )
+            identity_binding_constraints = {str(row[0]) for row in cursor.fetchall()}
+            cursor.execute(
+                """
+                SELECT pg_get_constraintdef(oid)
+                FROM pg_constraint
+                WHERE conname = 'test_data_execution_evidence_type_valid'
+                  AND connamespace = current_schema()::regnamespace
+                """
+            )
+            evidence_type_constraint = str(cursor.fetchone()[0])
         drop_isolated_schema(connection, schema_name)
 
     assert first == (
@@ -121,6 +150,15 @@ def test_migrations_apply_once_and_record_checksum() -> None:
         "0067",
         "0068",
         "0069",
+        "0070",
+        "0071",
+        "0072",
+        "0073",
+        "0074",
+        "0075",
+        "0076",
+        "0077",
+        "0078",
     )
     assert second == ()
     assert rows == [
@@ -457,8 +495,63 @@ def test_migrations_apply_once_and_record_checksum() -> None:
             "verification_only_execution_scope",
             catalog.migrations[68].checksum,
         ),
+        (
+            "0070",
+            "main_flow_coordinator_candidates",
+            catalog.migrations[69].checksum,
+        ),
+        (
+            "0071",
+            "test_data_execution_leases",
+            catalog.migrations[70].checksum,
+        ),
+        (
+            "0072",
+            "project_onboarding",
+            catalog.migrations[71].checksum,
+        ),
+        (
+            "0073",
+            "project_document_profile_learning",
+            catalog.migrations[72].checksum,
+        ),
+        (
+            "0074",
+            "project_target_data_profiles",
+            catalog.migrations[73].checksum,
+        ),
+        (
+            "0075",
+            "test_data_identity_bindings",
+            catalog.migrations[74].checksum,
+        ),
+        (
+            "0076",
+            "test_data_binding_evidence_scope",
+            catalog.migrations[75].checksum,
+        ),
+        (
+            "0077",
+            "test_data_coverage_evidence",
+            catalog.migrations[76].checksum,
+        ),
+        (
+            "0078",
+            "project_onboarding_active_unique",
+            catalog.migrations[77].checksum,
+        ),
     ]
     assert "document_discovery_bound" in event_constraint
+    assert identity_contract_type == ("jsonb",)
+    assert {
+        "test_data_identity_bindings_run_fk",
+        "test_data_identity_bindings_source_step_fk",
+        "test_data_identity_bindings_evidence_scope_fk",
+        "test_data_identity_bindings_run_data_unique",
+        "test_data_identity_bindings_evidence_ref_unique",
+    }.issubset(identity_binding_constraints)
+    assert "data_binding" in evidence_type_constraint
+    assert "data_coverage" in evidence_type_constraint
 
 
 @pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
@@ -685,6 +778,15 @@ def test_applied_migration_checksum_mismatch_is_rejected(tmp_path: Path) -> None
         "0067_command_coverage_evidence.sql",
         "0068_copilot_document_discovery_event.sql",
         "0069_verification_only_execution_scope.sql",
+        "0070_main_flow_coordinator_candidates.sql",
+        "0071_test_data_execution_leases.sql",
+        "0072_project_onboarding.sql",
+        "0073_project_document_profile_learning.sql",
+        "0074_project_target_data_profiles.sql",
+        "0075_test_data_identity_bindings.sql",
+        "0076_test_data_binding_evidence_scope.sql",
+        "0077_test_data_coverage_evidence.sql",
+        "0078_project_onboarding_active_unique.sql",
     ):
         (tmp_path / version).write_text(
             (ROOT / "migrations" / version).read_text(encoding="utf-8"),
@@ -701,6 +803,88 @@ def test_applied_migration_checksum_mismatch_is_rejected(tmp_path: Path) -> None
         with pytest.raises(MigrationIntegrityError, match="Checksum mismatch"):
             MigrationRunner(connection, tampered_catalog).apply()
         drop_isolated_schema(connection, schema_name)
+
+
+@pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
+def test_active_onboarding_uniqueness_keeps_run_owned_by_active_learning() -> None:
+    assert DATABASE_URL is not None
+    catalog = MigrationCatalog.load(ROOT / "migrations")
+    through_learning_coverage = MigrationCatalog(catalog.migrations[:77])
+    with psycopg.connect(DATABASE_URL) as connection:
+        schema_name = create_isolated_schema(connection)
+        MigrationRunner(connection, through_learning_coverage).apply()
+        with connection.cursor() as cursor:
+            cursor.execute("INSERT INTO projects (project_id, name) VALUES ('upgrade', 'Upgrade')")
+            cursor.execute(
+                """
+                INSERT INTO project_workspaces (
+                    project_id, workspace_root, source_control_kind, configured_by
+                ) VALUES ('upgrade', '/workspace/upgrade', 'local_files', 'test')
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO project_onboarding_runs (
+                    onboarding_run_id, project_id, settings_revision,
+                    requested_action, status, current_stage, requested_by,
+                    requested_at, updated_at
+                ) VALUES (
+                    'waiting-run', 'upgrade', 1, 'initialize', 'queued', 'learn', 'test',
+                    clock_timestamp() - interval '2 minutes',
+                    clock_timestamp() - interval '2 minutes'
+                )
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO project_document_learning_runs (
+                    learning_run_id, project_id, onboarding_run_id, settings_revision,
+                    requested_by, source_structure, source_structure_digest, sample_count
+                ) VALUES (
+                    'active-learning', 'upgrade', 'waiting-run', 1, 'test',
+                    '{"samples": [{"sample_id": "sample-1"}]}'::jsonb,
+                    repeat('a', 64), 1
+                )
+                """
+            )
+            cursor.execute(
+                """
+                UPDATE project_onboarding_runs
+                SET status = 'waiting_for_profile', learning_run_id = 'active-learning'
+                WHERE onboarding_run_id = 'waiting-run'
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO project_onboarding_runs (
+                    onboarding_run_id, project_id, settings_revision,
+                    requested_action, status, current_stage, requested_by,
+                    requested_at, updated_at
+                ) VALUES (
+                    'newer-run', 'upgrade', 1, 'rescan', 'queued', 'discover', 'test',
+                    clock_timestamp() - interval '1 minute',
+                    clock_timestamp() - interval '1 minute'
+                )
+                """
+            )
+
+        assert MigrationRunner(connection, catalog).apply() == ("0078",)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT onboarding_run_id, status, learning_run_id
+                FROM project_onboarding_runs
+                WHERE project_id = 'upgrade'
+                ORDER BY onboarding_run_id
+                """
+            )
+            rows = cursor.fetchall()
+        drop_isolated_schema(connection, schema_name)
+
+    assert rows == [
+        ("newer-run", "superseded", None),
+        ("waiting-run", "waiting_for_profile", "active-learning"),
+    ]
 
 
 @pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
@@ -1097,6 +1281,15 @@ def test_locator_observation_migration_upgrades_candidate_identity_with_existing
         "0067",
         "0068",
         "0069",
+        "0070",
+        "0071",
+        "0072",
+        "0073",
+        "0074",
+        "0075",
+        "0076",
+        "0077",
+        "0078",
     )
     assert candidates == [
         ("knowledge-v1", "shared-status-label"),
@@ -1206,6 +1399,15 @@ def test_profile_rebuild_lifecycle_migrates_legacy_requests_fail_closed() -> Non
             "0067",
             "0068",
             "0069",
+            "0070",
+            "0071",
+            "0072",
+            "0073",
+            "0074",
+            "0075",
+            "0076",
+            "0077",
+            "0078",
         )
         with connection.cursor() as cursor:
             cursor.execute(
@@ -1340,6 +1542,15 @@ def test_snapshot_variant_provenance_migration_backfills_legacy_facts() -> None:
             "0067",
             "0068",
             "0069",
+            "0070",
+            "0071",
+            "0072",
+            "0073",
+            "0074",
+            "0075",
+            "0076",
+            "0077",
+            "0078",
         )
         with connection.cursor() as cursor:
             cursor.execute(

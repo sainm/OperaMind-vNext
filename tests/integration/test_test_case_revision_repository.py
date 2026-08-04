@@ -11,6 +11,7 @@ from uuid import uuid4
 import psycopg
 import pytest
 from psycopg import sql
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.types.json import Jsonb
 
 from operamind.application.change_closure_service import ChangeClosureService
@@ -40,6 +41,7 @@ from operamind.application.test_data_execution_service import (
     TestDataExecutionServiceRequest as DataExecutionServiceRequest,
 )
 from operamind.contracts import ContractCatalog
+from operamind.infrastructure.browser import LocalEvidenceStore
 from operamind.infrastructure.postgres import (
     ArtifactRepository,
     ChangeClosureRepository,
@@ -58,6 +60,11 @@ from operamind.infrastructure.postgres import (
 )
 from operamind.infrastructure.postgres import (
     TestDataExecutionRunWrite as DataExecutionRunWrite,
+)
+from operamind.infrastructure.test_data import (
+    ProjectSqlTestDataExecutor,
+    TargetDataProfileRepository,
+    TargetDataSecretStore,
 )
 
 ROOT = Path(__file__).parents[2]
@@ -91,6 +98,204 @@ class FixtureExecutor:
                 ),
             ),
         )
+
+
+@pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
+def test_real_identity_binding_is_persisted_with_same_run_evidence(
+    tmp_path: Path,
+) -> None:
+    assert DATABASE_URL is not None
+    suffix = uuid4().hex
+    control_schema = f"identity_persist_{suffix}"
+    target_schema = f"identity_target_{suffix}"
+    target_role = f"identity_role_{suffix[:16]}"
+    target_password = uuid4().hex
+    parameters = conninfo_to_dict(DATABASE_URL)
+    control_dsn = make_conninfo(
+        "",
+        **{
+            **parameters,
+            "options": f"-c search_path={control_schema}",
+        },
+    )
+    target_dsn = (
+        f"postgresql://{target_role}:{target_password}@127.0.0.1:"
+        f"{parameters.get('port', '5432')}/{parameters['dbname']}"
+    )
+    with psycopg.connect(DATABASE_URL) as connection:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(control_schema))
+                )
+                cursor.execute(
+                    sql.SQL("SET search_path TO {}").format(sql.Identifier(control_schema))
+                )
+            MigrationRunner(connection, MigrationCatalog.load(ROOT / "migrations")).apply()
+            contracts = ContractCatalog.load(ROOT / "contracts")
+            bundle = _source_bundle()
+            bundle["test_data_plan"] = _persisted_identity_plan(target_schema)
+            _seed_scope(connection, contracts, bundle)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO project_workspaces (
+                        project_id, workspace_root, source_control_kind, configured_by
+                    ) VALUES ('visiondemo', '/tmp/identity-persist', 'git', 'integration')
+                    """
+                )
+                cursor.execute(
+                    sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(target_schema))
+                )
+                cursor.execute(
+                    sql.SQL(
+                        """
+                        CREATE TABLE {}.expenses (
+                            id bigserial PRIMARY KEY,
+                            expense_number varchar(40) NOT NULL UNIQUE,
+                            status varchar(20) NOT NULL
+                        )
+                        """
+                    ).format(sql.Identifier(target_schema))
+                )
+                cursor.execute(
+                    sql.SQL(
+                        "INSERT INTO {}.expenses (expense_number, status) VALUES (%s, %s)"
+                    ).format(sql.Identifier(target_schema)),
+                    ("EXP-PERSIST-001", "RETURNED"),
+                )
+                cursor.execute(
+                    sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
+                        sql.Identifier(target_role),
+                        sql.Literal(target_password),
+                    )
+                )
+                cursor.execute(
+                    sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+                        sql.Identifier(target_schema),
+                        sql.Identifier(target_role),
+                    )
+                )
+                cursor.execute(
+                    sql.SQL("GRANT SELECT ON {}.expenses TO {}").format(
+                        sql.Identifier(target_schema),
+                        sql.Identifier(target_role),
+                    )
+                )
+            TargetDataProfileRepository(connection).replace(
+                project_id="visiondemo",
+                connection_alias="target_test_db",
+                transaction_policy="per_binding_transaction",
+                bindings=[_persisted_identity_query_binding(target_schema)],
+                reviewed_by="integration",
+            )
+            secrets = TargetDataSecretStore(tmp_path / "secrets")
+            secrets.put(
+                project_id="visiondemo",
+                connection_alias="target_test_db",
+                connection_dsn=target_dsn,
+            )
+            connection.commit()
+
+            started_at = datetime.now(UTC)
+            executed = DataExecutionService(
+                connection=connection,
+                contracts=contracts,
+                executors={
+                    "sql": ProjectSqlTestDataExecutor(
+                        control_database_url=control_dsn,
+                        evidence_store=LocalEvidenceStore(tmp_path / "evidence"),
+                        secret_store=secrets,
+                    )
+                },
+            ).execute(
+                DataExecutionServiceRequest(
+                    execution_result_id="identity-persist-result",
+                    run_id="identity-persist-run",
+                    orchestration_id="orchestration-v1",
+                    test_data_plan_id="test-data-plan-v1",
+                    approval_grant_id="grant-1",
+                    project_id="visiondemo",
+                    actor="integration",
+                    started_at=started_at,
+                )
+            )
+
+            assert executed.artifact["status"] == "passed", executed.artifact[
+                "failure_reasons"
+            ]
+            binding = executed.artifact["data_bindings"][0]
+            coverage = executed.artifact["data_coverage"]
+            assert coverage["coverage_percent"] == 100
+            coverage_proof = coverage["proofs"][0]
+            assert coverage_proof["actual"] == "RETURNED"
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT test_data_id, primary_key, business_unique_keys,
+                           screen_key, screen_locator, match_count,
+                           content_digest, evidence_ref
+                    FROM test_data_identity_bindings
+                    WHERE run_id = 'identity-persist-run'
+                    """
+                )
+                stored_binding = cursor.fetchone()
+                cursor.execute(
+                    """
+                    SELECT evidence_type, content_digest, evidence_ref
+                    FROM test_data_execution_evidence
+                    WHERE run_id = 'identity-persist-run'
+                      AND evidence_type = 'data_binding'
+                    """
+                )
+                stored_evidence = cursor.fetchone()
+                cursor.execute(
+                    """
+                    SELECT evidence_type, content_digest, evidence_ref
+                    FROM test_data_execution_evidence
+                    WHERE run_id = 'identity-persist-run'
+                      AND evidence_type = 'data_coverage'
+                    """
+                )
+                stored_coverage_evidence = cursor.fetchone()
+            assert stored_binding == (
+                "expense-data",
+                binding["primary_key"],
+                binding["business_unique_keys"],
+                binding["screen_key"],
+                binding["screen_locator"],
+                1,
+                binding["content_digest"],
+                binding["evidence_ref"],
+            )
+            assert stored_evidence == (
+                "data_binding",
+                binding["content_digest"],
+                binding["evidence_ref"],
+            )
+            assert stored_coverage_evidence == (
+                "data_coverage",
+                coverage_proof["content_digest"],
+                coverage_proof["evidence_ref"],
+            )
+        finally:
+            connection.rollback()
+            with connection.cursor() as cursor:
+                cursor.execute("SET search_path TO public")
+                cursor.execute(
+                    sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(
+                        sql.Identifier(control_schema)
+                    )
+                )
+                cursor.execute(
+                    sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(
+                        sql.Identifier(target_schema)
+                    )
+                )
+                cursor.execute(
+                    sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(target_role))
+                )
+            connection.commit()
 
 
 @pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
@@ -413,6 +618,48 @@ def test_copilot_ui_plan_regeneration_persists_v2_plans_before_new_execution() -
                     "test_case_refs": ["expense-case"],
                     "setup_actions": [],
                     "cleanup_policy": "isolated_environment",
+                    "identity_binding": {
+                        "binding_mode": "generated",
+                        "source_flow_id": "expense-ui-flow-v2",
+                        "source_step_id": "read-expense-identity-v2",
+                        "primary_key": {
+                            "name": "id",
+                            "source": "database",
+                            "path": "rows[0].id",
+                        },
+                        "business_unique_keys": [
+                            {
+                                "name": "expense_number",
+                                "source": "database",
+                                "path": "rows[0].expense_number",
+                            }
+                        ],
+                        "screen_key": {
+                            "name": "expense_number",
+                            "source": "database",
+                            "path": "rows[0].expense_number",
+                            "locator_template": {
+                                "by": "css",
+                                "value": "[data-expense-number='{{value}}']",
+                                "exact": True,
+                            },
+                        },
+                        "match_count": {"source": "database", "path": "row_count"},
+                    },
+                    "coverage_conditions": [
+                        {
+                            "condition_id": "expense-status-condition-v2",
+                            "criterion_ref": "expense-criterion",
+                            "test_case_ref": "expense-case",
+                            "test_data_id": "expense-data",
+                            "condition_kind": "status",
+                            "source_flow_id": "expense-ui-flow-v2",
+                            "source_step_id": "read-expense-identity-v2",
+                            "path": "rows[0].status",
+                            "operator": "equals",
+                            "expected": "RETURNED",
+                        }
+                    ],
                 }
             ],
             "generation_flows": [
@@ -462,12 +709,33 @@ def test_copilot_ui_plan_regeneration_persists_v2_plans_before_new_execution() -
                             ],
                         },
                         {
-                            "step_id": "open-list-v2",
+                            "step_id": "read-expense-identity-v2",
                             "sequence": 2,
+                            "channel": "sql",
+                            "business_action": "登録した経費の識別子を一意に読み戻す",
+                            "test_step_refs": [],
+                            "target": "read_expense_identity",
+                            "inputs": {"expense_id": "{{expense_id}}"},
+                            "depends_on": ["create-expense-data-v2"],
+                            "output_bindings": [],
+                            "postconditions": [
+                                {
+                                    "assertion_id": "expense-identity-unique-v2",
+                                    "observe_via": "database",
+                                    "subject": "row_count",
+                                    "operator": "equals",
+                                    "expected": 1,
+                                }
+                            ],
+                        },
+                        {
+                            "step_id": "open-list-v2",
+                            "sequence": 3,
                             "channel": "ui",
                             "business_action": "経費一覧画面を開く",
                             "screen_ref": "expense-list",
                             "ui_action_ref": "open",
+                            "operation_scope": "screen",
                             "playwright": {
                                 "action": "goto",
                                 "path": "/expense",
@@ -475,7 +743,7 @@ def test_copilot_ui_plan_regeneration_persists_v2_plans_before_new_execution() -
                                 "observations": [{"key": "page_title", "kind": "title"}],
                             },
                             "inputs": {},
-                            "depends_on": ["create-expense-data-v2"],
+                            "depends_on": ["read-expense-identity-v2"],
                             "output_bindings": [],
                             "postconditions": [
                                 {
@@ -484,6 +752,50 @@ def test_copilot_ui_plan_regeneration_persists_v2_plans_before_new_execution() -
                                     "subject": "page_title",
                                     "operator": "contains",
                                     "expected": "経費",
+                                }
+                            ],
+                        },
+                        {
+                            "step_id": "verify-bound-expense-v2",
+                            "sequence": 4,
+                            "channel": "ui",
+                            "business_action": "登録した経費行だけを確認する",
+                            "test_step_refs": [],
+                            "screen_ref": "expense-list",
+                            "ui_action_ref": "verify-bound-row",
+                            "operation_scope": "bound_record",
+                            "data_binding_ref": "expense-data",
+                            "playwright": {
+                                "action": "wait_for",
+                                "locator": {
+                                    "by": "css",
+                                    "value": ":scope",
+                                    "exact": True,
+                                },
+                                "state": "visible",
+                                "mask_locators": [],
+                                "observations": [
+                                    {
+                                        "key": "bound_status",
+                                        "kind": "text",
+                                        "locator": {
+                                            "by": "css",
+                                            "value": ".status",
+                                            "exact": True,
+                                        },
+                                    }
+                                ],
+                            },
+                            "inputs": {},
+                            "depends_on": ["open-list-v2"],
+                            "output_bindings": [],
+                            "postconditions": [
+                                {
+                                    "assertion_id": "bound-status-visible-v2",
+                                    "observe_via": "ui",
+                                    "subject": "bound_status",
+                                    "operator": "exists",
+                                    "expected": True,
                                 }
                             ],
                         },
@@ -912,6 +1224,16 @@ def _seed_old_execution_and_closure(
                 "deferred_assertion_ids": [],
             }
         ],
+        "data_bindings": [],
+        "data_coverage": {
+            "required_criterion_count": 0,
+            "covered_criterion_count": 0,
+            "coverage_percent": 0,
+            "condition_count": 0,
+            "passed_condition_count": 0,
+            "status": "not_applicable",
+            "proofs": [],
+        },
         "evidence": [
             {
                 "evidence_id": "evidence-v1",
@@ -1092,6 +1414,141 @@ def _two_case_source_bundle() -> dict[str, Any]:
     coverage["test_case_refs"].append("employee-case")
     coverage["criterion_refs"].append("employee-criterion")
     return bundle
+
+
+def _persisted_identity_plan(target_schema: str) -> dict[str, Any]:
+    return {
+        "artifact_type": "TestDataPlan",
+        "schema_version": "v2",
+        "test_data_plan_id": "test-data-plan-v1",
+        "test_plan_id": "test-plan-v1",
+        "project_id": "visiondemo",
+        "status": "ready",
+        "data_sets": [
+            {
+                "test_data_id": "expense-data",
+                "test_case_refs": ["expense-case"],
+                "setup_actions": [],
+                "cleanup_policy": "retain",
+                "identity_binding": {
+                    "binding_mode": "adopted",
+                    "source_flow_id": "expense-flow",
+                    "source_step_id": "read-expense-identity",
+                    "primary_key": {
+                        "name": "id",
+                        "source": "database",
+                        "path": "rows[0].id",
+                    },
+                    "business_unique_keys": [
+                        {
+                            "name": "expense_number",
+                            "source": "database",
+                            "path": "rows[0].expense_number",
+                        }
+                    ],
+                    "screen_key": {
+                        "name": "expense_number",
+                        "source": "database",
+                        "path": "rows[0].expense_number",
+                        "locator_template": {
+                            "by": "css",
+                            "value": "[data-expense-number='{{value}}']",
+                            "exact": True,
+                        },
+                    },
+                    "match_count": {"source": "database", "path": "row_count"},
+                },
+                "coverage_conditions": [
+                    {
+                        "condition_id": "persisted-expense-status-condition",
+                        "criterion_ref": "expense-criterion",
+                        "test_case_ref": "expense-case",
+                        "test_data_id": "expense-data",
+                        "condition_kind": "status",
+                        "source_flow_id": "expense-flow",
+                        "source_step_id": "read-expense-identity",
+                        "path": "rows[0].status",
+                        "operator": "equals",
+                        "expected": "RETURNED",
+                    }
+                ],
+            }
+        ],
+        "generation_flows": [
+            {
+                "flow_id": "expense-flow",
+                "title": "実 DB の経費を一意に固定する",
+                "test_data_refs": ["expense-data"],
+                "test_case_refs": ["expense-case"],
+                "steps": [
+                    {
+                        "step_id": "read-expense-identity",
+                        "sequence": 1,
+                        "channel": "sql",
+                        "business_action": "対象経費を一意に読み戻す",
+                        "test_step_refs": [],
+                        "target": "read_expense_identity",
+                        "inputs": {"expense_number": "EXP-PERSIST-001"},
+                        "depends_on": [],
+                        "output_bindings": [],
+                        "postconditions": [
+                            {
+                                "assertion_id": "identity-unique",
+                                "observe_via": "database",
+                                "subject": "row_count",
+                                "operator": "equals",
+                                "expected": 1,
+                            }
+                        ],
+                    }
+                ],
+                "final_assertions": [
+                    {
+                        "assertion_id": "expense-result",
+                        "observe_via": "test",
+                        "subject": "expense-case",
+                        "operator": "satisfies",
+                        "expected": "passed",
+                    }
+                ],
+                "cleanup_policy": "retain",
+                "cleanup_steps": [],
+            }
+        ],
+        "blocking_reasons": [],
+    }
+
+
+def _persisted_identity_query_binding(target_schema: str) -> dict[str, object]:
+    statement = (
+        f"SELECT id, expense_number, status FROM {target_schema}.expenses "
+        "WHERE expense_number = %(expense_number)s"
+    )
+    return {
+        "query_binding_id": "read_expense_identity",
+        "operation": "read",
+        "statement_text": statement,
+        "target_schema": target_schema,
+        "target_table": "expenses",
+        "parameter_columns": {"expense_number": "expense_number"},
+        "input_constraints": {
+            "expense_number": {
+                "type": "string",
+                "required": True,
+                "max_length": 40,
+            }
+        },
+        "read_after_write_statement": statement,
+        "read_assertion": {"mode": "row_count", "count": 1},
+        "identity_contract": {
+            "primary_key": "id",
+            "business_unique_keys": ["expense_number"],
+            "screen_key": "expense_number",
+            "coverage_columns": ["status"],
+        },
+        "cleanup_binding_id": None,
+        "idempotency_policy": "read_only",
+    }
 
 
 def _source_bundle(*, ui: bool = True) -> dict[str, Any]:

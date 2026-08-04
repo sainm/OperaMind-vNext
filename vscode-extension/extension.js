@@ -21,10 +21,14 @@ const {
 } = require("./diagnostics");
 
 const SECRET_KEY = "operamind.bridge.token";
+const CLAIM_TOKEN_KEY_PREFIX = "operamind.bridge.claimToken.";
 const ACTIVE_TASK_KEY = "operamind.bridge.activeTask";
 const PENDING_WEB_OPEN_KEY = "operamind.bridge.pendingWebOpen";
 const PENDING_WEB_OPEN_MAX_AGE_MS = 5 * 60 * 1000;
-const TERMINAL_STATES = new Set(["completed", "failed", "reanalysis_required", "cancelled"]);
+const TERMINAL_STATES = new Set([
+  "completed", "failed", "reanalysis_required", "cancelled",
+  "draft_ready", "confirmed", "superseded",
+]);
 
 class DashboardWebviewProvider {
   constructor(initialState) {
@@ -165,12 +169,30 @@ async function activate(context) {
     if (!taskId || (active && active.codingTaskId === taskId)) {
       await context.workspaceState.update(ACTIVE_TASK_KEY, undefined);
     }
-    if (taskId) notified.delete(taskId);
+    if (taskId) {
+      notified.delete(taskId);
+      await context.secrets.delete(`${CLAIM_TOKEN_KEY_PREFIX}${taskId}`);
+    }
+  }
+
+  async function rememberClaimToken(taskId, claimToken) {
+    if (claimToken) {
+      await context.secrets.store(`${CLAIM_TOKEN_KEY_PREFIX}${taskId}`, claimToken);
+    }
+  }
+
+  function storedClaimToken(taskId) {
+    return context.secrets.get(`${CLAIM_TOKEN_KEY_PREFIX}${taskId}`);
   }
 
   async function presentTask(view, root, bridge, acceptedBy, {interactive = false} = {}) {
     if (!view || !view.task) return;
     const taskId = view.task.coding_task_id;
+    let claimToken = view.claim_token || (await storedClaimToken(taskId));
+    if (view.task.task_kind === "document_profile_learning" && !claimToken) {
+      throw new Error("Document Profile learning Claim Token がありません");
+    }
+    await rememberClaimToken(taskId, claimToken);
     dashboard.update({
       task: {codingTaskId: taskId, summary: view.task.task_summary},
       taskState: view.state || "pending",
@@ -199,7 +221,9 @@ async function activate(context) {
     if (action !== openAction) return;
     const accepted = continuing
       ? view
-      : await bridge.acceptTask(taskId, root, consumerId, acceptedBy);
+      : await bridge.acceptTask(taskId, root, consumerId, acceptedBy, claimToken);
+    claimToken = accepted.claim_token || claimToken;
+    await rememberClaimToken(taskId, claimToken);
     dashboard.update({
       task: {codingTaskId: taskId, summary: view.task.task_summary},
       taskState: accepted.state || (continuing ? view.state : "accepted"),
@@ -209,7 +233,7 @@ async function activate(context) {
       workspaceRoot: root,
       requestId: view.task.change_request_id,
     });
-    const prompt = buildCopilotPrompt(accepted, root);
+    const prompt = buildCopilotPrompt({...accepted, claim_token: claimToken}, root, consumerId);
     await vscode.commands.executeCommand("workbench.action.chat.open", {query: prompt});
   }
 
@@ -276,15 +300,25 @@ async function activate(context) {
         }
         return;
       }
-      const active = context.workspaceState.get(ACTIVE_TASK_KEY);
+      let active = context.workspaceState.get(ACTIVE_TASK_KEY);
       const activeMatchesRequest = !requestId || (active && active.requestId === requestId);
       if (active && active.workspaceRoot === root && activeMatchesRequest) {
+        const activeTaskId = active.codingTaskId;
         let resumed;
         try {
-          resumed = await client.resumeTask(active.codingTaskId, root, consumerId);
+          const claimToken = await storedClaimToken(activeTaskId);
+          if (activeTaskId.startsWith("document-learning-") && !claimToken) {
+            await clearActive(activeTaskId);
+            active = undefined;
+          }
+          if (!active) {
+            dashboard.update({task: undefined, taskState: "idle"});
+          } else {
+            resumed = await client.resumeTask(activeTaskId, root, consumerId, claimToken);
+          }
         } catch (error) {
           if (!isMissingBridgeResource(error)) throw error;
-          await clearActive(active.codingTaskId);
+          await clearActive(activeTaskId);
           dashboard.update({task: undefined, taskState: "idle"});
         }
         if (resumed) {

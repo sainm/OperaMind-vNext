@@ -67,6 +67,7 @@ class DocumentConvention:
     profile_id: str
     profile_version: str
     document_type: str
+    fact_type: str
     minimum_auto_match_score: float
     variants: tuple[ConventionVariant, ...]
 
@@ -101,6 +102,7 @@ class DocumentConvention:
             profile_id=str(profile["profile_id"]),
             profile_version=str(profile["profile_version"]),
             document_type=str(profile["document_type"]),
+            fact_type=str(profile["fact_type"]),
             minimum_auto_match_score=float(profile["minimum_auto_match_score"]),
             variants=variants,
         )

@@ -160,7 +160,7 @@ def test_failed_initialization_batch_removes_only_new_local_repositories(
     assert (existing / ".git").is_dir()
 
 
-def test_project_initialization_rolls_back_local_git_when_document_baseline_fails(
+def test_project_initialization_rolls_back_local_git_when_onboarding_enqueue_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -186,14 +186,18 @@ def test_project_initialization_rolls_back_local_git_when_document_baseline_fail
                 source_control_kind=values["source_control_kind"],
                 test_base_url=values["test_base_url"],
                 source_git_baselines=values["source_git_baselines"],
+                settings_revision=1,
             )
 
-    class FailingDocumentBaselineService:
+    class FailingOnboardingService:
         def __init__(self, **_values: object) -> None:
             pass
 
-        def ensure(self, **_values: object) -> None:
-            raise RuntimeError("document indexing failed")
+        def latest(self, _project_id: str) -> None:
+            return None
+
+        def enqueue(self, **_values: object) -> None:
+            raise RuntimeError("onboarding enqueue failed")
 
     class Transaction:
         def __enter__(self) -> None:
@@ -209,15 +213,15 @@ def test_project_initialization_rolls_back_local_git_when_document_baseline_fail
 
     monkeypatch.setattr(
         web_control_plane,
-        "ProjectDocumentBaselineService",
-        FailingDocumentBaselineService,
+        "ProjectOnboardingService",
+        FailingOnboardingService,
     )
     service = WebControlPlaneService.__new__(WebControlPlaneService)
     service._repository = Repository()
     service._connection = Connection()
     service._root = tmp_path
 
-    with pytest.raises(RuntimeError, match="document indexing failed"):
+    with pytest.raises(RuntimeError, match="onboarding enqueue failed"):
         service.initialize_project(
             ProjectInitializationInput(
                 project_id="failed-project",

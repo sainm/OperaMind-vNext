@@ -13,6 +13,9 @@ from operamind.application.planned_business_coverage import (
     assess_planned_business_coverage,
     uncovered_business_rules,
 )
+from operamind.application.test_data_coverage import (
+    validate_test_data_coverage_alignment,
+)
 from operamind.contracts import ContractCatalog
 
 
@@ -129,6 +132,16 @@ class ChangeOrchestrationPlanner:
             "project_id": project_id,
             "criteria": criteria,
         }
+        data_coverage_reasons = validate_test_data_coverage_alignment(
+            test_plan=test_plan,
+            test_data_plan=test_data,
+            acceptance_criteria=acceptance,
+        )
+        if data_coverage_reasons:
+            raise ChangeOrchestrationBlockedError(
+                "Test data coverage alignment failed: "
+                + "; ".join(data_coverage_reasons)
+            )
         test_plan_id = str(test_plan["test_plan_id"])
         test_data_plan_id = str(test_data["test_data_plan_id"])
         data_blockers = list(cast(list[str], test_data.get("blocking_reasons", [])))
