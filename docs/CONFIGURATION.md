@@ -377,10 +377,11 @@ Database Profile の最小例を示す。`read_expense_by_number` は第 8.3 節
 2. 「データ名」「業務番号または業務上の一意値」「使用する Test Case」「終了後も保持するか」だけを入力する。
 3. 「一意性を確認」を押す。OperaMind が Project の確認済み Provider を実行する。
 4. `1 件` の候補と脱敏済み業務摘要を確認し、「確認して採用」を押す。
-5. 確認後だけ `binding_mode=adopted` の TestDataPlan データ定義となる。確認前の候補は実行計画へ入らない。
-6. 「固定データ識別子」で実行前の計画データを確認する。実行後は同じ画面で Run、利用 Test Case／Flow／Step、Evidence、Cleanup 結果を確認する。
+5. 確認すると、その登録を選択中の Change Request に固定し、Copilot へ完全な UI TestPlan／TestDataPlan v3 の再生成 Task を自動発行する。別 Change Request の登録は現在 Plan に混入しない。
+6. 再生成された Plan は Schema、安全性、Business Coverage 100% と Test Data Coverage 条件の完全な静的対応を再検証する。人工確認を通過した後だけ正式な `binding_mode=adopted` TestDataPlan となり、実 Run では各条件を実 Observation から評価して Test Data Coverage 100% に達した後だけ UI Step へ進む。確認前の候補や再生成前の旧 Plan は実行できない。
+7. 「固定データ識別子」で採用待ち／計画済みデータを確認する。実行後は同じ画面で Run、利用 Test Case／Flow／Step、Evidence、Cleanup 結果を確認する。
 
-候補生成時には入力した業務一意値と Provider が返した実業務キーを照合し、Provider の Revision と設定 Digest を候補へ固定する。候補生成後に Provider 設定が変わった場合は確認を拒否するため、利用者は一意性確認から再登録する。確認済みデータの Test Case が現在の UiTestPlan に存在しない場合は、入力ミスや古い Case を静かに無視せず Plan 受理を blocked にする。確認済みデータが対象 Test Case に対応する場合、Copilot の TestDataPlan は固定済み `test_data_id`、`identity_binding`、lookup／cleanup Flow を実際に組み込まなければ受理されない。
+候補生成時には入力した業務一意値と Provider が返した実業務キーを照合し、Provider の Revision と設定 Digest を候補へ固定する。人工確認時も同一 Transaction 内で現在の Provider 行を Lock して Revision と Digest を再照合する。候補生成後または確認直前に Provider 設定が変わった場合は確認を拒否するため、利用者は一意性確認から再登録する。確認済みデータの Test Case が現在の UiTestPlan に存在しない場合は、入力ミスや古い Case を静かに無視せず Plan 受理を blocked にする。確認済みデータが対象 Test Case に対応する場合、Copilot の TestDataPlan は固定済み `test_data_id`、`identity_binding`、lookup／cleanup Flow を実際に組み込まなければ受理されない。実行開始時にも現在 Change Request の全確認済み登録を再検証するため、採用前の旧 Plan をそのまま実行できない。
 
 `adopted` データは既存業務値を既定で変更しない。更新が必要な Case は、TestDataPlan が書込みを許可した業務項目と確認済み Binding を別途持つ必要がある。Run ごとの `operamind_run_id`、`test_data_token`、`execution_started_at` は OperaMind が生成して凍結する読み取り専用値であり、利用者、Copilot、Flow の局所変数で上書きできない。
 

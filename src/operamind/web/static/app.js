@@ -218,6 +218,7 @@ function renderProjectSummary(project) {
 
 async function openExistingTestDataPage() {
   if (!state.projectId) return showNotice("先にプロジェクトを選択してください。", "error");
+  if (!state.requestId) return showNotice("先に対象の変更要件を選択してください。", "error");
   elements.existingTestDataDialog.showModal();
   await loadExistingTestData();
 }
@@ -225,7 +226,10 @@ async function openExistingTestDataPage() {
 async function loadExistingTestData() {
   if (!state.projectId) return;
   elements.existingTestDataList.innerHTML = '<p class="empty">実データを確認しています。</p>';
-  const result = await api(`/api/v1/projects/${encodeURIComponent(state.projectId)}/existing-test-data`);
+  const requestQuery = state.requestId
+    ? `?change_request_id=${encodeURIComponent(state.requestId)}`
+    : "";
+  const result = await api(`/api/v1/projects/${encodeURIComponent(state.projectId)}/existing-test-data${requestQuery}`);
   const items = result.registrations || [];
   elements.existingTestDataList.innerHTML = items.length
     ? items.map(renderExistingTestData).join("")
@@ -236,7 +240,7 @@ async function loadExistingTestData() {
 }
 
 function renderExistingTestData(item) {
-  const statusLabels = {candidate: "確認待ち", confirmed: "確認済み", blocked: "阻断"};
+  const statusLabels = {candidate: "確認待ち", confirmed: "確認済み", blocked: "ブロック"};
   const summary = Object.entries(item.business_summary || {}).map(([name, value]) =>
     `<div><dt>${view.escapeHtml(name)}</dt><dd>${view.escapeHtml(String(value))}</dd></div>`
   ).join("");
@@ -257,13 +261,14 @@ function renderExistingTestData(item) {
       <span>${item.retain_after_test ? "終了後も保持" : "終了後に Cleanup"}</span>
     </div>
     ${reasons ? `<ul class="data-blocking-reasons">${reasons}</ul>` : ""}
-    ${item.status === "candidate" ? `<div class="data-card-actions"><button class="primary" type="button" data-confirm-registration="${view.escapeHtml(item.registration_id)}">この一件を確認</button></div>` : ""}
+    ${item.status === "candidate" ? `<div class="data-card-actions"><button class="primary" type="button" data-confirm-registration="${view.escapeHtml(item.registration_id)}">確認して採用</button></div>` : ""}
   </article>`;
 }
 
 async function registerExistingTestData(event) {
   event.preventDefault();
   if (!state.projectId) return;
+  if (!state.requestId) return showNotice("先に対象の変更要件を選択してください。", "error");
   const scope = `existing-test-data:${state.projectId}:${crypto.randomUUID()}`;
   elements.submitExistingTestDataButton.disabled = true;
   try {
@@ -271,6 +276,7 @@ async function registerExistingTestData(event) {
       method: "POST",
       idempotencyScope: scope,
       body: JSON.stringify({
+        change_request_id: state.requestId,
         data_name: elements.existingDataName.value.trim(),
         business_unique_value: elements.existingBusinessValue.value.trim(),
         test_case_ref: elements.existingTestCaseRef.value.trim(),
@@ -296,14 +302,19 @@ async function registerExistingTestData(event) {
 async function confirmExistingTestData(registrationId) {
   const scope = `existing-test-data-confirm:${state.projectId}:${registrationId}`;
   try {
-    await api(`/api/v1/projects/${encodeURIComponent(state.projectId)}/existing-test-data/${encodeURIComponent(registrationId)}/confirm`, {
+    const result = await api(`/api/v1/projects/${encodeURIComponent(state.projectId)}/existing-test-data/${encodeURIComponent(registrationId)}/confirm`, {
       method: "POST",
       idempotencyScope: scope,
       body: "{}"
     });
     clearCommandKey(scope);
     await loadExistingTestData();
-    showNotice("既存データを adopted TestDataPlan データとして確認しました。", "success");
+    showNotice(
+      result.state === "awaiting_copilot"
+        ? "既存データを確認し、TestDataPlan の再生成を Copilot に依頼しました。"
+        : "既存データを adopted TestDataPlan データとして確認しました。",
+      "success"
+    );
   } catch (error) {
     showNotice(error.message, "error");
   }
@@ -315,19 +326,27 @@ async function openFixedDataIdentifiersPage() {
   elements.plannedDataIdentifiers.innerHTML = '<p class="empty">計画を読み込んでいます。</p>';
   elements.frozenDataIdentifiers.innerHTML = '<p class="empty">凍結結果を読み込んでいます。</p>';
   const result = await api(`/api/v1/projects/${encodeURIComponent(state.projectId)}/fixed-data-identifiers`);
-  elements.plannedDataCount.textContent = `${Number(result.planned_count || 0).toLocaleString("ja-JP")} 件`;
+  const pending = result.pending || [];
+  const planned = result.planned || [];
+  elements.plannedDataCount.textContent = `${Number(pending.length + planned.length).toLocaleString("ja-JP")} 件`;
   elements.frozenDataCount.textContent = `${Number(result.frozen_count || 0).toLocaleString("ja-JP")} 件`;
-  elements.plannedDataIdentifiers.innerHTML = result.planned?.length
-    ? result.planned.map(renderPlannedDataIdentifier).join("")
-    : '<p class="empty">確認済みの計画データはありません。</p>';
+  elements.plannedDataIdentifiers.innerHTML = pending.length || planned.length
+    ? [...pending, ...planned].map(renderPlannedDataIdentifier).join("")
+    : '<p class="empty">採用待ちまたは確認済みの計画データはありません。</p>';
   elements.frozenDataIdentifiers.innerHTML = result.frozen?.length
     ? result.frozen.map(renderFrozenDataIdentifier).join("")
     : '<p class="empty">まだ Run で凍結されたデータはありません。</p>';
 }
 
 function renderPlannedDataIdentifier(item) {
+  const stateLabels = {
+    awaiting_copilot: "Copilot 待ち",
+    confirmation_required: "最終確認待ち",
+    planned: "計画済み"
+  };
+  const status = stateLabels[item.adoption_state] || "状態確認中";
   return `<article class="data-identity-card planned">
-    <header><div><strong>${view.escapeHtml(item.data_name)}</strong><small>${(item.test_case_refs || []).map(view.escapeHtml).join("、")}</small></div><span class="status-badge neutral">実行前</span></header>
+    <header><div><strong>${view.escapeHtml(item.data_name)}</strong><small>${(item.test_case_refs || []).map(view.escapeHtml).join("、")}</small></div><span class="status-badge neutral">${status}</span></header>
     <p class="data-business-key"><span>業務一意値</span><strong>${view.escapeHtml(item.business_unique_value)}</strong></p>
     <div class="data-card-meta"><span>${view.escapeHtml(item.provider_type || "未確定")}</span><span>${item.retain_after_test ? "終了後も保持" : "終了後に Cleanup"}</span></div>
   </article>`;

@@ -17,7 +17,9 @@ from operamind.application.existing_test_data import (
     ExistingTestDataRegistrationService,
     ProjectDataIdentityProfile,
 )
+from operamind.contracts import ContractCatalog
 from operamind.infrastructure.browser import LocalEvidenceStore
+from operamind.infrastructure.postgres import ArtifactRepository
 from operamind.infrastructure.postgres.existing_test_data_repository import (
     ExistingTestDataRepository,
 )
@@ -84,8 +86,43 @@ def test_real_existing_data_registration_uses_reviewed_provider_and_human_confir
     }
     profile = _profile(project_id, provider_type)
     registration_id = f"registration-{provider_type}-{project_id}"
+    change_request_id = f"change-existing-{provider_type}-{project_id}"
     try:
         with psycopg.connect(DATABASE_URL) as connection:
+            contracts = ContractCatalog.load(Path(__file__).parents[2] / "contracts")
+            ArtifactRepository(connection, contracts).store(
+                artifact_id=change_request_id,
+                project_id=project_id,
+                analysis_case_id=None,
+                artifact={
+                    "artifact_type": "ChangeRequest",
+                    "schema_version": "v1",
+                    "change_request_id": change_request_id,
+                    "project_id": project_id,
+                    "input_mode": "natural_language",
+                    "requirement_text": "既存テストデータを接管する",
+                    "business_rules": [
+                        {
+                            "business_rule_id": "rule-existing-data",
+                            "text": "既存の経費を一意に確認する",
+                            "source_refs": [],
+                        }
+                    ],
+                    "ambiguity_status": "clear",
+                    "confirmation_required": False,
+                    "ambiguities": [],
+                },
+            )
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO change_requests (
+                        change_request_id, project_id, analysis_case_id,
+                        input_mode, submitted_by
+                    ) VALUES (%s, %s, NULL, 'natural_language', 'qa-user')
+                    """,
+                    (change_request_id, project_id),
+                )
             repository = ExistingTestDataRepository(connection)
             repository.upsert_profile(profile, actor="admin-reviewer")
             service = ExistingTestDataRegistrationService(
@@ -101,6 +138,7 @@ def test_real_existing_data_registration_uses_reviewed_provider_and_human_confir
                 ExistingTestDataRegistrationInput(
                     registration_id=registration_id,
                     project_id=project_id,
+                    change_request_id=change_request_id,
                     data_name="差戻し済み経費",
                     business_unique_value="EXP-ADOPT-041",
                     test_case_ref="case-existing-expense",
@@ -143,6 +181,14 @@ def test_real_existing_data_registration_uses_reviewed_provider_and_human_confir
             cursor.execute(
                 "DELETE FROM project_data_identity_profiles WHERE project_id = %s",
                 (project_id,),
+            )
+            cursor.execute(
+                "DELETE FROM change_requests WHERE change_request_id = %s",
+                (change_request_id,),
+            )
+            cursor.execute(
+                "DELETE FROM artifact_records WHERE artifact_id = %s",
+                (change_request_id,),
             )
         _drop_target_project(DATABASE_URL, project_id, schema, target_role)
 

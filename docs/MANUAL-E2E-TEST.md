@@ -599,7 +599,7 @@ TestDataPlan には次を含める。
 
 Web の `テストデータ・UI 検証` を開き、自然言語手順、生成 Flow、変数、Assertion、Cleanup、Playwright Action と AI 画面操作への限定フォールバックを確認する。Web または VS Code で UiTestPlan／TestDataPlan を確認し、`確認して進む` を押す。確認後に実ブラウザ実行が開始され、Screenshot と最終レポートが生成されることを確認する。
 
-実行後は同画面の `固定データ識別子` で、業務値、Run Token、Provider 種別、使用した Test Case／Flow／Step、Evidence、Cleanup 結果を確認する。普通利用者画面に Provider Ref、主キー、Locator、digest、SQL、Secret、内部 Binding ID が表示されないことも確認する。管理者は内部 Artifact／診断で `match_count=1`、identity digest、Evidence の Scope 一致を監査できる。続けて `実 DB データ条件の検証結果` で AcceptanceCriteria、TestCase、TestData、条件、期待値、実測値、Evidence を確認する。Test Data Coverage は OperaMind がこれらの実測 Proof から算出し、100% 未満では TestPlan の UI Step、Screenshot、最終成功へ進まない。対象 Provider では 1 件でも、画面上で 0 件または複数件になった場合も UI Step が `blocked` となる。Secret、接続情報、認証値が DB、ログ、Copilot Context、Evidence にないことも確認する。
+実行後は同画面の `固定データ識別子` で、業務値、Run Token、Provider 種別、使用した Test Case／Flow／Step、Evidence、Cleanup 結果を確認する。普通利用者画面に Provider Ref、主キー、Locator、digest、SQL、Secret、内部 Binding ID が表示されないことも確認する。管理者は内部 Artifact／診断で `match_count=1`、identity digest、Evidence の Scope 一致を監査できる。続けて `実データ条件の検証結果` で AcceptanceCriteria、TestCase、TestData、Observation Source、条件、期待値、実測値、Evidence を確認する。Test Data Coverage は OperaMind がこれらの実測 Proof から算出し、100% 未満では TestPlan の UI Step、Screenshot、最終成功へ進まない。対象 Provider では 1 件でも、画面上で 0 件または複数件になった場合も UI Step が `blocked` となる。Secret、接続情報、認証値が DB、ログ、Copilot Context、Evidence にないことも確認する。
 
 ### Step 8: 自然言語テストケース修正を確認する
 
@@ -1062,8 +1062,10 @@ Compile、Test、Coverage の一つでも失敗した場合は UI TestPlan へ�
 6. `match_count=1` の場合だけ、脱敏された業務摘要、Provider Type、保持方針、使用 Test Case が表示されることを確認する。
 7. 0 件、複数件、Provider 未設定、Source 間の業務キー不一致、Evidence 不足では `blocked` となり、採用確認ができないことを確認する。
 8. 一件の業務摘要が意図した実レコードであることを確認し、`確認して採用` を一回だけ押す。
-9. `固定データ識別子` を開き、実行前の計画データに `adopted` として表示されることを確認する。
-10. 保持しない場合は同じ `data_binding_ref` を使用する Cleanup が Plan に存在することを確認する。保持する場合は既存業務値を変更しないことを確認する。
+9. 選択中の Change Request 専用 `ui_test_plan_revision` Task が自動発行され、画面に「TestDataPlan の再生成を Copilot に依頼しました」と表示されることを確認する。別 Change Request の登録が Copilot Context に含まれないことも確認する。
+10. Copilot が返した完全な UI TestPlan／TestDataPlan v3 が Schema、安全性、Business Coverage 100% と Test Data Coverage 条件の静的対応を再検証し、人工確認を通過するまで実行 Button が有効にならないことを確認する。実 Run 開始後は、実 Observation から算出した Test Data Coverage が 100% になる前に UI Step が開始されないことを確認する。
+11. `固定データ識別子` を開き、確認済みの採用予定データと、再確認後の正式 Plan データを区別して確認する。
+12. 保持しない場合は同じ `data_binding_ref` を使用する Cleanup が Plan に存在することを確認する。保持する場合は既存業務値を変更しないことを確認する。
 
 #### 14.10.2 generated データが Test Case を実際に覆うことを確認する
 

@@ -188,6 +188,7 @@ def _input() -> ExistingTestDataRegistrationInput:
     return ExistingTestDataRegistrationInput(
         registration_id="registration-001",
         project_id="project-001",
+        change_request_id="change-001",
         data_name="差戻し済み経費",
         business_unique_value="EXP-041",
         test_case_ref="case-search-returned",

@@ -203,6 +203,82 @@ def test_coverage_validation_recomputes_summary_from_reserved_plan() -> None:
         _validate_coverage_evidence(artifact, plan=plan)
 
 
+def test_coverage_validation_rejects_a_proof_from_the_wrong_provider_source() -> None:
+    artifact = _result_artifact()
+    payload = {
+        "proof_id": "proof-1",
+        "run_id": "run-1",
+        "condition_id": "condition-1",
+        "criterion_ref": "criterion-1",
+        "test_case_ref": "case-1",
+        "test_data_id": "data-1",
+        "condition_kind": "status",
+        "source_flow_id": "flow-1",
+        "source_step_id": "step-1",
+        "observation_source": "database",
+        "path": "status",
+        "operator": "equals",
+        "expected": "READY",
+        "actual": "READY",
+        "status": "passed",
+    }
+    digest = hashlib.sha256(_json(payload).encode()).hexdigest()
+    proof = {
+        **payload,
+        "content_digest": digest,
+        "evidence_ref": "artifact://result-1/data-coverage/proof-1",
+    }
+    artifact["data_coverage"] = {
+        "required_criterion_count": 1,
+        "covered_criterion_count": 1,
+        "coverage_percent": 100,
+        "condition_count": 1,
+        "passed_condition_count": 1,
+        "status": "passed",
+        "proofs": [proof],
+    }
+    artifact["evidence"].append(
+        {
+            "evidence_type": "data_coverage",
+            "evidence_ref": proof["evidence_ref"],
+            "flow_id": "flow-1",
+            "step_id": "step-1",
+            "phase": "setup",
+            "content_digest": digest,
+        }
+    )
+    plan = {
+        "data_sets": [
+            {
+                "test_data_id": "data-1",
+                "identity_binding": {"provider": {"type": "api"}},
+                "coverage_conditions": [
+                    {
+                        key: value
+                        for key, value in payload.items()
+                        if key
+                        in {
+                            "condition_id",
+                            "criterion_ref",
+                            "test_case_ref",
+                            "test_data_id",
+                            "condition_kind",
+                            "source_flow_id",
+                            "source_step_id",
+                            "path",
+                            "operator",
+                            "expected",
+                        }
+                    }
+                ],
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match="observation source differs"):
+        _validate_coverage_evidence(artifact, plan=plan)
+
+
 def test_reserve_is_idempotent_only_for_the_same_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

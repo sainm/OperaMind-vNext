@@ -121,7 +121,7 @@ def test_copilot_regeneration_must_apply_every_confirmed_operation() -> None:
     )
 
 
-def test_ai_regeneration_rejects_an_unexecutable_test_data_plan_before_persistence() -> None:
+def test_ai_regeneration_rejects_legacy_plan_contracts_before_persistence() -> None:
     bundle = _bundle()
     invalid_plan = copy.deepcopy(bundle["test_data_plan"])
     invalid_plan["generation_flows"][0]["steps"][0]["postconditions"] = []
@@ -130,7 +130,7 @@ def test_ai_regeneration_rejects_an_unexecutable_test_data_plan_before_persisten
         "database.v1": "database"
     }
 
-    with pytest.raises(ValueError, match="postconditions are required"):
+    with pytest.raises(ValueError, match="formal v2 contract"):
         service.apply_ai_regeneration(
             change_request_id="change-request-1",
             proposal_id="proposal-1",

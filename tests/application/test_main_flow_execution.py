@@ -593,6 +593,130 @@ def test_structured_pre_action_block_is_returned_to_the_same_copilot_task(
     assert queued[0]["feedback"]["source_coding_task_id"] == "task-1"  # type: ignore[index]
 
 
+def test_locator_feedback_ignores_malformed_and_non_blocking_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        execution_module,
+        "CopilotCodingTaskRepository",
+        lambda *_args: pytest.fail("non-blocking results must not publish feedback"),
+    )
+    artifacts = [
+        {"flow_results": "invalid"},
+        {
+            "flow_results": [
+                "invalid-flow",
+                {
+                    "flow_id": "flow-1",
+                    "step_results": "invalid-steps",
+                    "cleanup_results": [
+                        {"channel": "sql", "status": "blocked"},
+                        {"channel": "ui", "status": "passed", "failure_reason": "locator"},
+                    ],
+                },
+            ]
+        },
+    ]
+
+    for artifact in artifacts:
+        execution_module._publish_locator_failure_feedback(
+            connection=object(),  # type: ignore[arg-type]
+            contracts=object(),  # type: ignore[arg-type]
+            repository_root=Path("/workspace"),
+            record=_record(),
+            artifact=artifact,
+        )
+
+
+def test_locator_feedback_stops_when_no_source_task_can_be_attributed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        execution_module,
+        "CopilotCodingTaskRepository",
+        lambda *_args: SimpleNamespace(record_ui_locator_blocked_feedback=lambda **_v: None),
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "_publish_automatic_locator_revision",
+        lambda **_v: pytest.fail("unattributed feedback must not queue a revision"),
+    )
+
+    execution_module._publish_locator_failure_feedback(
+        connection=object(),  # type: ignore[arg-type]
+        contracts=object(),  # type: ignore[arg-type]
+        repository_root=Path("/workspace"),
+        record=_record(),
+        artifact={
+            "flow_results": [
+                {
+                    "flow_id": "flow-1",
+                    "step_results": [
+                        {
+                            "step_id": "approve",
+                            "channel": "ui",
+                            "status": "blocked",
+                            "failure_stage": "pre_action_locator_validation",
+                        }
+                    ],
+                    "cleanup_results": [],
+                }
+            ]
+        },
+    )
+
+
+def test_locator_revision_publication_failure_is_persisted_as_blocked_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = _Repository(_record())
+    monkeypatch.setattr(
+        execution_module,
+        "CopilotCodingTaskRepository",
+        lambda *_args: SimpleNamespace(
+            record_ui_locator_blocked_feedback=lambda **_v: "source-task-1"
+        ),
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "_publish_automatic_locator_revision",
+        lambda **_v: (_ for _ in ()).throw(ValueError("no workspace")),
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "TestDataExecutionRepository",
+        lambda *_args: repository,
+    )
+
+    execution_module._publish_locator_failure_feedback(
+        connection=object(),  # type: ignore[arg-type]
+        contracts=object(),  # type: ignore[arg-type]
+        repository_root=Path("/workspace"),
+        record=_record(),
+        artifact={
+            "flow_results": [
+                {
+                    "flow_id": "flow-1",
+                    "step_results": [
+                        {
+                            "step_id": "approve",
+                            "channel": "ui",
+                            "status": "blocked",
+                            "failure_reason": "record scope matched 0 records",
+                        }
+                    ],
+                    "cleanup_results": [],
+                }
+            ]
+        },
+    )
+
+    assert [event.event_type for event in repository.events] == [
+        "locator_revision_publish_failed"
+    ]
+    assert repository.events[0].status == "blocked"
+
+
 def test_real_locator_failure_queues_a_deterministic_read_only_revision(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

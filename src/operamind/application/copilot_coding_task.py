@@ -625,6 +625,7 @@ class CopilotCodingTaskService:
                 "confirmed_existing_test_data": _confirmed_existing_test_data_context(
                     self._existing_test_data,
                     str(immutable_task["project_id"]),
+                    change_request_id=str(immutable_task["change_request_id"]),
                 ),
             }
             if context.get("locator_failure_evidence_json"):
@@ -751,6 +752,7 @@ class CopilotCodingTaskService:
                 "confirmed_existing_test_data": _confirmed_existing_test_data_context(
                     self._existing_test_data,
                     task.project_id,
+                    change_request_id=task.change_request_id,
                 ),
                 "business_coverage": {
                     "required_coverage_percent": 100,
@@ -1550,9 +1552,10 @@ class CopilotCodingTaskService:
             test_data_plan=test_data_plan,
             ui_impacted=impact.get("ui_impact_status") == "impacted",
         )
-        _validate_confirmed_existing_test_data_usage(
+        validate_confirmed_existing_test_data_usage(
             repository=self._existing_test_data,
             project_id=task.project_id,
+            change_request_id=task.change_request_id,
             test_plan=test_plan,
             test_data_plan=test_data_plan,
         )
@@ -1691,9 +1694,10 @@ class CopilotCodingTaskService:
             test_data_plan=test_data_plan,
             ui_impacted=True,
         )
-        _validate_confirmed_existing_test_data_usage(
+        validate_confirmed_existing_test_data_usage(
             repository=self._existing_test_data,
             project_id=task.project_id,
+            change_request_id=task.change_request_id,
             test_plan=test_plan,
             test_data_plan=test_data_plan,
         )
@@ -2303,6 +2307,8 @@ def _project_identity_provider_types(
 def _confirmed_existing_test_data_context(
     repository: ExistingTestDataRepository,
     project_id: str,
+    *,
+    change_request_id: str,
 ) -> list[dict[str, object]]:
     """Expose reviewed adopted fragments to the bounded local planning Task."""
 
@@ -2316,15 +2322,19 @@ def _confirmed_existing_test_data_context(
             "business_summary": copy.deepcopy(value.business_summary or {}),
             "reviewed_plan_fragment": copy.deepcopy(value.plan_data_definition),
         }
-        for value in repository.list_for_project(project_id)
+        for value in repository.list_for_project(
+            project_id,
+            change_request_id=change_request_id,
+        )
         if value.status == "confirmed" and value.plan_data_definition is not None
     ]
 
 
-def _validate_confirmed_existing_test_data_usage(
+def validate_confirmed_existing_test_data_usage(
     *,
     repository: ExistingTestDataRepository,
     project_id: str,
+    change_request_id: str,
     test_plan: Mapping[str, object],
     test_data_plan: Mapping[str, object],
 ) -> None:
@@ -2342,7 +2352,10 @@ def _validate_confirmed_existing_test_data_usage(
         str(value.get("flow_id")): value
         for value in cast(list[dict[str, object]], test_data_plan.get("generation_flows", []))
     }
-    for registration in repository.list_for_project(project_id):
+    for registration in repository.list_for_project(
+        project_id,
+        change_request_id=change_request_id,
+    ):
         if registration.status != "confirmed" or registration.plan_data_definition is None:
             continue
         if registration.test_case_ref not in case_ids:

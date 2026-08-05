@@ -112,6 +112,7 @@ class FakeService:
         self.calls.append(("project-target-data", values))
         return {
             "project_id": values["project_id"],
+            "_obsolete_secret_alias": "previous_expense_test_db",
             "profile": {
                 "connection_alias": values["connection_alias"],
                 "secret_configured": True,
@@ -119,7 +120,15 @@ class FakeService:
             },
         }
 
-    def existing_test_data(self, project_id: str) -> dict[str, object]:
+    def cleanup_obsolete_target_data_secret(self, **values: object) -> None:
+        self.calls.append(("target-data-secret-cleanup", values))
+
+    def existing_test_data(
+        self,
+        project_id: str,
+        *,
+        change_request_id: str | None = None,
+    ) -> dict[str, object]:
         return {"project_id": project_id, "registrations": [], "count": 0}
 
     def project_data_identity_profiles(self, project_id: str) -> dict[str, object]:
@@ -152,7 +161,15 @@ class FakeService:
         return {"registration": {"status": "confirmed"}}
 
     def fixed_data_identifiers(self, project_id: str) -> dict[str, object]:
-        return {"project_id": project_id, "planned": [], "frozen": []}
+        return {
+            "project_id": project_id,
+            "pending": [],
+            "planned": [],
+            "frozen": [],
+            "pending_count": 0,
+            "planned_count": 0,
+            "frozen_count": 0,
+        }
 
     def confirm_project_document_learning(self, **values: object) -> dict[str, object]:
         self.calls.append(("project-document-learning-confirm", values))
@@ -571,6 +588,12 @@ def test_target_data_profile_route_never_puts_connection_secret_in_command_recei
     configured = next(value for name, value in fake.calls if name == "project-target-data")
     assert configured["connection_dsn"] == connection_secret
     assert configured["dialect"] == "postgresql"
+    cleanup = next(value for name, value in fake.calls if name == "target-data-secret-cleanup")
+    assert cleanup == {
+        "project_id": "demo",
+        "connection_alias": "previous_expense_test_db",
+    }
+    assert "_obsolete_secret_alias" not in response.json()
 
 
 def test_existing_data_route_accepts_only_business_readable_input() -> None:
@@ -580,6 +603,7 @@ def test_existing_data_route_accepts_only_business_readable_input() -> None:
         "Idempotency-Key": "existing-data-1",
     }
     payload = {
+        "change_request_id": "change-expense-status",
         "data_name": "差戻し済み経費",
         "business_unique_value": "EXP-20260805-0012",
         "test_case_ref": "TC-EXPENSE-01",
@@ -614,7 +638,15 @@ def test_fixed_data_identifiers_are_read_only_business_projection() -> None:
     response = client.get("/api/v1/projects/demo/fixed-data-identifiers")
 
     assert response.status_code == 200
-    assert response.json() == {"project_id": "demo", "planned": [], "frozen": []}
+    assert response.json() == {
+        "project_id": "demo",
+        "pending": [],
+        "planned": [],
+        "frozen": [],
+        "pending_count": 0,
+        "planned_count": 0,
+        "frozen_count": 0,
+    }
 
 
 def test_project_onboarding_routes_expose_preflight_rebuild_and_retry() -> None:

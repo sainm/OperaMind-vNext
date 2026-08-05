@@ -75,7 +75,7 @@ def test_v2_plan_rejects_unproved_existing_target_system_data() -> None:
     plan = _v2_plan(flow)
 
     assert validate_test_data_plan_artifact(plan) == [
-        "All real database data coverage conditions must execute before the first TestPlan UI step",
+        "All real Provider data coverage conditions must execute before the first TestPlan UI step",
         "expense-draft: generated identity requires an earlier explicit data generation step",
     ]
 

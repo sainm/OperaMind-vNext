@@ -5,6 +5,7 @@ from copy import deepcopy
 import pytest
 
 from operamind.application.test_data_coverage import (
+    conditions_for_step,
     evaluate_condition,
     summarize_data_coverage,
     validate_test_data_coverage_alignment,
@@ -121,6 +122,50 @@ def test_coverage_percentage_is_derived_from_all_condition_proofs() -> None:
     assert passed["coverage_percent"] == 100
     assert failed["status"] == "failed"
     assert failed["coverage_percent"] == 0
+
+
+@pytest.mark.parametrize(
+    ("provider_type", "explicit_source", "observation_source"),
+    [
+        ("api", None, "response"),
+        ("ui", None, "ui"),
+        ("hybrid", "api", "api"),
+    ],
+)
+def test_provider_coverage_uses_the_reviewed_observation_source(
+    provider_type: str,
+    explicit_source: str | None,
+    observation_source: str,
+) -> None:
+    condition = {
+        "condition_id": "condition-1",
+        "criterion_ref": "criterion-1",
+        "test_case_ref": "case-1",
+        "test_data_id": "data-1",
+        "condition_kind": "status",
+        "source_flow_id": "flow-1",
+        "source_step_id": "observe-1",
+        "path": "status",
+        "operator": "equals",
+        "expected": "READY",
+        **({"source": explicit_source} if explicit_source else {}),
+    }
+    plan = {
+        "data_sets": [
+            {
+                "test_data_id": "data-1",
+                "identity_binding": {"provider": {"type": provider_type}},
+                "coverage_conditions": [condition],
+            }
+        ]
+    }
+
+    resolved = conditions_for_step(plan, flow_id="flow-1", step_id="observe-1")[0]
+    proof = evaluate_condition(resolved, observation={"status": "READY"})
+
+    assert resolved["_observation_source"] == observation_source
+    assert proof["observation_source"] == observation_source
+    assert proof["status"] == "passed"
 
 
 def _artifacts() -> tuple[dict, dict, dict]:

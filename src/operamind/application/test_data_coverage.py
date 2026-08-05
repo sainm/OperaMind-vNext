@@ -12,7 +12,7 @@ def validate_test_data_coverage_alignment(
     test_data_plan: Mapping[str, object],
     acceptance_criteria: Mapping[str, object] | None = None,
 ) -> list[str]:
-    """Require one executable real-readback condition per criterion/case/data tuple."""
+    """Require one executable Provider observation per criterion/case/data tuple."""
 
     reasons: list[str] = []
     cases = cast(list[dict[str, Any]], test_plan.get("test_cases", []))
@@ -75,7 +75,7 @@ def validate_test_data_coverage_alignment(
                 "source_step_id"
             ) != identity.get("source_step_id"):
                 reasons.append(
-                    f"{prefix}: condition must use the frozen identity SQL readback step"
+                    f"{prefix}: condition must use the frozen identity Provider observation step"
                 )
             if identity_paths and str(condition.get("path", "")) in identity_paths:
                 reasons.append(
@@ -96,23 +96,33 @@ def conditions_for_step(
     plan: Mapping[str, object], *, flow_id: str, step_id: str
 ) -> list[dict[str, Any]]:
     return [
-        {**condition, "_test_data_id": str(data_set["test_data_id"])}
+        {
+            **condition,
+            "_test_data_id": str(data_set["test_data_id"]),
+            "_observation_source": coverage_observation_source(data_set, condition),
+        }
         for data_set in cast(list[dict[str, Any]], plan.get("data_sets", []))
         for condition in cast(list[dict[str, Any]], data_set.get("coverage_conditions", []))
         if condition.get("source_flow_id") == flow_id and condition.get("source_step_id") == step_id
     ]
 
 
-def evaluate_condition(condition: Mapping[str, object], *, database: object) -> dict[str, object]:
-    """Evaluate one condition only from the reviewed SQL readback observation."""
+def evaluate_condition(
+    condition: Mapping[str, object],
+    *,
+    observation: object | None = None,
+    database: object | None = None,
+) -> dict[str, object]:
+    """Evaluate one condition only from its reviewed Provider observation."""
 
-    exists, actual = extract_path(database, str(condition["path"]))
+    observed = database if observation is None else observation
+    exists, actual = extract_path(observed, str(condition["path"]))
     operator = str(condition["operator"])
     expected_path = condition.get("expected_path")
     expected_exists = True
     expected = condition.get("expected")
     if expected_path is not None:
-        expected_exists, expected = extract_path(database, str(expected_path))
+        expected_exists, expected = extract_path(observed, str(expected_path))
     passed, reason = _compare(
         operator=operator,
         actual_exists=exists,
@@ -128,6 +138,9 @@ def evaluate_condition(condition: Mapping[str, object], *, database: object) -> 
         "condition_kind": str(condition["condition_kind"]),
         "source_flow_id": str(condition["source_flow_id"]),
         "source_step_id": str(condition["source_step_id"]),
+        "observation_source": str(
+            condition.get("_observation_source") or condition.get("source") or "database"
+        ),
         "path": str(condition["path"]),
         "operator": operator,
         "expected": expected,
@@ -195,6 +208,23 @@ def extract_path(source: object, path: str) -> tuple[bool, object | None]:
     return True, current
 
 
+def coverage_observation_source(
+    data_set: Mapping[str, object], condition: Mapping[str, object]
+) -> str:
+    """Resolve the reviewed runtime observation channel for one coverage condition."""
+
+    explicit = str(condition.get("source") or "")
+    if explicit:
+        return explicit
+    identity = cast(Mapping[str, object], data_set.get("identity_binding") or {})
+    provider = cast(Mapping[str, object], identity.get("provider") or {})
+    return {
+        "database": "database",
+        "api": "response",
+        "ui": "ui",
+    }.get(str(provider.get("type") or ""), "")
+
+
 def _normalize_array_indexes(path: str) -> str:
     result = ""
     index = 0
@@ -224,9 +254,9 @@ def _compare(
         if operator == "exists":
             passed = actual_exists is bool(expected)
         elif not actual_exists:
-            return False, "database readback path was not observed"
+            return False, "Provider observation path was not observed"
         elif not expected_exists:
-            return False, "database relationship target path was not observed"
+            return False, "Provider relationship target path was not observed"
         elif operator in {"equals", "equals_path"}:
             passed = actual == expected
         elif operator in {"not_equals", "not_equals_path"}:
@@ -249,8 +279,8 @@ def _compare(
         else:
             return False, f"unsupported data coverage operator: {operator}"
     except (IndexError, TypeError, ValueError):
-        return False, "database value is incompatible with the reviewed data condition"
-    return passed, None if passed else "database readback did not satisfy the data condition"
+        return False, "Provider value is incompatible with the reviewed data condition"
+    return passed, None if passed else "Provider observation did not satisfy the data condition"
 
 
 def _number(value: object) -> float:

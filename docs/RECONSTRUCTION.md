@@ -123,7 +123,7 @@ Web API と画面は、次の六つだけを公開する。
 - [x] production package 内の PostgreSQL テスト helper を `tests/support` へ移し、`BusinessDataTemplate` を廃止して跨画面データを直接 TestDataPlan へ統合
 - [x] Project Target Data Profile を追加し、確認済み `query_binding_id` だけを SQL TestDataPlan に公開。対象 DB Secret はユーザー領域へ隔離し、型／長さ／必須／列挙・業務制約、実 Column、read-after-write、cleanup、Transaction、冪等方針を Plan 確認と production 実行の共通 Gate にした。Fixture は test injection 専用のまま維持
 - [x] TestDataPlan の各 Test Data を実 DB 主キー／業務一意キー／画面識別キーへ一意に Binding し、Run 固有 digest と Evidence を固定。跨画面／表 UI を exact Binding Scope に限定し、0 件・複数件・drift・行番号・曖昧 Text・AI 推測を fail closed にした
-- [x] AcceptanceCriteria／TestCase／TestData の全組合せを Test Data Coverage の母数に固定し、確認済み SQL readback の実測値で項目／状態／境界値／関連関係を検証。期待値・実測値・判定・digest・Evidence を永続化し、100% 未満では TestPlan UI Step を開始しない Gate を追加
+- [x] AcceptanceCriteria／TestCase／TestData の全組合せを Test Data Coverage の母数に固定し、DataIdentityProvider の確認済み実 Observation（database／api／ui／hybrid）で項目／状態／境界値／関連関係を検証。期待値・実測値・Observation Source・判定・digest・Evidence を永続化し、100% 未満では TestPlan UI Step を開始しない Gate を追加
 - [x] 過去 source tree に結び付いた自動生成 UI／TestData／full-regression Evidence を削除し、再採取が必要な Readiness gate を pending へ戻す
 - [x] 未登録だった `CopilotImpactContext` を Core Contract に追加し、Task Scheduler の旧 `UiExecutionPlan`／誤った `ChangeOrchestration` 出力型を現行五 Artifact に修正
 - [x] テストだけが利用していた Application の Unresolved Evidence 再 export wrapper を削除し、実装と Repository の直接依存へ統一

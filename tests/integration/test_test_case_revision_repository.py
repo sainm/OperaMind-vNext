@@ -563,7 +563,7 @@ def test_natural_language_revision_supersedes_case_and_stales_old_evidence() -> 
 
 
 @pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
-def test_copilot_ui_plan_regeneration_persists_v2_plans_before_new_execution() -> None:
+def test_copilot_ui_plan_regeneration_persists_v3_data_plan_before_new_execution() -> None:
     assert DATABASE_URL is not None
     schema_name = f"test_copilot_ui_revision_{uuid4().hex}"
     with psycopg.connect(DATABASE_URL) as connection:
@@ -574,6 +574,47 @@ def test_copilot_ui_plan_regeneration_persists_v2_plans_before_new_execution() -
         contracts = ContractCatalog.load(ROOT / "contracts")
         bundle = _source_bundle()
         _seed_scope(connection, contracts, bundle)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO project_data_identity_profiles (
+                    project_id, provider_ref, provider_type, lookup_steps,
+                    cleanup_steps, identity_definition, business_summary_fields,
+                    reviewed_by
+                ) VALUES (
+                    'visiondemo', 'database.v1', 'database', %s, '[]'::jsonb,
+                    %s, '[\"expense_number\"]'::jsonb, 'qa-reviewer'
+                )
+                """,
+                (
+                    Jsonb(
+                        [
+                            {
+                                "step_id": "lookup-expense",
+                                "sequence": 1,
+                                "channel": "sql",
+                                "business_action": "業務番号で経費を一意に確認する",
+                                "target": "read_expense_identity",
+                                "inputs": {
+                                    "expense_number": "{{business_unique_value}}"
+                                },
+                                "depends_on": [],
+                                "output_bindings": [],
+                                "postconditions": [
+                                    {
+                                        "assertion_id": "lookup-one",
+                                        "observe_via": "database",
+                                        "subject": "row_count",
+                                        "operator": "count_equals",
+                                        "expected": 1,
+                                    }
+                                ],
+                            }
+                        ]
+                    ),
+                    Jsonb({"source_step_id": "lookup-expense"}),
+                ),
+            )
         service = RevisionService(connection=connection, repository_root=ROOT)
         preview = service.propose(
             change_request_id="change-request-1",
@@ -609,8 +650,8 @@ def test_copilot_ui_plan_regeneration_persists_v2_plans_before_new_execution() -
         }
         generated_test_data_plan = {
             "artifact_type": "TestDataPlan",
-            "schema_version": "v2",
-            "test_data_plan_id": "copilot-ui-data-v2",
+            "schema_version": "v3",
+            "test_data_plan_id": "copilot-ui-data-v3",
             "test_plan_id": "copilot-ui-plan-v2",
             "project_id": "visiondemo",
             "status": "ready",
@@ -657,6 +698,7 @@ def test_copilot_ui_plan_regeneration_persists_v2_plans_before_new_execution() -
                         },
                         "match_count": {"source": "database", "path": "row_count"},
                     },
+                    "runtime_variable_writes": [],
                     "coverage_conditions": [
                         {
                             "condition_id": "expense-status-condition-v2",
@@ -676,6 +718,7 @@ def test_copilot_ui_plan_regeneration_persists_v2_plans_before_new_execution() -
             "generation_flows": [
                 {
                     "flow_id": "expense-ui-flow-v2",
+                    "depends_on_flows": [],
                     "title": "経費一覧を画面で確認する",
                     "test_data_refs": ["expense-data"],
                     "test_case_refs": ["expense-case"],
@@ -839,7 +882,7 @@ def test_copilot_ui_plan_regeneration_persists_v2_plans_before_new_execution() -
         target_id = str(applied["revision"]["target_orchestration_id"])
         assert applied["revision"]["applied_by"] == "codex:fallback"
         assert applied["bundle"]["test_plan"]["schema_version"] == "v2"
-        assert applied["bundle"]["test_data_plan"]["schema_version"] == "v2"
+        assert applied["bundle"]["test_data_plan"]["schema_version"] == "v3"
         persisted_steps = applied["bundle"]["test_data_plan"]["generation_flows"][0]["steps"]
         open_step = next(step for step in persisted_steps if step["step_id"] == "open-list-v2")
         assert open_step["playwright"]["action"] == "goto"

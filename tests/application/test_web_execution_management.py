@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
@@ -302,6 +304,132 @@ def test_incomplete_business_coverage_disables_execution_and_direct_start(
             idempotency_key="blocked-run",
             actor="local-user",
         )
+
+
+def test_target_data_alias_change_removes_obsolete_secret_only_after_configuration_returns(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    service = object.__new__(WebControlPlaneService)
+    service._connection = object()  # type: ignore[attr-defined]
+    service._root = tmp_path  # type: ignore[attr-defined]
+    deleted: list[tuple[str, str]] = []
+
+    class Secrets:
+        def configured(self, **_values: object) -> bool:
+            return False
+
+        def put(self, **_values: object) -> None:
+            return None
+
+        def delete(self, *, project_id: str, connection_alias: str) -> None:
+            deleted.append((project_id, connection_alias))
+
+    profile = SimpleNamespace(
+        public_view=lambda **_values: {
+            "connection_alias": "new_alias",
+            "dialect": "postgresql",
+        }
+    )
+    profiles = iter(
+        (
+            SimpleNamespace(connection_alias="old_alias", dialect="postgresql"),
+            SimpleNamespace(connection_alias="new_alias", dialect="postgresql"),
+        )
+    )
+    repository = SimpleNamespace(
+        get=lambda _project_id: next(profiles),
+        replace=lambda **_values: profile,
+    )
+    monkeypatch.setattr(
+        "operamind.application.web_control_plane.default_target_database_adapters",
+        lambda: SimpleNamespace(require=lambda _dialect: object()),
+    )
+    monkeypatch.setattr(
+        "operamind.application.web_control_plane.TargetDataProfileRepository",
+        lambda *_args, **_kwargs: repository,
+    )
+    monkeypatch.setattr(
+        "operamind.application.web_control_plane.TargetDataSecretStore",
+        lambda **_kwargs: Secrets(),
+    )
+
+    result = service.configure_project_target_data_profile(
+        project_id="project-1",
+        connection_alias="new_alias",
+        dialect="postgresql",
+        connection_dsn="postgresql://tester:secret@127.0.0.1/target",
+        transaction_policy="per_binding_transaction",
+        bindings=({"query_binding_id": "read-1"},),
+        actor="admin",
+    )
+
+    assert deleted == []
+    assert result["_obsolete_secret_alias"] == "old_alias"
+    assert result["profile"]["secret_configured"] is True  # type: ignore[index]
+
+    service.cleanup_obsolete_target_data_secret(
+        project_id="project-1",
+        connection_alias="old_alias",
+    )
+
+    assert deleted == [("project-1", "old_alias")]
+
+
+def test_fixed_data_identifiers_distinguish_copilot_waiting_from_confirmed_plan() -> None:
+    service = object.__new__(WebControlPlaneService)
+    fragment = {"data_set": {"test_data_id": "adopted-data-1"}}
+    registration = SimpleNamespace(
+        status="confirmed",
+        change_request_id="change-1",
+        plan_data_definition=fragment,
+        data_name="差戻し済み経費",
+        business_unique_value="EXP-001",
+        test_case_ref="case-1",
+        retain_after_test=True,
+        provider_type="database",
+        business_summary={"status": "RETURNED"},
+        confirmed_at=datetime(2026, 8, 5, tzinfo=UTC),
+    )
+    service._existing_test_data = SimpleNamespace(  # type: ignore[attr-defined]
+        list_for_project=lambda _project_id: (registration,),
+        fixed_binding_views=lambda _project_id: (),
+    )
+    bundles: list[dict[str, object] | None] = [None]
+    service._orchestrations = SimpleNamespace(  # type: ignore[attr-defined]
+        latest_bundle=lambda _request_id: bundles[-1]
+    )
+    service._case_execution_authorizations = SimpleNamespace(  # type: ignore[attr-defined]
+        state=lambda **_values: {"authorized": False}
+    )
+
+    waiting = service.fixed_data_identifiers("project-1")
+
+    assert waiting["planned"] == []
+    assert waiting["pending"][0]["adoption_state"] == "awaiting_copilot"  # type: ignore[index]
+
+    bundles.append(
+        {
+            "orchestration": {
+                "orchestration_id": "orchestration-2",
+                "status": "ready",
+            },
+            "coverage_report": {"status": "passed", "coverage_percent": 100},
+            "test_data_plan": {"data_sets": [{"test_data_id": "adopted-data-1"}]},
+        }
+    )
+    confirmation = service.fixed_data_identifiers("project-1")
+
+    assert confirmation["planned"] == []
+    assert confirmation["pending"][0]["adoption_state"] == "confirmation_required"  # type: ignore[index]
+
+    service._case_execution_authorizations = SimpleNamespace(  # type: ignore[attr-defined]
+        state=lambda **_values: {"authorized": True}
+    )
+    planned = service.fixed_data_identifiers("project-1")
+
+    assert planned["pending"] == []
+    assert planned["planned"][0]["adoption_state"] == "planned"  # type: ignore[index]
 
 
 def test_test_case_revision_preview_hides_internal_ids_and_confirmation_restarts_downstream(

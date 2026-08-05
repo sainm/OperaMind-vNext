@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import Any
@@ -67,7 +68,7 @@ class RunContext:
         return MappingProxyType(
             {
                 test_data_id: MappingProxyType(dict(binding))
-                for test_data_id, binding in self._frozen_data_bindings.items()
+                for test_data_id, binding in deepcopy(self._frozen_data_bindings).items()
             }
         )
 
@@ -99,14 +100,14 @@ class RunContext:
         test_data_id = self._validate_binding(binding)
         if test_data_id in self._frozen_data_bindings:
             raise ValueError(f"Data binding is already frozen: {test_data_id}")
-        self._frozen_data_bindings[test_data_id] = dict(binding)
+        self._frozen_data_bindings[test_data_id] = deepcopy(dict(binding))
 
     def resolve_binding(self, test_data_id: str) -> Mapping[str, object]:
         binding = self._frozen_data_bindings.get(test_data_id)
         if binding is None:
             raise ValueError(f"Frozen Data binding does not exist: {test_data_id}")
         self._validate_binding(binding, expected_test_data_id=test_data_id)
-        return MappingProxyType(dict(binding))
+        return MappingProxyType(deepcopy(binding))
 
     def add_evidence_refs(self, values: Sequence[str]) -> None:
         for value in values:
@@ -118,7 +119,7 @@ class RunContext:
         return {
             "runtime_variables": dict(self.runtime_variables),
             "frozen_data_bindings": [
-                dict(self._frozen_data_bindings[key])
+                deepcopy(self._frozen_data_bindings[key])
                 for key in sorted(self._frozen_data_bindings)
             ],
             "flow_dependencies": {

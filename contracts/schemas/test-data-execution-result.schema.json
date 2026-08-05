@@ -190,6 +190,7 @@
         "condition_kind": {"enum": ["field", "status", "boundary", "relationship"]},
         "source_flow_id": {"type": "string", "minLength": 1},
         "source_step_id": {"type": "string", "minLength": 1},
+        "observation_source": {"enum": ["response", "api", "database", "ui"]},
         "path": {"type": "string", "minLength": 1},
         "operator": {"type": "string", "minLength": 1},
         "expected": {},
@@ -384,6 +385,13 @@
               "properties": {
                 "step_results": {"items": {"required": ["test_data_binding_refs"]}},
                 "cleanup_results": {"items": {"required": ["test_data_binding_refs"]}}
+              }
+            }
+          },
+          "data_coverage": {
+            "properties": {
+              "proofs": {
+                "items": {"required": ["observation_source"]}
               }
             }
           }

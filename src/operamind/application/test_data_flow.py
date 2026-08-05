@@ -684,6 +684,9 @@ def _validate_v2_data_coverage_contract(
     }
     for data_set in data_sets:
         test_data_id = str(data_set.get("test_data_id", ""))
+        identity = cast(dict[str, Any], data_set.get("identity_binding") or {})
+        provider = cast(dict[str, Any], identity.get("provider") or {})
+        provider_type = str(provider.get("type") or "")
         conditions = cast(list[dict[str, Any]], data_set.get("coverage_conditions", []))
         if not conditions:
             reasons.append(f"{test_data_id}: v2 test data requires executable coverage_conditions")
@@ -715,8 +718,27 @@ def _validate_v2_data_coverage_contract(
                     ),
                     None,
                 )
-                if source_step is None or source_step.get("channel") != "sql":
-                    reasons.append(f"{prefix}: coverage source must be a SQL readback")
+                source_name = str(condition.get("source") or "")
+                if not source_name:
+                    source_name = {
+                        "database": "database",
+                        "api": "response",
+                        "ui": "ui",
+                    }.get(provider_type, "")
+                allowed_sources = {
+                    "sql": {"database"},
+                    "http": {"response", "api"},
+                    "ui": {"ui"},
+                }
+                channel = str(source_step.get("channel") or "") if source_step else ""
+                if provider_type == "hybrid" and not condition.get("source"):
+                    reasons.append(
+                        f"{prefix}: hybrid coverage condition requires an explicit Provider source"
+                    )
+                elif not source_name or source_name not in allowed_sources.get(channel, set()):
+                    reasons.append(
+                        f"{prefix}: coverage source does not match its reviewed Provider Step"
+                    )
             kind = str(condition.get("condition_kind", ""))
             operator = str(condition.get("operator", ""))
             if operator not in kind_operators.get(kind, set()):
@@ -731,7 +753,7 @@ def _validate_v2_data_coverage_contract(
         and max(coverage_positions) >= min(test_ui_positions)
     ):
         reasons.append(
-            "All real database data coverage conditions must execute before the first "
+            "All real Provider data coverage conditions must execute before the first "
             "TestPlan UI step"
         )
     return reasons

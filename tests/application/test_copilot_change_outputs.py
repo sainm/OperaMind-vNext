@@ -19,10 +19,10 @@ from operamind.application.copilot_coding_task import (
     _public_task_artifact,
     _public_workspace,
     _stage_contract,
-    _validate_confirmed_existing_test_data_usage,
     _validate_planning_alignment,
     _validate_planning_artifact_scope,
     build_bridge_task_view,
+    validate_confirmed_existing_test_data_usage,
 )
 from operamind.application.test_data_ui_verification import (
     _ui_scenario_binding_refs,
@@ -124,37 +124,87 @@ def test_confirmed_existing_data_is_exposed_and_must_be_consumed_by_its_case() -
             "generation_flow": reviewed_flow,
         },
     )
-    repository = SimpleNamespace(list_for_project=lambda _project_id: (registration,))
+    repository = SimpleNamespace(
+        list_for_project=lambda _project_id, **_kwargs: (registration,)
+    )
     test_plan = {"test_cases": [{"test_case_id": "case-1"}]}
 
-    context = _confirmed_existing_test_data_context(repository, "project-1")  # type: ignore[arg-type]
+    context = _confirmed_existing_test_data_context(  # type: ignore[arg-type]
+        repository,
+        "project-1",
+        change_request_id="change-1",
+    )
     assert context[0]["reviewed_plan_fragment"] == registration.plan_data_definition
     with pytest.raises(ValueError, match="missing from TestDataPlan"):
-        _validate_confirmed_existing_test_data_usage(
+        validate_confirmed_existing_test_data_usage(
             repository=repository,  # type: ignore[arg-type]
             project_id="project-1",
+            change_request_id="change-1",
             test_plan=test_plan,
             test_data_plan={"data_sets": [], "generation_flows": []},
         )
 
     with pytest.raises(ValueError, match="missing Test Case"):
-        _validate_confirmed_existing_test_data_usage(
+        validate_confirmed_existing_test_data_usage(
             repository=repository,  # type: ignore[arg-type]
             project_id="project-1",
+            change_request_id="change-1",
             test_plan={"test_cases": [{"test_case_id": "different-case"}]},
             test_data_plan={"data_sets": [], "generation_flows": []},
         )
 
     actual_data_set = {**reviewed_data_set, "coverage_conditions": [{"condition_id": "c1"}]}
-    _validate_confirmed_existing_test_data_usage(
+    validate_confirmed_existing_test_data_usage(
         repository=repository,  # type: ignore[arg-type]
         project_id="project-1",
+        change_request_id="change-1",
         test_plan=test_plan,
         test_data_plan={
             "data_sets": [actual_data_set],
             "generation_flows": [reviewed_flow],
         },
     )
+
+
+def test_confirmed_existing_data_is_isolated_by_change_request() -> None:
+    calls: list[str | None] = []
+    current = SimpleNamespace(
+        status="confirmed",
+        data_name="current",
+        business_unique_value="CURRENT-1",
+        test_case_ref="case-current",
+        retain_after_test=True,
+        provider_type="api",
+        business_summary={"business_no": "CURRENT-1"},
+        plan_data_definition={
+            "data_set": {"test_data_id": "data-current"},
+            "generation_flow": {"flow_id": "flow-current"},
+        },
+    )
+    unrelated = SimpleNamespace(
+        **{
+            **vars(current),
+            "data_name": "unrelated",
+            "test_case_ref": "case-unrelated",
+        }
+    )
+
+    def list_for_project(
+        _project_id: str, *, change_request_id: str | None = None
+    ) -> tuple[object, ...]:
+        calls.append(change_request_id)
+        return (current,) if change_request_id == "change-current" else (unrelated,)
+
+    repository = SimpleNamespace(list_for_project=list_for_project)
+
+    context = _confirmed_existing_test_data_context(  # type: ignore[arg-type]
+        repository,
+        "project-1",
+        change_request_id="change-current",
+    )
+
+    assert [value["data_name"] for value in context] == ["current"]
+    assert calls == ["change-current"]
 
 
 def _publish_request(root: Path, **changes: object) -> CopilotCodingTaskPublishRequest:
@@ -415,7 +465,7 @@ def test_test_planning_context_reads_the_successfully_closed_code_scope(
     service = object.__new__(CopilotCodingTaskService)
     service._connection = object()
     service._existing_test_data = SimpleNamespace(
-        list_for_project=lambda _project_id: (),
+        list_for_project=lambda _project_id, **_kwargs: (),
         profiles=lambda _project_id: (),
     )
     service._contracts = SimpleNamespace(root=Path("contracts").resolve())
@@ -773,7 +823,7 @@ def test_test_planning_returns_uncovered_requirements_without_completing_task(
     service = object.__new__(CopilotCodingTaskService)
     service._connection = None
     service._existing_test_data = SimpleNamespace(
-        list_for_project=lambda _project_id: (),
+        list_for_project=lambda _project_id, **_kwargs: (),
         profiles=lambda _project_id: (),
     )
     service._tasks = SimpleNamespace(
@@ -2378,7 +2428,7 @@ def test_test_planning_persists_only_a_fully_covered_executable_plan(
 
     service = object.__new__(CopilotCodingTaskService)
     service._existing_test_data = SimpleNamespace(
-        list_for_project=lambda _project_id: (),
+        list_for_project=lambda _project_id, **_kwargs: (),
         profiles=lambda _project_id: (),
     )
     service._tasks = Tasks()
@@ -2479,7 +2529,7 @@ def test_ui_plan_revision_context_is_read_only_and_contains_confirmed_input(
     service = object.__new__(CopilotCodingTaskService)
     service._connection = object()
     service._existing_test_data = SimpleNamespace(
-        list_for_project=lambda _project_id: (),
+        list_for_project=lambda _project_id, **_kwargs: (),
         profiles=lambda _project_id: (),
     )
     service._contracts = object()
@@ -2590,7 +2640,7 @@ def test_ui_plan_revision_records_only_a_validated_regenerated_bundle(
     service = object.__new__(CopilotCodingTaskService)
     service._connection = object()
     service._existing_test_data = SimpleNamespace(
-        list_for_project=lambda _project_id: (),
+        list_for_project=lambda _project_id, **_kwargs: (),
         profiles=lambda _project_id: (),
     )
     service._contracts = object()

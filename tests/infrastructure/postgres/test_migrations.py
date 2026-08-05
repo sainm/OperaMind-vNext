@@ -96,6 +96,7 @@ def test_repository_migrations_are_sequential_and_transaction_free() -> None:
         "0083",
         "0084",
         "0085",
+        "0086",
     ]
     assert all(len(migration.checksum) == 64 for migration in catalog.migrations)
 
@@ -169,6 +170,12 @@ def test_existing_data_and_run_context_are_persisted_fail_closed() -> None:
     assert "provider_revision integer" in provider_snapshot
     assert "provider_digest text" in provider_snapshot
     assert "provider_snapshot_pair" in provider_snapshot
+
+    change_scope = (
+        ROOT / "migrations" / "0086_existing_data_change_scope.sql"
+    ).read_text(encoding="utf-8")
+    assert "ADD COLUMN change_request_id text" in change_scope
+    assert "REFERENCES change_requests(change_request_id, project_id)" in change_scope
 
 
 def test_project_onboarding_is_staged_and_recoverable() -> None:

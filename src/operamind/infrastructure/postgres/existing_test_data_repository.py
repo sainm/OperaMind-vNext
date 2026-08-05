@@ -100,14 +100,15 @@ class ExistingTestDataRepository:
             cursor.execute(
                 """
                 INSERT INTO existing_test_data_registrations (
-                    registration_id, project_id, data_name, business_unique_value,
+                    registration_id, project_id, change_request_id,
+                    data_name, business_unique_value,
                     test_case_ref, retain_after_test, status, provider_ref,
                     provider_type, match_count, business_summary, identity_candidate,
                     evidence_refs, plan_data_definition, blocking_reasons,
                     requested_by, requested_at, confirmed_by, confirmed_at,
                     provider_revision, provider_digest
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb,
                     %s, %s, %s, %s, %s, %s
                 )
@@ -137,6 +138,41 @@ class ExistingTestDataRepository:
                 return
             if current.status != "candidate":
                 raise ValueError("Blocked existing test data cannot be confirmed")
+            if value.provider_ref is None:
+                raise ValueError("Existing test data confirmation has no Provider")
+            cursor.execute(
+                """
+                SELECT provider_type, lookup_steps, cleanup_steps,
+                       identity_definition, business_summary_fields, revision
+                FROM project_data_identity_profiles
+                WHERE project_id = %s AND provider_ref = %s AND active
+                FOR UPDATE
+                """,
+                (value.project_id, value.provider_ref),
+            )
+            profile_row = cursor.fetchone()
+            if profile_row is None:
+                raise ValueError("確認済み DataIdentityProvider が存在しません")
+            profile = ProjectDataIdentityProfile(
+                project_id=value.project_id,
+                provider_ref=value.provider_ref,
+                provider_type=str(profile_row[0]),
+                lookup_steps=tuple(cast(list[Mapping[str, object]], profile_row[1])),
+                cleanup_steps=tuple(cast(list[Mapping[str, object]], profile_row[2])),
+                identity_definition=cast(Mapping[str, object], profile_row[3]),
+                business_summary_fields=tuple(
+                    str(item) for item in cast(list[object], profile_row[4])
+                ),
+                revision=int(profile_row[5]),
+            )
+            if (
+                value.provider_type != profile.provider_type
+                or value.provider_revision != profile.revision
+                or value.provider_digest != profile.content_digest
+            ):
+                raise ValueError(
+                    "DataIdentityProvider 設定が候補生成後に変更されました。再登録してください。"
+                )
             cursor.execute(
                 """
                 UPDATE existing_test_data_registrations
@@ -161,7 +197,10 @@ class ExistingTestDataRepository:
             return self._get(cursor, registration_id, for_update=False)
 
     def list_for_project(
-        self, project_id: str
+        self,
+        project_id: str,
+        *,
+        change_request_id: str | None = None,
     ) -> tuple[ExistingTestDataRegistration, ...]:
         with self._connection.cursor() as cursor:
             cursor.execute(
@@ -169,9 +208,10 @@ class ExistingTestDataRepository:
                 SELECT registration_id
                 FROM existing_test_data_registrations
                 WHERE project_id = %s
+                  AND (%s::text IS NULL OR change_request_id = %s)
                 ORDER BY requested_at DESC, registration_id DESC
                 """,
-                (project_id,),
+                (project_id, change_request_id, change_request_id),
             )
             ids = [str(row[0]) for row in cursor.fetchall()]
             return tuple(
@@ -285,7 +325,8 @@ class ExistingTestDataRepository:
     ) -> ExistingTestDataRegistration | None:
         cursor.execute(
             """
-            SELECT project_id, data_name, business_unique_value, test_case_ref,
+            SELECT project_id, change_request_id, data_name, business_unique_value,
+                   test_case_ref,
                    retain_after_test, status, provider_ref, provider_type,
                    match_count, business_summary, identity_candidate,
                    evidence_refs, blocking_reasons, requested_by, requested_at,
@@ -303,27 +344,28 @@ class ExistingTestDataRepository:
         return ExistingTestDataRegistration(
             registration_id=registration_id,
             project_id=str(row[0]),
-            data_name=str(row[1]),
-            business_unique_value=str(row[2]),
-            test_case_ref=str(row[3]),
-            retain_after_test=bool(row[4]),
-            status=str(row[5]),
-            provider_ref=str(row[6]) if row[6] is not None else None,
-            provider_type=str(row[7]) if row[7] is not None else None,
-            match_count=int(row[8]) if row[8] is not None else None,
-            business_summary=cast(Mapping[str, object] | None, row[9]),
-            identity_candidate=cast(Mapping[str, object] | None, row[10]),
-            evidence_refs=tuple(str(value) for value in cast(list[object], row[11])),
-            blocking_reasons=tuple(str(value) for value in cast(list[object], row[12])),
-            requested_by=str(row[13]),
-            requested_at=cast(datetime, row[14]).astimezone(UTC),
-            plan_data_definition=cast(Mapping[str, object] | None, row[15]),
-            confirmed_by=str(row[16]) if row[16] is not None else None,
+            change_request_id=str(row[1]) if row[1] is not None else None,
+            data_name=str(row[2]),
+            business_unique_value=str(row[3]),
+            test_case_ref=str(row[4]),
+            retain_after_test=bool(row[5]),
+            status=str(row[6]),
+            provider_ref=str(row[7]) if row[7] is not None else None,
+            provider_type=str(row[8]) if row[8] is not None else None,
+            match_count=int(row[9]) if row[9] is not None else None,
+            business_summary=cast(Mapping[str, object] | None, row[10]),
+            identity_candidate=cast(Mapping[str, object] | None, row[11]),
+            evidence_refs=tuple(str(value) for value in cast(list[object], row[12])),
+            blocking_reasons=tuple(str(value) for value in cast(list[object], row[13])),
+            requested_by=str(row[14]),
+            requested_at=cast(datetime, row[15]).astimezone(UTC),
+            plan_data_definition=cast(Mapping[str, object] | None, row[16]),
+            confirmed_by=str(row[17]) if row[17] is not None else None,
             confirmed_at=(
-                cast(datetime, row[17]).astimezone(UTC) if row[17] is not None else None
+                cast(datetime, row[18]).astimezone(UTC) if row[18] is not None else None
             ),
-            provider_revision=int(row[18]) if row[18] is not None else None,
-            provider_digest=str(row[19]) if row[19] is not None else None,
+            provider_revision=int(row[19]) if row[19] is not None else None,
+            provider_digest=str(row[20]) if row[20] is not None else None,
         )
 
 
@@ -331,6 +373,7 @@ def _write_values(value: ExistingTestDataRegistration) -> tuple[object, ...]:
     return (
         value.registration_id,
         value.project_id,
+        value.change_request_id,
         value.data_name,
         value.business_unique_value,
         value.test_case_ref,

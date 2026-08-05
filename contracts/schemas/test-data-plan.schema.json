@@ -328,7 +328,11 @@
         "condition_kind": {"enum": ["field", "status", "boundary", "relationship"]},
         "source_flow_id": {"$ref": "#/$defs/nonBlank"},
         "source_step_id": {"$ref": "#/$defs/nonBlank"},
-        "path": {"type": "string", "pattern": "^(?:\\$\\.)?rows\\[0\\](?:\\.[A-Za-z_][A-Za-z0-9_]*)+$"},
+        "source": {"enum": ["response", "api", "database", "ui"]},
+        "path": {
+          "type": "string",
+          "pattern": "^(?:\\$\\.)?[A-Za-z_][A-Za-z0-9_]*(?:\\[(?:0|[1-9][0-9]*)\\]|\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+        },
         "operator": {
           "enum": [
             "equals", "not_equals", "contains", "exists", "in",
@@ -337,7 +341,10 @@
           ]
         },
         "expected": {},
-        "expected_path": {"type": "string", "pattern": "^(?:\\$\\.)?rows\\[0\\](?:\\.[A-Za-z_][A-Za-z0-9_]*)+$"}
+        "expected_path": {
+          "type": "string",
+          "pattern": "^(?:\\$\\.)?[A-Za-z_][A-Za-z0-9_]*(?:\\[(?:0|[1-9][0-9]*)\\]|\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+        }
       },
       "allOf": [
         {

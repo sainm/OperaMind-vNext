@@ -82,6 +82,32 @@ def test_run_context_blocks_foreign_mutated_and_duplicate_bindings() -> None:
         _context().freeze_binding(mutated)
 
 
+def test_run_context_nested_binding_reads_cannot_mutate_the_frozen_value() -> None:
+    context = _context()
+    binding = _binding()
+    payload = {
+        key: value
+        for key, value in binding.items()
+        if key not in {"content_digest", "evidence_ref"}
+    }
+    payload["business_unique_keys"] = [{"name": "expense_number", "value": "EXP-001"}]
+    binding = {
+        **payload,
+        "content_digest": canonical_digest(payload),
+        "evidence_ref": "artifact://result/data-bindings/binding-001",
+    }
+    context.freeze_binding(binding)
+
+    resolved = context.resolve_binding("expense-existing")
+    resolved["business_unique_keys"][0]["value"] = "EXP-MUTATED"  # type: ignore[index]
+    projected = context.frozen_data_bindings["expense-existing"]
+    projected["business_unique_keys"][0]["value"] = "EXP-PROJECTED"  # type: ignore[index]
+
+    assert context.resolve_binding("expense-existing")["business_unique_keys"] == [
+        {"name": "expense_number", "value": "EXP-001"}
+    ]
+
+
 def test_run_token_is_stable_per_run_and_differs_between_runs() -> None:
     first = _context(run_id="run-001")
     same = _context(run_id="run-001")

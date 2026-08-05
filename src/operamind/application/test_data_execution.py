@@ -1350,11 +1350,14 @@ def _evaluate_step_data_coverage(
     conditions = conditions_for_step(plan, flow_id=flow_id, step_id=step_id)
     if not conditions:
         return [], ()
-    database = observations.get("database")
     proofs: list[dict[str, Any]] = []
     evidence: list[TestDataExecutionEvidence] = []
     for condition in conditions:
-        evaluated = evaluate_condition(condition, database=database)
+        source = str(condition.get("_observation_source") or "")
+        evaluated = evaluate_condition(
+            condition,
+            observation=observations.get(source) if source else None,
+        )
         proof_id = _coverage_proof_id(request.run_id, str(condition["condition_id"]))
         payload = {
             "proof_id": proof_id,

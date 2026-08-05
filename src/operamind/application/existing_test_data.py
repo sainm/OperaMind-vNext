@@ -26,6 +26,7 @@ _VARIABLE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 class ExistingTestDataRegistrationInput:
     registration_id: str
     project_id: str
+    change_request_id: str
     data_name: str
     business_unique_value: str
     test_case_ref: str
@@ -39,6 +40,7 @@ class ExistingTestDataRegistrationInput:
             for value in (
                 self.registration_id,
                 self.project_id,
+                self.change_request_id,
                 self.data_name,
                 self.business_unique_value,
                 self.test_case_ref,
@@ -150,6 +152,7 @@ class ExistingDataObservationResolver(Protocol):
 class ExistingTestDataRegistration:
     registration_id: str
     project_id: str
+    change_request_id: str | None
     data_name: str
     business_unique_value: str
     test_case_ref: str
@@ -275,6 +278,7 @@ class ExistingTestDataRegistrationService:
         return ExistingTestDataRegistration(
             registration_id=value.registration_id,
             project_id=value.project_id,
+            change_request_id=value.change_request_id,
             data_name=value.data_name,
             business_unique_value=value.business_unique_value,
             test_case_ref=value.test_case_ref,
@@ -331,6 +335,7 @@ class ExistingTestDataRegistrationService:
                 for field in (
                     "registration_id",
                     "project_id",
+                    "change_request_id",
                     "data_name",
                     "business_unique_value",
                     "test_case_ref",
@@ -364,6 +369,7 @@ def _blocked(
     return ExistingTestDataRegistration(
         registration_id=value.registration_id,
         project_id=value.project_id,
+        change_request_id=value.change_request_id,
         data_name=value.data_name,
         business_unique_value=value.business_unique_value,
         test_case_ref=value.test_case_ref,

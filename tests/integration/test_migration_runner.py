@@ -166,6 +166,7 @@ def test_migrations_apply_once_and_record_checksum() -> None:
         "0083",
         "0084",
         "0085",
+        "0086",
     )
     assert second == ()
     assert rows == [
@@ -582,6 +583,11 @@ def test_migrations_apply_once_and_record_checksum() -> None:
             "existing_data_provider_snapshot",
             catalog.migrations[84].checksum,
         ),
+        (
+            "0086",
+            "existing_data_change_scope",
+            catalog.migrations[85].checksum,
+        ),
     ]
     assert "document_discovery_bound" in event_constraint
     assert identity_contract_type == ("jsonb",)
@@ -837,7 +843,8 @@ def test_applied_migration_checksum_mismatch_is_rejected(tmp_path: Path) -> None
         "0082_existing_data_run_context.sql",
         "0083_immediate_test_data_binding_evidence.sql",
         "0084_ui_locator_blocked_feedback.sql",
-        "0085_existing_data_provider_snapshot.sql",
+            "0085_existing_data_provider_snapshot.sql",
+            "0086_existing_data_change_scope.sql",
     ):
         (tmp_path / version).write_text(
             (ROOT / "migrations" / version).read_text(encoding="utf-8"),
@@ -928,6 +935,7 @@ def test_active_onboarding_uniqueness_keeps_run_owned_by_active_learning() -> No
             "0083",
             "0084",
             "0085",
+            "0086",
         )
         with connection.cursor() as cursor:
             cursor.execute(
@@ -1357,6 +1365,7 @@ def test_locator_observation_migration_upgrades_candidate_identity_with_existing
         "0083",
         "0084",
         "0085",
+        "0086",
     )
     assert candidates == [
         ("knowledge-v1", "shared-status-label"),
@@ -1482,6 +1491,7 @@ def test_profile_rebuild_lifecycle_migrates_legacy_requests_fail_closed() -> Non
             "0083",
             "0084",
             "0085",
+            "0086",
         )
         with connection.cursor() as cursor:
             cursor.execute(
@@ -1632,6 +1642,7 @@ def test_snapshot_variant_provenance_migration_backfills_legacy_facts() -> None:
             "0083",
             "0084",
             "0085",
+            "0086",
         )
         with connection.cursor() as cursor:
             cursor.execute(

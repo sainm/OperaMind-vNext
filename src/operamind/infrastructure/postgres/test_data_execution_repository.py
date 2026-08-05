@@ -1448,26 +1448,30 @@ def _validate_coverage_evidence(
     if plan is None:
         return
     planned_conditions = [
-        condition
+        (data_set, condition)
         for data_set in cast(list[dict[str, Any]], plan.get("data_sets", []))
         for condition in cast(list[dict[str, Any]], data_set.get("coverage_conditions", []))
     ]
     planned_by_id = {
-        str(value["condition_id"]): value for value in planned_conditions
+        str(condition["condition_id"]): (data_set, condition)
+        for data_set, condition in planned_conditions
     }
     if len(planned_by_id) != len(planned_conditions):
         raise ValueError("Reserved TestDataPlan coverage condition IDs are not unique")
     if condition_count != len(planned_conditions):
         raise ValueError("Test data coverage condition count differs from reserved plan")
-    planned_criteria = {str(value["criterion_ref"]) for value in planned_conditions}
+    planned_criteria = {
+        str(condition["criterion_ref"]) for _data_set, condition in planned_conditions
+    }
     if required_count != len(planned_criteria):
         raise ValueError("Test data coverage criterion count differs from reserved plan")
     for proof in proofs:
-        condition = planned_by_id.get(str(proof["condition_id"]))
-        if condition is None:
+        planned = planned_by_id.get(str(proof["condition_id"]))
+        if planned is None:
             raise ValueError(
                 f"Test data coverage proof is outside reserved plan: {proof['condition_id']}"
             )
+        data_set, condition = planned
         for key in (
             "criterion_ref",
             "test_case_ref",
@@ -1488,6 +1492,12 @@ def _validate_coverage_evidence(
                 "Test data coverage expected value differs from reserved plan: "
                 f"{proof['condition_id']}"
             )
+        expected_source = _coverage_observation_source(data_set, condition)
+        if not expected_source or proof.get("observation_source") != expected_source:
+            raise ValueError(
+                "Test data coverage observation source differs from reserved plan: "
+                f"{proof['condition_id']}"
+            )
     derived = _derive_coverage_summary(plan=plan, proofs=proofs)
     for key in (
         "required_criterion_count",
@@ -1499,6 +1509,21 @@ def _validate_coverage_evidence(
     ):
         if coverage[key] != derived[key]:
             raise ValueError(f"Test data coverage {key} was not engine-derived")
+
+
+def _coverage_observation_source(
+    data_set: dict[str, Any], condition: dict[str, Any]
+) -> str:
+    explicit = str(condition.get("source") or "")
+    if explicit:
+        return explicit
+    identity = cast(dict[str, Any], data_set.get("identity_binding") or {})
+    provider = cast(dict[str, Any], identity.get("provider") or {})
+    return {
+        "database": "database",
+        "api": "response",
+        "ui": "ui",
+    }.get(str(provider.get("type") or ""), "")
 
 
 def _derive_coverage_summary(

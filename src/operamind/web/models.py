@@ -93,6 +93,7 @@ class TargetDataProfileUpdate(StrictModel):
 class ExistingTestDataCreate(StrictModel):
     """Only business-readable values accepted from an ordinary tester."""
 
+    change_request_id: str = Field(min_length=1, max_length=160)
     data_name: str = Field(min_length=1, max_length=300)
     business_unique_value: str = Field(min_length=1, max_length=1000)
     test_case_ref: str = Field(min_length=1, max_length=300)

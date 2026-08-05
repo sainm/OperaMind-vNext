@@ -125,8 +125,12 @@ def project_target_data_profile(project_id: str, service: Service) -> dict[str, 
 
 
 @router.get("/projects/{project_id}/existing-test-data")
-def existing_test_data(project_id: str, service: Service) -> dict[str, object]:
-    return service.existing_test_data(project_id)
+def existing_test_data(
+    project_id: str,
+    service: Service,
+    change_request_id: str | None = None,
+) -> dict[str, object]:
+    return service.existing_test_data(project_id, change_request_id=change_request_id)
 
 
 @router.get("/projects/{project_id}/data-identity-profiles")
@@ -172,6 +176,7 @@ def register_existing_test_data(
         payload=body.model_dump(mode="json"),
         operation=lambda: service.register_existing_test_data(
             project_id=project_id,
+            change_request_id=body.change_request_id,
             data_name=body.data_name,
             business_unique_value=body.business_unique_value,
             test_case_ref=body.test_case_ref,
@@ -220,7 +225,7 @@ def update_project_target_data_profile(
     # The receipt binds only a secret digest, never the connection string itself.
     secret = body.connection_dsn.get_secret_value() if body.connection_dsn is not None else None
     secret_digest = hashlib.sha256(secret.encode()).hexdigest() if secret else None
-    return service.execute_web_command(
+    result = service.execute_web_command(
         command_scope=f"project:target-data:{project_id}",
         idempotency_key=key,
         actor=actor,
@@ -241,6 +246,13 @@ def update_project_target_data_profile(
             actor=actor,
         ),
     )
+    obsolete_alias = result.pop("_obsolete_secret_alias", None)
+    if isinstance(obsolete_alias, str) and obsolete_alias:
+        service.cleanup_obsolete_target_data_secret(
+            project_id=project_id,
+            connection_alias=obsolete_alias,
+        )
+    return result
 
 
 @router.post("/projects/{project_id}/document-learning/confirm")

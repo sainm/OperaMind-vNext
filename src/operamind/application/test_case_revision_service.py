@@ -163,6 +163,17 @@ class TestCaseRevisionService:
 
         if not actor.strip():
             raise ValueError("AI Test Case revision source must not be blank")
+        if (
+            test_plan.get("artifact_type") != "TestPlan"
+            or test_plan.get("schema_version") != "v2"
+            or test_plan.get("plan_kind") != "ui"
+        ):
+            raise ValueError("Regenerated UI TestPlan must use the formal v2 contract")
+        if (
+            test_data_plan.get("artifact_type") != "TestDataPlan"
+            or test_data_plan.get("schema_version") != "v3"
+        ):
+            raise ValueError("Regenerated TestDataPlan must use the formal v3 contract")
         project_id = str(test_data_plan.get("project_id", ""))
         if not project_id:
             raise ValueError("Regenerated TestDataPlan Project must not be blank")

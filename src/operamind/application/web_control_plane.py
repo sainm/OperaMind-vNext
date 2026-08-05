@@ -29,6 +29,7 @@ from operamind.application.copilot_coding_task import (
     CopilotCodingTaskPublishRequest,
     CopilotCodingTaskService,
     build_bridge_task_view,
+    validate_confirmed_existing_test_data_usage,
 )
 from operamind.application.data_identity import is_sensitive_data_identity_name
 from operamind.application.document_profile_learning import DocumentProfileLearningService
@@ -590,6 +591,7 @@ class WebControlPlaneService:
         self,
         *,
         project_id: str,
+        change_request_id: str,
         data_name: str,
         business_unique_value: str,
         test_case_ref: str,
@@ -600,10 +602,23 @@ class WebControlPlaneService:
 
         if self._repository.project_workspace_registration(project_id) is None:
             raise ValueError("Project が存在しません")
+        bundle = self._orchestrations.latest_bundle(change_request_id)
+        if bundle is None:
+            raise ValueError("対象の変更要件には確認可能な TestPlan がありません")
+        orchestration = cast_dict(bundle["orchestration"])
+        if orchestration.get("project_id") != project_id:
+            raise ValueError("既存テストデータの変更要件が別 Project に属しています")
+        case_ids = {
+            str(item.get("test_case_id"))
+            for item in cast_list(cast_dict(bundle["test_plan"]).get("test_cases", []))
+        }
+        if test_case_ref not in case_ids:
+            raise ValueError("使用する Test Case が現在の TestPlan に存在しません")
         requested_at = datetime.now(UTC)
         registration_id = _web_id(
             "existing-data",
             project_id,
+            change_request_id,
             data_name,
             business_unique_value,
             test_case_ref,
@@ -612,6 +627,7 @@ class WebControlPlaneService:
         value = ExistingTestDataRegistrationInput(
             registration_id=registration_id,
             project_id=project_id,
+            change_request_id=change_request_id,
             data_name=data_name,
             business_unique_value=business_unique_value,
             test_case_ref=test_case_ref,
@@ -660,40 +676,52 @@ class WebControlPlaneService:
     ) -> dict[str, object]:
         """Human-confirm one unique candidate into an adopted plan definition."""
 
-        registration = self._existing_test_data.get(registration_id)
-        if registration is None or registration.project_id != project_id:
-            raise ValueError("既存テストデータ候補が存在しません")
-        profiles = {
-            profile.provider_ref: profile
-            for profile in self._existing_test_data.profiles(project_id)
-        }
-        profile = profiles.get(registration.provider_ref or "")
-        if profile is None:
-            raise ValueError("確認済み DataIdentityProvider が存在しません")
-        confirmed = ExistingTestDataRegistrationService(
-            identity_providers=configured_data_identity_providers(
-                {profile.provider_ref: profile.provider_type}
-            ),
-            observation_resolver=ReviewedExistingDataObservationResolver(
-                executors={},
-                base_url_by_project=lambda _project_id: None,
-            ),
-        ).confirm(
-            registration,
-            profile=profile,
-            actor=actor,
-            confirmed_at=datetime.now(UTC),
-        )
-        self._existing_test_data.confirm(confirmed)
+        with self._connection.transaction():
+            registration = self._existing_test_data.get(registration_id)
+            if registration is None or registration.project_id != project_id:
+                raise ValueError("既存テストデータ候補が存在しません")
+            profiles = {
+                profile.provider_ref: profile
+                for profile in self._existing_test_data.profiles(project_id)
+            }
+            profile = profiles.get(registration.provider_ref or "")
+            if profile is None:
+                raise ValueError("確認済み DataIdentityProvider が存在しません")
+            confirmed = ExistingTestDataRegistrationService(
+                identity_providers=configured_data_identity_providers(
+                    {profile.provider_ref: profile.provider_type}
+                ),
+                observation_resolver=ReviewedExistingDataObservationResolver(
+                    executors={},
+                    base_url_by_project=lambda _project_id: None,
+                ),
+            ).confirm(
+                registration,
+                profile=profile,
+                actor=actor,
+                confirmed_at=datetime.now(UTC),
+            )
+            self._existing_test_data.confirm(confirmed)
+            task = self._queue_existing_data_plan_revision(confirmed, actor=actor)
         return {
             "project_id": project_id,
             "registration": _existing_test_data_registration_view(confirmed),
+            "state": "awaiting_copilot",
+            "copilot_task": build_bridge_task_view(task),
         }
 
-    def existing_test_data(self, project_id: str) -> dict[str, object]:
+    def existing_test_data(
+        self,
+        project_id: str,
+        *,
+        change_request_id: str | None = None,
+    ) -> dict[str, object]:
         registrations = [
             _existing_test_data_registration_view(value)
-            for value in self._existing_test_data.list_for_project(project_id)
+            for value in self._existing_test_data.list_for_project(
+                project_id,
+                change_request_id=change_request_id,
+            )
         ]
         return {
             "project_id": project_id,
@@ -701,23 +729,133 @@ class WebControlPlaneService:
             "count": len(registrations),
         }
 
+    def _queue_existing_data_plan_revision(
+        self,
+        registration: ExistingTestDataRegistration,
+        *,
+        actor: str,
+    ) -> dict[str, object]:
+        change_request_id = registration.change_request_id
+        if change_request_id is None:
+            raise ValueError("旧形式の既存データは変更要件へ再登録してください")
+        instruction = (
+            f"テストケース「{registration.test_case_ref}」に確認済み既存データ"
+            f"「{registration.data_name}」を採用し、業務期待値を変更せず、"
+            "UI TestPlan と TestDataPlan 全体を再生成する。"
+        )
+        proposal_result = self._test_case_revisions.propose(
+            change_request_id=change_request_id,
+            instruction=instruction,
+            actor=actor,
+        )
+        proposal = cast_dict(proposal_result["proposal"])
+        if proposal.get("analysis_status") != "deterministic":
+            raise ValueError("既存データ採用から決定的な Plan Revision を生成できません")
+        proposal_id = str(proposal["proposal_id"])
+        prepared = self._test_case_revisions.prepare_ai_regeneration(
+            change_request_id=change_request_id,
+            proposal_id=proposal_id,
+            selections={},
+        )
+        workspace_root = self._repository.project_workspace_root(registration.project_id)
+        if workspace_root is None:
+            raise ValueError("Project に VS Code Workspace が設定されていません")
+        context: dict[str, object] = {
+            "proposal_id": proposal_id,
+            "source_orchestration_id": str(proposal["source_orchestration_id"]),
+            "source_test_plan_id": str(proposal["source_test_plan_id"]),
+            "instruction": instruction,
+            "confirmed_operations_json": json.dumps(
+                prepared["operations"],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            "selections_json": "{}",
+        }
+        return CopilotCodingTaskService(
+            connection=self._connection,
+            repository_root=self._root,
+        ).publish(
+            CopilotCodingTaskPublishRequest(
+                coding_task_id=_web_id(
+                    "copilot-existing-data-plan-revision",
+                    registration.project_id,
+                    change_request_id,
+                    registration.registration_id,
+                ),
+                change_request_id=change_request_id,
+                project_id=registration.project_id,
+                workspace_root=Path(workspace_root),
+                task_summary=f"既存テストデータ採用: {registration.data_name}",
+                actor=actor,
+                idempotency_key=(
+                    f"existing-data-plan-revision:{registration.registration_id}"
+                ),
+                task_kind="ui_test_plan_revision",
+                initial_stage="ui_test_revision",
+                plan_revision_context=context,
+            )
+        )
+
     def fixed_data_identifiers(self, project_id: str) -> dict[str, object]:
-        confirmed = [
-            _planned_data_identifier_view(value)
-            for value in self._existing_test_data.list_for_project(project_id)
-            if value.status == "confirmed"
-        ]
+        pending: list[dict[str, object]] = []
+        planned: list[dict[str, object]] = []
+        for value in self._existing_test_data.list_for_project(project_id):
+            if value.status != "confirmed":
+                continue
+            view = _planned_data_identifier_view(value)
+            adoption_state = self._existing_data_adoption_state(value)
+            view["adoption_state"] = adoption_state
+            if adoption_state == "planned":
+                planned.append(view)
+            else:
+                pending.append(view)
         frozen = [
             _frozen_data_identifier_view(value)
             for value in self._existing_test_data.fixed_binding_views(project_id)
         ]
         return {
             "project_id": project_id,
-            "planned": confirmed,
+            "pending": pending,
+            "planned": planned,
             "frozen": frozen,
-            "planned_count": len(confirmed),
+            "pending_count": len(pending),
+            "planned_count": len(planned),
             "frozen_count": len(frozen),
         }
+
+    def _existing_data_adoption_state(
+        self, value: ExistingTestDataRegistration
+    ) -> str:
+        change_request_id = value.change_request_id
+        fragment = value.plan_data_definition
+        if change_request_id is None or fragment is None:
+            return "awaiting_copilot"
+        bundle = self._orchestrations.latest_bundle(change_request_id)
+        if bundle is None:
+            return "awaiting_copilot"
+        orchestration = cast_dict(bundle["orchestration"])
+        coverage = cast_dict(bundle["coverage_report"])
+        reviewed_data_set = cast_dict(fragment.get("data_set"))
+        test_data_id = str(reviewed_data_set.get("test_data_id") or "")
+        current_data_ids = {
+            str(item.get("test_data_id") or "")
+            for item in cast_list(cast_dict(bundle["test_data_plan"]).get("data_sets"))
+        }
+        if (
+            orchestration.get("status") != "ready"
+            or coverage.get("status") != "passed"
+            or coverage.get("coverage_percent") != 100
+            or not test_data_id
+            or test_data_id not in current_data_ids
+        ):
+            return "awaiting_copilot"
+        authorization = self._case_execution_authorizations.state(
+            target_orchestration_id=str(orchestration["orchestration_id"]),
+            at=datetime.now(UTC),
+        )
+        return "planned" if authorization.get("authorized") is True else "confirmation_required"
 
     def configure_project_target_data_profile(
         self,
@@ -792,7 +930,33 @@ class WebControlPlaneService:
             raise
         view = profile.public_view(include_statements=True)
         view["secret_configured"] = True
-        return {"project_id": project_id, "profile": view}
+        return {
+            "project_id": project_id,
+            "profile": view,
+            "_obsolete_secret_alias": (
+                previous_profile.connection_alias
+                if previous_profile is not None
+                and previous_profile.connection_alias != connection_alias
+                else None
+            ),
+        }
+
+    def cleanup_obsolete_target_data_secret(
+        self,
+        *,
+        project_id: str,
+        connection_alias: str,
+    ) -> None:
+        """Delete an inactive alias only after the Web command transaction committed."""
+
+        adapters = default_target_database_adapters()
+        current = TargetDataProfileRepository(self._connection, adapters=adapters).get(project_id)
+        if current is not None and current.connection_alias == connection_alias:
+            return
+        TargetDataSecretStore(adapters=adapters).delete(
+            project_id=project_id,
+            connection_alias=connection_alias,
+        )
 
     def confirm_project_document_learning(
         self, *, project_id: str, learning_run_id: str, actor: str
@@ -2510,6 +2674,13 @@ class WebControlPlaneService:
         project_id = str(orchestration["project_id"])
         orchestration_id = str(orchestration["orchestration_id"])
         plan = cast_dict(bundle["test_data_plan"])
+        validate_confirmed_existing_test_data_usage(
+            repository=self._existing_test_data,
+            project_id=project_id,
+            change_request_id=request_id,
+            test_plan=cast_dict(bundle["test_plan"]),
+            test_data_plan=plan,
+        )
         run_id = _web_id(
             "test-data-run",
             project_id,
