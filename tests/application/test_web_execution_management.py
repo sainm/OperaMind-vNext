@@ -392,8 +392,8 @@ def test_fixed_data_identifiers_distinguish_copilot_waiting_from_confirmed_plan(
         confirmed_at=datetime(2026, 8, 5, tzinfo=UTC),
     )
     service._existing_test_data = SimpleNamespace(  # type: ignore[attr-defined]
-        list_for_project=lambda _project_id: (registration,),
-        fixed_binding_views=lambda _project_id: (),
+        list_for_project=lambda _project_id, **_scope: (registration,),
+        fixed_binding_views=lambda _project_id, **_scope: (),
     )
     bundles: list[dict[str, object] | None] = [None]
     service._orchestrations = SimpleNamespace(  # type: ignore[attr-defined]
@@ -403,7 +403,10 @@ def test_fixed_data_identifiers_distinguish_copilot_waiting_from_confirmed_plan(
         state=lambda **_values: {"authorized": False}
     )
 
-    waiting = service.fixed_data_identifiers("project-1")
+    waiting = service.fixed_data_identifiers(
+        "project-1",
+        change_request_id="change-1",
+    )
 
     assert waiting["planned"] == []
     assert waiting["pending"][0]["adoption_state"] == "awaiting_copilot"  # type: ignore[index]
@@ -418,7 +421,10 @@ def test_fixed_data_identifiers_distinguish_copilot_waiting_from_confirmed_plan(
             "test_data_plan": {"data_sets": [{"test_data_id": "adopted-data-1"}]},
         }
     )
-    confirmation = service.fixed_data_identifiers("project-1")
+    confirmation = service.fixed_data_identifiers(
+        "project-1",
+        change_request_id="change-1",
+    )
 
     assert confirmation["planned"] == []
     assert confirmation["pending"][0]["adoption_state"] == "confirmation_required"  # type: ignore[index]
@@ -426,7 +432,10 @@ def test_fixed_data_identifiers_distinguish_copilot_waiting_from_confirmed_plan(
     service._case_execution_authorizations = SimpleNamespace(  # type: ignore[attr-defined]
         state=lambda **_values: {"authorized": True}
     )
-    planned = service.fixed_data_identifiers("project-1")
+    planned = service.fixed_data_identifiers(
+        "project-1",
+        change_request_id="change-1",
+    )
 
     assert planned["pending"] == []
     assert planned["planned"][0]["adoption_state"] == "planned"  # type: ignore[index]

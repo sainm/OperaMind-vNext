@@ -220,7 +220,12 @@ class ExistingTestDataRepository:
                 if (value := self._get(cursor, registration_id, for_update=False)) is not None
             )
 
-    def fixed_binding_views(self, project_id: str) -> tuple[dict[str, object], ...]:
+    def fixed_binding_views(
+        self,
+        project_id: str,
+        *,
+        change_request_id: str | None = None,
+    ) -> tuple[dict[str, object], ...]:
         """Return an internal read model that the Web layer can safely redact."""
 
         with self._connection.cursor() as cursor:
@@ -237,14 +242,18 @@ class ExistingTestDataRepository:
                 JOIN test_data_execution_runs AS run
                   ON run.run_id = binding.run_id
                  AND run.project_id = binding.project_id
+                JOIN change_orchestrations AS orchestration
+                  ON orchestration.orchestration_id = run.orchestration_id
+                 AND orchestration.project_id = binding.project_id
                 LEFT JOIN existing_test_data_registrations AS registration
                   ON registration.project_id = binding.project_id
                  AND registration.plan_data_definition -> 'data_set'
                      ->> 'test_data_id' = binding.test_data_id
                 WHERE binding.project_id = %s
+                  AND (%s::text IS NULL OR orchestration.change_request_id = %s)
                 ORDER BY binding.frozen_at DESC, binding.test_data_id
                 """,
-                (project_id,),
+                (project_id, change_request_id, change_request_id),
             )
             bindings = cursor.fetchall()
             cursor.execute(

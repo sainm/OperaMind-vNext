@@ -210,8 +210,15 @@ def confirm_existing_test_data(
 
 
 @router.get("/projects/{project_id}/fixed-data-identifiers")
-def fixed_data_identifiers(project_id: str, service: Service) -> dict[str, object]:
-    return service.fixed_data_identifiers(project_id)
+def fixed_data_identifiers(
+    project_id: str,
+    service: Service,
+    change_request_id: str | None = None,
+) -> dict[str, object]:
+    return service.fixed_data_identifiers(
+        project_id,
+        change_request_id=change_request_id,
+    )
 
 
 @router.put("/projects/{project_id}/target-data-profile")

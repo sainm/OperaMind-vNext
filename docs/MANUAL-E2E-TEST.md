@@ -1064,7 +1064,7 @@ Compile、Test、Coverage の一つでも失敗した場合は UI TestPlan へ�
 8. 一件の業務摘要が意図した実レコードであることを確認し、`確認して採用` を一回だけ押す。
 9. 選択中の Change Request 専用 `ui_test_plan_revision` Task が自動発行され、画面に「TestDataPlan の再生成を Copilot に依頼しました」と表示されることを確認する。別 Change Request の登録が Copilot Context に含まれないことも確認する。
 10. Copilot が返した完全な UI TestPlan／TestDataPlan v3 が Schema、安全性、Business Coverage 100% と Test Data Coverage 条件の静的対応を再検証し、人工確認を通過するまで実行 Button が有効にならないことを確認する。実 Run 開始後は、実 Observation から算出した Test Data Coverage が 100% になる前に UI Step が開始されないことを確認する。
-11. `固定データ識別子` を開き、確認済みの採用予定データと、再確認後の正式 Plan データを区別して確認する。
+11. 対象 Change Request を選択したまま `固定データ識別子` を開き、その変更に属する確認済みの採用予定データと、再確認後の正式 Plan データを区別して確認する。別 Change Request の待機中／計画済みデータや凍結 Run が混在しないことを確認する。
 12. 保持しない場合は同じ `data_binding_ref` を使用する Cleanup が Plan に存在することを確認する。保持する場合は既存業務値を変更しないことを確認する。
 
 #### 14.10.2 generated データが Test Case を実際に覆うことを確認する

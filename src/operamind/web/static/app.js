@@ -322,10 +322,13 @@ async function confirmExistingTestData(registrationId) {
 
 async function openFixedDataIdentifiersPage() {
   if (!state.projectId) return showNotice("先にプロジェクトを選択してください。", "error");
+  if (!state.requestId) return showNotice("先に対象の変更要件を選択してください。", "error");
   elements.fixedDataIdentifiersDialog.showModal();
   elements.plannedDataIdentifiers.innerHTML = '<p class="empty">計画を読み込んでいます。</p>';
   elements.frozenDataIdentifiers.innerHTML = '<p class="empty">凍結結果を読み込んでいます。</p>';
-  const result = await api(`/api/v1/projects/${encodeURIComponent(state.projectId)}/fixed-data-identifiers`);
+  const result = await api(
+    `/api/v1/projects/${encodeURIComponent(state.projectId)}/fixed-data-identifiers?change_request_id=${encodeURIComponent(state.requestId)}`
+  );
   const pending = result.pending || [];
   const planned = result.planned || [];
   elements.plannedDataCount.textContent = `${Number(pending.length + planned.length).toLocaleString("ja-JP")} 件`;

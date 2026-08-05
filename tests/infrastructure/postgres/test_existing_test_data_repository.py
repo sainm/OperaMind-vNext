@@ -50,6 +50,17 @@ class _Connection:
         return _Context(self._cursor)
 
 
+class _ReadCursor:
+    def __init__(self) -> None:
+        self.executions: list[tuple[str, object]] = []
+
+    def execute(self, query: str, parameters: object = None) -> None:
+        self.executions.append((query, parameters))
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        return []
+
+
 def test_confirmation_rechecks_provider_revision_under_the_repository_lock() -> None:
     profile = _profile(revision=1)
     candidate = _registration(profile, status="candidate")
@@ -90,6 +101,22 @@ def test_confirmation_rechecks_provider_revision_under_the_repository_lock() -> 
 
     assert len(cursor.executions) == 1
     assert "FOR UPDATE" in cursor.executions[0]
+
+
+def test_fixed_binding_views_scope_frozen_runs_to_the_selected_change_request() -> None:
+    cursor = _ReadCursor()
+    repository = ExistingTestDataRepository(_Connection(cursor))  # type: ignore[arg-type]
+
+    result = repository.fixed_binding_views(
+        "project-1",
+        change_request_id="change-1",
+    )
+
+    assert result == ()
+    binding_query, parameters = cursor.executions[0]
+    assert "JOIN change_orchestrations AS orchestration" in binding_query
+    assert "orchestration.change_request_id = %s" in binding_query
+    assert parameters == ("project-1", "change-1", "change-1")
 
 
 def _profile(*, revision: int) -> ProjectDataIdentityProfile:

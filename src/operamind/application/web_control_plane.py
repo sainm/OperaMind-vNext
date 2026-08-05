@@ -798,10 +798,18 @@ class WebControlPlaneService:
             )
         )
 
-    def fixed_data_identifiers(self, project_id: str) -> dict[str, object]:
+    def fixed_data_identifiers(
+        self,
+        project_id: str,
+        *,
+        change_request_id: str | None = None,
+    ) -> dict[str, object]:
         pending: list[dict[str, object]] = []
         planned: list[dict[str, object]] = []
-        for value in self._existing_test_data.list_for_project(project_id):
+        for value in self._existing_test_data.list_for_project(
+            project_id,
+            change_request_id=change_request_id,
+        ):
             if value.status != "confirmed":
                 continue
             view = _planned_data_identifier_view(value)
@@ -813,10 +821,14 @@ class WebControlPlaneService:
                 pending.append(view)
         frozen = [
             _frozen_data_identifier_view(value)
-            for value in self._existing_test_data.fixed_binding_views(project_id)
+            for value in self._existing_test_data.fixed_binding_views(
+                project_id,
+                change_request_id=change_request_id,
+            )
         ]
         return {
             "project_id": project_id,
+            "change_request_id": change_request_id,
             "pending": pending,
             "planned": planned,
             "frozen": frozen,

@@ -160,9 +160,21 @@ class FakeService:
         self.calls.append(("existing-test-data-confirm", values))
         return {"registration": {"status": "confirmed"}}
 
-    def fixed_data_identifiers(self, project_id: str) -> dict[str, object]:
+    def fixed_data_identifiers(
+        self,
+        project_id: str,
+        *,
+        change_request_id: str | None = None,
+    ) -> dict[str, object]:
+        self.calls.append(
+            (
+                "fixed-data-identifiers",
+                {"project_id": project_id, "change_request_id": change_request_id},
+            )
+        )
         return {
             "project_id": project_id,
+            "change_request_id": change_request_id,
             "pending": [],
             "planned": [],
             "frozen": [],
@@ -635,17 +647,26 @@ def test_existing_data_route_accepts_only_business_readable_input() -> None:
 def test_fixed_data_identifiers_are_read_only_business_projection() -> None:
     client, _ = client_with_fake()
 
-    response = client.get("/api/v1/projects/demo/fixed-data-identifiers")
+    response = client.get(
+        "/api/v1/projects/demo/fixed-data-identifiers",
+        params={"change_request_id": "change-expense-status"},
+    )
 
     assert response.status_code == 200
     assert response.json() == {
         "project_id": "demo",
+        "change_request_id": "change-expense-status",
         "pending": [],
         "planned": [],
         "frozen": [],
         "pending_count": 0,
         "planned_count": 0,
         "frozen_count": 0,
+    }
+    call = next(value for name, value in _.calls if name == "fixed-data-identifiers")
+    assert call == {
+        "project_id": "demo",
+        "change_request_id": "change-expense-status",
     }
 
 
