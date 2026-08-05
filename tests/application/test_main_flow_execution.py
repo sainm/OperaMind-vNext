@@ -98,6 +98,11 @@ def _patch_common(
             project_test_base_url=lambda _project_id: "http://127.0.0.1:8080"
         ),
     )
+    monkeypatch.setattr(
+        execution_module,
+        "_identity_providers_for_project",
+        lambda *_args: execution_module.default_data_identity_providers(),
+    )
 
 
 def test_reserved_run_publishes_progress_ui_and_closure(
@@ -198,6 +203,11 @@ def test_execution_transaction_finishes_before_ui_publication(
         lambda *_args, **_kwargs: ConnectionContext(),
     )
     monkeypatch.setattr(execution_module.ContractCatalog, "load", lambda _path: object())
+    monkeypatch.setattr(
+        execution_module,
+        "_identity_providers_for_project",
+        lambda *_args: execution_module.default_data_identity_providers(),
+    )
     monkeypatch.setattr(
         execution_module,
         "TestDataExecutionRepository",
@@ -503,3 +513,157 @@ def test_default_factory_uses_only_restricted_unbound_adapters(tmp_path: Path) -
     executors = default_test_data_executor_factory(tmp_path)
 
     assert set(executors) == {"http", "ui"}
+
+
+def test_structured_pre_action_block_is_returned_to_the_same_copilot_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list[dict[str, object]] = []
+
+    class CopilotRepository:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def record_ui_locator_blocked_feedback(self, **values: object) -> str:
+            recorded.append(values)
+            return "task-1"
+
+    monkeypatch.setattr(
+        execution_module,
+        "CopilotCodingTaskRepository",
+        CopilotRepository,
+    )
+    queued: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        execution_module,
+        "_publish_automatic_locator_revision",
+        lambda **values: queued.append(values),
+    )
+    artifact = {
+        "flow_results": [
+            {
+                "flow_id": "approval-flow",
+                "step_results": [
+                    {
+                        "step_id": "approve-expense",
+                        "phase": "setup",
+                        "channel": "ui",
+                        "status": "blocked",
+                        "failure_stage": "pre_action_state_validation",
+                        "failure_reason": "Playwright pre-action observation did not match",
+                        "evidence_refs": ["evidence/blocked.png"],
+                        "test_data_binding_refs": ["binding-expense-1"],
+                        "locator_type": "role",
+                        "record_scope_match_count": 1,
+                        "action_locator_match_count": 0,
+                        "observed_screen_identity_values": [
+                            {"name": "expense_number", "value": "EXP-041"},
+                            {"name": "password", "value": "must-not-leak"},
+                        ],
+                    }
+                ],
+                "cleanup_results": [],
+            }
+        ]
+    }
+
+    execution_module._publish_locator_failure_feedback(
+        connection=object(),  # type: ignore[arg-type]
+        contracts=object(),  # type: ignore[arg-type]
+        repository_root=Path("/workspace"),
+        record=_record(),
+        artifact=artifact,
+    )
+
+    assert len(recorded) == 1
+    assert recorded[0]["orchestration_id"] == "orchestration-1"
+    feedback = recorded[0]["feedback"]
+    assert isinstance(feedback, dict)
+    assert feedback["failures"][0]["failure_stage"] == (  # type: ignore[index]
+        "pre_action_state_validation"
+    )
+    assert feedback["failures"][0]["record_scope_match_count"] == 1  # type: ignore[index]
+    assert feedback["failures"][0]["action_locator_match_count"] == 0  # type: ignore[index]
+    assert feedback["failures"][0]["observed_screen_identity_values"] == [  # type: ignore[index]
+        {"name": "expense_number", "value": "EXP-041"}
+    ]
+    assert feedback["next_action"] == (
+        "create_new_ui_test_plan_revision_and_require_confirmation"
+    )
+    assert queued[0]["feedback"]["source_coding_task_id"] == "task-1"  # type: ignore[index]
+
+
+def test_real_locator_failure_queues_a_deterministic_read_only_revision(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    published: list[object] = []
+
+    monkeypatch.setattr(
+        execution_module,
+        "ChangeOrchestrationRepository",
+        lambda *_args: SimpleNamespace(
+            get=lambda _orchestration_id: {"change_request_id": "change-1"}
+        ),
+    )
+
+    class RevisionService:
+        def __init__(self, **_values: object) -> None:
+            pass
+
+        def propose(self, **_values: object) -> dict[str, object]:
+            return {
+                "proposal": {
+                    "proposal_id": "proposal-locator-1",
+                    "analysis_status": "deterministic",
+                    "source_orchestration_id": "orchestration-1",
+                    "source_test_plan_id": "test-plan-1",
+                }
+            }
+
+        def prepare_ai_regeneration(self, **_values: object) -> dict[str, object]:
+            return {
+                "operations": [{"field": "plan_structure", "operation": "regenerate"}],
+                "selections": {},
+            }
+
+    monkeypatch.setattr(execution_module, "TestCaseRevisionService", RevisionService)
+    monkeypatch.setattr(
+        execution_module,
+        "WebControlPlaneRepository",
+        lambda *_args: SimpleNamespace(
+            project_workspace_root=lambda _project_id: str(tmp_path)
+        ),
+    )
+
+    class TaskService:
+        def __init__(self, **_values: object) -> None:
+            pass
+
+        def publish(self, request: object) -> dict[str, object]:
+            published.append(request)
+            return {}
+
+    monkeypatch.setattr(execution_module, "CopilotCodingTaskService", TaskService)
+
+    execution_module._publish_automatic_locator_revision(
+        connection=object(),  # type: ignore[arg-type]
+        contracts=object(),  # type: ignore[arg-type]
+        repository_root=tmp_path,
+        record=_record(),
+        feedback={
+            "failure_stage": "formal_ui_run_pre_action_validation",
+            "failures": [{"step_id": "approve-expense", "action_locator_match_count": 0}],
+        },
+    )
+
+    assert len(published) == 1
+    request = published[0]
+    assert request.task_kind == "ui_test_plan_revision"  # type: ignore[attr-defined]
+    assert request.initial_stage == "ui_test_revision"  # type: ignore[attr-defined]
+    assert request.plan_revision_context["source_orchestration_id"] == (  # type: ignore[attr-defined]
+        "orchestration-1"
+    )
+    assert "action_locator_match_count" in request.plan_revision_context[  # type: ignore[attr-defined]
+        "locator_failure_evidence_json"
+    ]

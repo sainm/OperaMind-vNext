@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -22,13 +23,53 @@ from operamind.infrastructure.postgres.test_data_execution_repository import (
 from operamind.infrastructure.postgres.test_data_execution_repository import (
     _event_id,
     _flow_steps,
+    _json,
+    _optional_json,
     _strings,
     _timestamp,
     _validate_coverage_evidence,
     _validate_evidence_bindings,
+    _validate_run_binding_refs,
 )
 
 NOW = datetime(2026, 7, 25, 8, 0, tzinfo=UTC)
+
+
+def test_v3_repository_allows_only_blocked_screen_failure_screenshots_without_binding() -> None:
+    artifact: dict[str, Any] = {
+        "run_id": "run-1",
+        "project_id": "project-1",
+        "flow_results": [
+            {
+                "flow_id": "flow-1",
+                "test_data_binding_refs": [],
+                "step_results": [
+                    {
+                        "step_id": "open-screen",
+                        "phase": "setup",
+                        "channel": "ui",
+                        "status": "blocked",
+                        "failure_stage": "pre_action_locator_validation",
+                        "evidence_refs": ["evidence://screen-failure"],
+                        "test_data_binding_refs": [],
+                    }
+                ],
+                "cleanup_results": [],
+            }
+        ],
+        "evidence": [
+            {
+                "evidence_type": "screenshot",
+                "evidence_ref": "evidence://screen-failure",
+            }
+        ],
+    }
+
+    _validate_run_binding_refs(artifact, bindings=[])
+
+    artifact["flow_results"][0]["step_results"][0]["status"] = "passed"
+    with pytest.raises(ValueError, match="Screenshot Evidence"):
+        _validate_run_binding_refs(artifact, bindings=[])
 
 
 class Context:
@@ -624,6 +665,83 @@ def test_evidence_binding_and_scalar_helpers_reject_invalid_content() -> None:
         _validate_evidence_bindings(unreferenced)
 
 
+def test_legacy_v1_binding_remains_valid_without_v2_provider_columns() -> None:
+    artifact = _result_artifact()
+    artifact["schema_version"] = "v1"
+    payload = {
+        "binding_id": "binding-1",
+        "run_id": "run-1",
+        "test_data_id": "expense-data",
+        "binding_mode": "generated",
+        "source_flow_id": "flow-1",
+        "source_step_id": "step-1",
+        "primary_key": {"name": "id", "value": 41},
+        "business_unique_keys": [{"name": "number", "value": "EXP-041"}],
+        "screen_key": {"name": "number", "value": "EXP-041"},
+        "screen_locator": {
+            "by": "css",
+            "value": "[data-number='EXP-041']",
+            "exact": True,
+        },
+        "match_count": 1,
+        "frozen_at": NOW.isoformat(),
+    }
+    content_digest = hashlib.sha256(_json(payload).encode()).hexdigest()
+    evidence_ref = "evidence://setup/binding-1"
+    artifact["data_bindings"] = [
+        {**payload, "content_digest": content_digest, "evidence_ref": evidence_ref}
+    ]
+    artifact["flow_results"][0]["step_results"][0]["evidence_refs"].append(evidence_ref)
+    artifact["evidence"].append(
+        {
+            "evidence_id": "binding-evidence-1",
+            "flow_id": "flow-1",
+            "phase": "setup",
+            "step_id": "step-1",
+            "evidence_type": "data_binding",
+            "evidence_ref": evidence_ref,
+            "content_digest": content_digest,
+            "sanitized": True,
+        }
+    )
+
+    _validate_evidence_bindings(artifact)
+    assert _optional_json(None) is None
+    assert _optional_json({"value": 1}) == '{"value":1}'
+
+    binding = artifact["data_bindings"][0]
+    binding.update(
+        {
+            "identity_provider_type": "database",
+            "identity_provider_ref": "database.v1",
+            "screen_identity_values": [binding["screen_key"]],
+            "record_scope_locator": binding["screen_locator"],
+            "identity_observations": {
+                "business_unique_keys": [
+                    {"name": "number", "kind": "text"}
+                ],
+                "screen_key": {"name": "number", "kind": "text"},
+            },
+        }
+    )
+    binding["identity_digest"] = hashlib.sha256(
+        _json(
+            {
+                "business_unique_keys": binding["business_unique_keys"],
+                "screen_identity_values": binding["screen_identity_values"],
+            }
+        ).encode()
+    ).hexdigest()
+    artifact["schema_version"] = "v2"
+    _refresh_binding_digest(artifact)
+    _validate_evidence_bindings(artifact)
+
+    binding["screen_key"] = {"name": "number", "value": "EXP-OTHER"}
+    _refresh_binding_digest(artifact)
+    with pytest.raises(ValueError, match="compatibility aliases differ"):
+        _validate_evidence_bindings(artifact)
+
+
 def test_completion_and_recovery_require_the_canonical_result_type() -> None:
     repository = _repository(Cursor())
     with pytest.raises(ValueError, match="requires TestDataExecutionResult"):
@@ -723,6 +841,8 @@ def _record(*, status: str, completed_at: datetime | None = None, **changes: obj
         "lease_expires_at": None,
         "attempt_count": 0,
         "max_attempts": 3,
+        "test_data_token": None,
+        "runtime_variables": None,
     }
     values.update(changes)
     return SimpleNamespace(**values)
@@ -745,6 +865,8 @@ def _record_row(*, replay_of_run_id: str | None = None) -> tuple[object, ...]:
         None,
         0,
         3,
+        None,
+        None,
     )
 
 
@@ -825,6 +947,7 @@ def _normalized_rows(
             1,
             flow["status"],
             flow["deferred_assertion_ids"],
+            flow.get("test_data_binding_refs", []),
         )
     ]
     steps = sorted(
@@ -839,6 +962,7 @@ def _normalized_rows(
                 step["output_variables"],
                 step["evidence_refs"],
                 step.get("failure_reason"),
+                step.get("test_data_binding_refs", []),
             )
             for step in _flow_steps(flow)
         ),
@@ -854,6 +978,19 @@ def _normalized_rows(
             "evidence://setup/1",
             "a" * 64,
             True,
+            None,
         )
     ]
     return flows, steps, [], evidence
+
+
+def _refresh_binding_digest(artifact: dict[str, Any]) -> None:
+    binding = artifact["data_bindings"][0]
+    payload = {
+        key: value
+        for key, value in binding.items()
+        if key not in {"content_digest", "evidence_ref"}
+    }
+    digest = hashlib.sha256(_json(payload).encode()).hexdigest()
+    binding["content_digest"] = digest
+    artifact["evidence"][-1]["content_digest"] = digest

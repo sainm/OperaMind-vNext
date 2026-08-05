@@ -47,6 +47,8 @@
         <div id="projectOnboardingSummary" class="project-onboarding-summary"></div>
         <ul id="projectDocumentRootSummary"></ul>
         <div class="project-summary-actions">
+          <button id="existingTestDataButton" class="secondary" type="button">既存テストデータ</button>
+          <button id="fixedDataIdentifiersButton" class="secondary" type="button">固定データ識別子</button>
           <button id="editProjectButton" class="secondary" type="button">設定</button>
           <button id="projectPreflightButton" class="secondary" type="button">事前確認</button>
           <button id="documentLearningButton" class="secondary learning-button" type="button">設計書学習</button>
@@ -140,12 +142,19 @@
         <input id="projectTestBaseUrl" type="url" maxlength="2000"
           autocomplete="off" placeholder="例：http://127.0.0.1:8080">
       </label>
-      <details class="target-data-settings">
-        <summary>被テストシステム DB データ準備（任意）</summary>
+      <details class="target-data-settings admin-only-settings">
+        <summary>管理者向け高度設定：被テストシステム DB</summary>
         <p>
           AI は確認済み Binding ID だけを使用します。接続 Secret はこの端末のユーザー領域に保存され、
           OperaMind DB、ログ、Copilot には保存・送信されません。
         </p>
+        <label>
+          <span>Database 方言</span>
+          <select id="projectTargetDataDialect">
+            <option value="postgresql">PostgreSQL</option>
+          </select>
+          <small>現在登録済みの Adapter は PostgreSQL だけです。未登録方言へは fallback しません。</small>
+        </label>
         <label>
           <span>接続 Alias</span>
           <input id="projectTargetDataAlias" maxlength="160" autocomplete="off"
@@ -163,6 +172,12 @@
           <textarea id="projectTargetDataBindings" rows="10" maxlength="100000"
             spellcheck="false" placeholder='[{"query_binding_id":"upsert_expense",...}]'></textarea>
         </label>
+        <label>
+          <span>確認済み DataIdentityProvider（管理者 JSON 配列）</span>
+          <textarea id="projectDataIdentityProfiles" rows="12" maxlength="150000"
+            spellcheck="false" placeholder='[{"provider_ref":"database.v1","provider_type":"database",...}]'></textarea>
+          <small>database / api / ui / hybrid の照会、Identity 定義、業務摘要項目を事前レビューして登録します。普通テスト担当者には表示されません。</small>
+        </label>
         <div id="projectTargetDataStatus" class="dialog-note neutral">
           write Binding には入力制約、回読 Assert、cleanup Binding、Transaction、冪等方針が必須です。
         </div>
@@ -176,6 +191,78 @@
         <button id="submitProjectButton" class="primary" type="submit"><span>初期化</span></button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="existingTestDataDialog" class="request-dialog data-binding-dialog"
+    aria-labelledby="existingTestDataTitle">
+    <div class="data-binding-page">
+      <div class="dialog-heading data-binding-heading">
+        <div>
+          <span class="eyebrow">ADOPT REAL TARGET DATA</span>
+          <h2 id="existingTestDataTitle">既存テストデータを登録</h2>
+          <p>確認済みの識別方法で実データを検索し、一件だけ一致した候補を確認します。</p>
+        </div>
+        <button id="closeExistingTestDataButton" class="icon-button" type="button" aria-label="閉じる">×</button>
+      </div>
+      <form id="existingTestDataForm" class="existing-data-form">
+        <div class="form-grid">
+          <label>
+            <span>データ名</span>
+            <input id="existingDataName" maxlength="300" required autocomplete="off"
+              placeholder="例：差戻し済み経費申請">
+          </label>
+          <label>
+            <span>業務番号または業務上の一意値</span>
+            <input id="existingBusinessValue" maxlength="1000" required autocomplete="off"
+              placeholder="例：EXP-20260805-0012">
+          </label>
+        </div>
+        <label>
+          <span>このデータを使用する Test Case</span>
+          <input id="existingTestCaseRef" maxlength="300" required autocomplete="off"
+            placeholder="例：TC-EXPENSE-STATUS-01">
+        </label>
+        <label class="checkbox-row">
+          <input id="existingRetainAfterTest" type="checkbox">
+          <span>テスト終了後もこのデータを残す</span>
+        </label>
+        <p class="business-only-note">SQL、主キー項目、JSON、Locator、内部 Binding ID の入力は不要です。</p>
+        <div class="dialog-actions">
+          <button id="submitExistingTestDataButton" class="primary" type="submit">一意性を確認</button>
+        </div>
+      </form>
+      <section class="data-binding-results" aria-labelledby="existingDataResultsTitle">
+        <div class="data-binding-section-heading">
+          <h3 id="existingDataResultsTitle">登録結果</h3>
+          <button id="refreshExistingTestDataButton" class="secondary" type="button">更新</button>
+        </div>
+        <div id="existingTestDataList" class="data-identity-list" aria-live="polite"></div>
+      </section>
+    </div>
+  </dialog>
+
+  <dialog id="fixedDataIdentifiersDialog" class="request-dialog data-binding-dialog"
+    aria-labelledby="fixedDataIdentifiersTitle">
+    <div class="data-binding-page">
+      <div class="dialog-heading data-binding-heading">
+        <div>
+          <span class="eyebrow">RUN DATA TRACEABILITY</span>
+          <h2 id="fixedDataIdentifiersTitle">固定データ識別子</h2>
+          <p>実行前の計画と Run で凍結した実データ、その利用箇所、Evidence、Cleanup を確認します。</p>
+        </div>
+        <button id="closeFixedDataIdentifiersButton" class="icon-button" type="button" aria-label="閉じる">×</button>
+      </div>
+      <div class="data-binding-section-heading">
+        <h3>実行前の計画データ</h3>
+        <span id="plannedDataCount" class="status-badge neutral">0 件</span>
+      </div>
+      <div id="plannedDataIdentifiers" class="data-identity-list"></div>
+      <div class="data-binding-section-heading frozen-heading">
+        <h3>実行後の凍結結果</h3>
+        <span id="frozenDataCount" class="status-badge neutral">0 件</span>
+      </div>
+      <div id="frozenDataIdentifiers" class="data-identity-list" aria-live="polite"></div>
+    </div>
   </dialog>
 
   <dialog id="requestDialog" class="request-dialog change-request-dialog"

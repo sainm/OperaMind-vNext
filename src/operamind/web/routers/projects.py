@@ -13,6 +13,8 @@ from operamind.application.web_control_plane import (
 )
 from operamind.web.dependencies import command_actor, get_service, idempotency_key
 from operamind.web.models import (
+    DataIdentityProfilesUpdate,
+    ExistingTestDataCreate,
     ProjectCreate,
     ProjectDocumentLearningConfirm,
     ProjectOnboardingRequest,
@@ -122,6 +124,91 @@ def project_target_data_profile(project_id: str, service: Service) -> dict[str, 
     return service.project_target_data_profile(project_id, include_statements=True)
 
 
+@router.get("/projects/{project_id}/existing-test-data")
+def existing_test_data(project_id: str, service: Service) -> dict[str, object]:
+    return service.existing_test_data(project_id)
+
+
+@router.get("/projects/{project_id}/data-identity-profiles")
+def project_data_identity_profiles(
+    project_id: str, service: Service
+) -> dict[str, object]:
+    return service.project_data_identity_profiles(project_id)
+
+
+@router.put("/projects/{project_id}/data-identity-profiles")
+def update_project_data_identity_profiles(
+    project_id: str,
+    body: DataIdentityProfilesUpdate,
+    service: Service,
+    actor: Actor,
+    key: IdempotencyKey,
+) -> dict[str, object]:
+    return service.execute_web_command(
+        command_scope=f"project:data-identity-profiles:{project_id}",
+        idempotency_key=key,
+        actor=actor,
+        payload=body.model_dump(mode="json"),
+        operation=lambda: service.configure_project_data_identity_profiles(
+            project_id=project_id,
+            profiles=tuple(body.profiles),
+            actor=actor,
+        ),
+    )
+
+
+@router.post("/projects/{project_id}/existing-test-data", status_code=201)
+def register_existing_test_data(
+    project_id: str,
+    body: ExistingTestDataCreate,
+    service: Service,
+    actor: Actor,
+    key: IdempotencyKey,
+) -> dict[str, object]:
+    return service.execute_web_command(
+        command_scope=f"project:existing-test-data:{project_id}:register",
+        idempotency_key=key,
+        actor=actor,
+        payload=body.model_dump(mode="json"),
+        operation=lambda: service.register_existing_test_data(
+            project_id=project_id,
+            data_name=body.data_name,
+            business_unique_value=body.business_unique_value,
+            test_case_ref=body.test_case_ref,
+            retain_after_test=body.retain_after_test,
+            actor=actor,
+        ),
+    )
+
+
+@router.post("/projects/{project_id}/existing-test-data/{registration_id}/confirm")
+def confirm_existing_test_data(
+    project_id: str,
+    registration_id: str,
+    service: Service,
+    actor: Actor,
+    key: IdempotencyKey,
+) -> dict[str, object]:
+    return service.execute_web_command(
+        command_scope=(
+            f"project:existing-test-data:{project_id}:{registration_id}:confirm"
+        ),
+        idempotency_key=key,
+        actor=actor,
+        payload={"registration_id": registration_id},
+        operation=lambda: service.confirm_existing_test_data(
+            project_id=project_id,
+            registration_id=registration_id,
+            actor=actor,
+        ),
+    )
+
+
+@router.get("/projects/{project_id}/fixed-data-identifiers")
+def fixed_data_identifiers(project_id: str, service: Service) -> dict[str, object]:
+    return service.fixed_data_identifiers(project_id)
+
+
 @router.put("/projects/{project_id}/target-data-profile")
 def update_project_target_data_profile(
     project_id: str,
@@ -138,6 +225,7 @@ def update_project_target_data_profile(
         idempotency_key=key,
         actor=actor,
         payload={
+            "dialect": body.dialect,
             "connection_alias": body.connection_alias,
             "connection_secret_digest": secret_digest,
             "transaction_policy": body.transaction_policy,
@@ -146,6 +234,7 @@ def update_project_target_data_profile(
         operation=lambda: service.configure_project_target_data_profile(
             project_id=project_id,
             connection_alias=body.connection_alias,
+            dialect=body.dialect,
             connection_dsn=secret,
             transaction_policy=body.transaction_policy,
             bindings=tuple(body.bindings),

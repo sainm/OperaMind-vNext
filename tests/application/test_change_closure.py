@@ -25,6 +25,94 @@ def test_passes_only_when_code_tests_data_coverage_and_ui_pass() -> None:
     assert "ui-result-001" in result["artifact_refs"]
 
 
+def test_v3_closure_reports_requirement_to_binding_and_screenshot_trace() -> None:
+    value = _input()
+    plan = copy.deepcopy(value.test_data_plan)
+    execution = copy.deepcopy(value.test_data_result)
+    assert execution is not None
+    plan["schema_version"] = "v3"
+    plan["data_sets"] = [
+        {
+            "test_data_id": "expense-bound",
+            "coverage_conditions": [
+                {
+                    "criterion_ref": "criterion-001",
+                    "test_case_ref": "ui-test",
+                }
+            ],
+        }
+    ]
+    plan["generation_flows"][0].update(
+        {
+            "test_data_refs": ["expense-bound"],
+            "steps": [
+                {
+                    "step_id": "verify-expense",
+                    "channel": "ui",
+                    "data_binding_ref": "expense-bound",
+                    "postconditions": [{"assertion_id": "expense-visible"}],
+                }
+            ],
+            "cleanup_steps": [
+                {
+                    "step_id": "cleanup-expense",
+                    "data_binding_ref": "expense-bound",
+                    "postconditions": [{"assertion_id": "expense-absent"}],
+                }
+            ],
+        }
+    )
+    execution.update(
+        {
+            "schema_version": "v3",
+            "data_bindings": [
+                {
+                    "binding_id": "binding-001",
+                    "test_data_id": "expense-bound",
+                    "identity_provider_type": "database",
+                    "business_unique_keys": [
+                        {"name": "expense_number", "value": "EXP-001"}
+                    ],
+                }
+            ],
+            "evidence": [
+                {
+                    "evidence_type": "screenshot",
+                    "evidence_ref": "evidence/ui/expense.png",
+                    "test_data_binding_ref": "binding-001",
+                }
+            ],
+        }
+    )
+    execution["flow_results"][0]["cleanup_results"] = [
+        {
+            "status": "passed",
+            "evidence_refs": ["cleanup-evidence-001"],
+            "test_data_binding_refs": ["binding-001"],
+        }
+    ]
+
+    result = _evaluator().evaluate(
+        _replace(value, test_data_plan=plan, test_data_result=execution)
+    )
+
+    assert result["schema_version"] == "v3"
+    assert result["data_traceability"] == [
+        {
+            "criterion_ref": "criterion-001",
+            "test_case_ref": "ui-test",
+            "test_data_id": "expense-bound",
+            "ui_step_refs": ["verify-expense"],
+            "test_data_binding_ref": "binding-001",
+            "provider_type": "database",
+            "business_values": [{"name": "expense_number", "value": "EXP-001"}],
+            "assertion_refs": ["expense-absent", "expense-visible"],
+            "screenshot_evidence_refs": ["evidence/ui/expense.png"],
+            "cleanup_status": "passed",
+        }
+    ]
+
+
 def test_blocks_when_committed_edit_result_is_missing() -> None:
     value = _input()
     result = _evaluator().evaluate(

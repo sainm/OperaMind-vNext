@@ -105,6 +105,68 @@ def test_latest_for_request_can_filter_out_plan_revision_tasks() -> None:
     assert parameters == ("change-1", "change_delivery", "change_delivery")
 
 
+def test_ui_locator_block_is_attached_to_the_matching_change_task(tmp_path: Path) -> None:
+    cursor = Mock()
+    cursor.fetchone.return_value = ("task-1",)
+    repository = _repository(cursor)
+    record = _record(tmp_path)
+
+    with (
+        patch.object(CopilotCodingTaskRepository, "_require_locked", return_value=record),
+        patch.object(CopilotCodingTaskRepository, "_append_event") as append_event,
+    ):
+        task_id = repository.record_ui_locator_blocked_feedback(
+            orchestration_id="orchestration-1",
+            project_id="project-1",
+            run_id="run-1",
+            feedback={
+                "run_id": "foreign-run",
+                "orchestration_id": "foreign-orchestration",
+                "failure_stage": "formal_ui_run_pre_action_validation",
+                "failures": [{"step_id": "approve-expense"}],
+            },
+            actor="main-flow-worker",
+        )
+
+    assert task_id == "task-1"
+    query = cursor.execute.call_args.args[0]
+    assert "orchestration.orchestration_id = %s" in query
+    assert "planning_event.payload ->> 'test_data_plan_id'" in query
+    assert "= orchestration.test_data_plan_id" in query
+    assert "IN ('test_planning', 'ui_test_revision')" in query
+    assert cursor.execute.call_args.args[1] == ("orchestration-1", "project-1")
+    assert append_event.call_args.kwargs["event_type"] == "ui_locator_blocked"
+    assert append_event.call_args.kwargs["idempotency_key"] == "ui-locator-blocked:run-1"
+    assert append_event.call_args.kwargs["payload"]["run_id"] == "run-1"
+    assert append_event.call_args.kwargs["payload"]["orchestration_id"] == "orchestration-1"
+
+
+def test_latest_ui_locator_feedback_is_scoped_to_project_and_orchestration() -> None:
+    cursor = Mock()
+    created_at = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+    payload = {
+        "failure_stage": "formal_ui_run_pre_action_validation",
+        "failures": [{"step_id": "approve-expense"}],
+    }
+    cursor.fetchone.return_value = (payload, created_at, "task-1")
+    repository = _repository(cursor)
+
+    result = repository.latest_ui_locator_feedback(
+        orchestration_id="orchestration-1",
+        project_id="project-1",
+    )
+
+    assert result == {
+        "coding_task_id": "task-1",
+        "created_at": "2026-08-05T12:00:00+00:00",
+        "payload": payload,
+    }
+    query = cursor.execute.call_args.args[0]
+    assert "event.event_type = 'ui_locator_blocked'" in query
+    assert "event.payload ->> 'orchestration_id'" in query
+    assert cursor.execute.call_args.args[1] == ("project-1", "orchestration-1")
+
+
 def test_claim_next_prioritizes_consumers_active_task_before_newer_request(
     tmp_path: Path,
 ) -> None:

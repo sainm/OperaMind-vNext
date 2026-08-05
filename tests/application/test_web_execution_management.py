@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -186,6 +187,41 @@ class ExecutionAuthorizationRepository:
         }
 
 
+class LocatorFeedbackRepository:
+    def latest_ui_locator_feedback(self, **values: object) -> dict[str, object]:
+        assert values == {
+            "orchestration_id": "orchestration-001",
+            "project_id": "visiondemo",
+        }
+        return {
+            "coding_task_id": "copilot-change-001",
+            "payload": {
+                "failure_stage": "formal_ui_run_pre_action_validation",
+                "run_id": "run-secret-internal",
+                "failures": [
+                    {
+                        "flow_id": "expense-approval",
+                        "step_id": "approve-expense",
+                        "phase": "setup",
+                        "failure_stage": "pre_action_record_scope_validation",
+                        "failure_reason": "対象レコードが 0 件でした",
+                        "evidence_refs": ["evidence/blocked.png"],
+                        "test_data_binding_refs": ["binding-expense-001"],
+                        "locator_type": "role",
+                        "record_scope_match_count": 1,
+                        "action_locator_match_count": 0,
+                        "observed_screen_identity_values": [
+                            {"name": "expense_number", "value": "EXP-041"},
+                            {"name": "password", "value": "must-not-leak"},
+                        ],
+                        "locator_json": {"by": "css", "value": "tr:nth-child(1)"},
+                        "observed_identity_digest": "a" * 64,
+                    }
+                ],
+            },
+        }
+
+
 def test_management_combines_plan_run_coverage_closure_and_safe_screenshots(
     tmp_path: Path,
 ) -> None:
@@ -307,6 +343,59 @@ def test_test_case_revision_preview_hides_internal_ids_and_confirmation_restarts
         },
         "flow": {"change_request_id": "change-001"},
     }
+
+
+def test_locator_block_is_publicly_summarized_and_confirmed_revision_receives_evidence(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    service._connection = object()  # type: ignore[attr-defined]
+    service._copilot_tasks = LocatorFeedbackRepository()  # type: ignore[attr-defined]
+    CopilotRevisionTaskService.published = []
+    monkeypatch.setattr(
+        "operamind.application.web_control_plane.CopilotCodingTaskService",
+        CopilotRevisionTaskService,
+    )
+    management = service.execution_management("change-001")
+    service._test_case_revisions = RevisingTestCaseService()  # type: ignore[attr-defined]
+    service.main_change_flow = lambda request_id: {"change_request_id": request_id}  # type: ignore[method-assign]
+    preview = service.propose_test_case_revision(
+        request_id="change-001",
+        instruction="実際の画面 Evidence に基づいて Locator を修正する",
+        actor="local-user",
+    )
+    applied = service.confirm_test_case_revision(
+        request_id="change-001",
+        proposal_id="proposal-001",
+        selections={},
+        actor="local-user",
+    )
+
+    public_feedback = management["locator_failure_feedback"]
+    assert public_feedback == preview["locator_failure_feedback"]
+    assert public_feedback == applied["locator_failure_feedback"]
+    assert "locator_json" not in repr(public_feedback)
+    assert "binding-expense-001" not in repr(public_feedback)
+    assert "run-secret-internal" not in repr(public_feedback)
+    request = CopilotRevisionTaskService.published[0]
+    context = request.plan_revision_context  # type: ignore[union-attr]
+    assert context is not None
+    locator_evidence = json.loads(str(context["locator_failure_evidence_json"]))
+    assert locator_evidence["failures"][0]["failure_stage"] == (
+        "pre_action_record_scope_validation"
+    )
+    assert locator_evidence["failures"][0]["evidence_refs"] == [
+        "evidence/blocked.png"
+    ]
+    assert locator_evidence["failures"][0]["locator_type"] == "role"
+    assert locator_evidence["failures"][0]["record_scope_match_count"] == 1
+    assert locator_evidence["failures"][0]["action_locator_match_count"] == 0
+    assert locator_evidence["failures"][0]["observed_screen_identity_values"] == [
+        {"name": "expense_number", "value": "EXP-041"}
+    ]
+    assert "locator_json" not in repr(locator_evidence)
+    assert "observed_identity_digest" not in repr(locator_evidence)
 
 
 def test_document_learning_claim_uses_the_same_bridge_task_envelope(

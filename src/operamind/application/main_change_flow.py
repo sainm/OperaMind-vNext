@@ -375,12 +375,14 @@ def _ui_stage(
         data_coverage.get("status") != "passed"
         or data_coverage.get("coverage_percent") != 100
     )
+    locator_failure_feedback = _dict(execution.get("locator_failure_feedback"))
     passed = data_plan_status == "ready" and (closure_ui_status in {"passed", "not_impacted"})
     failed = (
         coverage_gate_failed
         or data_coverage_gate_failed
         or data_plan_status == "blocked"
         or data_status in _FAILED_STATES
+        or bool(locator_failure_feedback)
     )
     running = data_status in _ACTIVE_STATES
     confirmation_waiting = str((automation or {}).get("current_stage") or "") in {
@@ -415,6 +417,11 @@ def _ui_stage(
         blockers.extend(confirmation_blockers)
         blockers.extend(_string_list(data_plan.get("blocking_reasons")))
         blockers.extend(_string_list(closure.get("blocking_reasons")))
+        if locator_failure_feedback:
+            blockers.append(
+                "Playwright の操作前検証が停止しました。"
+                "新しい UI TestPlan Revision を確認してください。"
+            )
     if status == "blocked" and not blockers:
         blockers = ["テストデータ生成または UI 検証が合格していません。"]
     screenshots = _dict_list(execution.get("screenshots"))
@@ -463,6 +470,7 @@ def _ui_stage(
                 }
                 for item in screenshots
             ],
+            "locator_failure_feedback": locator_failure_feedback or None,
             "confirmation": (
                 None
                 if coverage_gate_failed
@@ -657,20 +665,19 @@ def _generation_flow_summaries(
 def _data_binding_summaries(
     execution_result: dict[str, object],
 ) -> list[dict[str, object]]:
-    """Expose the immutable record identity used by UI operations, without secrets."""
+    """Expose only business-readable frozen identity values to ordinary users."""
 
     return [
         {
             "test_data_id": binding.get("test_data_id"),
             "binding_mode": binding.get("binding_mode"),
-            "primary_key": _dict(binding.get("primary_key")),
+            "identity_provider_type": binding.get("identity_provider_type"),
             "business_unique_keys": _dict_list(binding.get("business_unique_keys")),
-            "screen_key": _dict(binding.get("screen_key")),
-            "screen_locator": _dict(binding.get("screen_locator")),
+            "screen_identity_values": _dict_list(
+                binding.get("screen_identity_values")
+            ),
             "match_count": binding.get("match_count"),
             "frozen_at": binding.get("frozen_at"),
-            "content_digest": binding.get("content_digest"),
-            "evidence_ref": binding.get("evidence_ref"),
         }
         for binding in _dict_list(execution_result.get("data_bindings"))
     ]

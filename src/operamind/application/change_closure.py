@@ -64,6 +64,20 @@ class ChangeClosureEvaluator:
             unresolved=unresolved,
         )
         component_refs = _component_refs(value)
+        data_traceability = _data_traceability(value)
+        if (
+            value.test_data_result is not None
+            and value.test_data_result.get("schema_version") == "v3"
+            and value.test_data_result.get("status") == "passed"
+            and not data_traceability
+        ):
+            raise ValueError("v3 Closure requires TestDataBinding traceability")
+        schema_version = (
+            "v3"
+            if value.test_data_result is not None
+            and value.test_data_result.get("schema_version") == "v3"
+            else "v2"
+        )
         material = json.dumps(
             {
                 "orchestration_id": value.orchestration["orchestration_id"],
@@ -76,6 +90,7 @@ class ChangeClosureEvaluator:
                 "changed_line_coverage_status": _changed_line_coverage_status(value),
                 "status": status,
                 "unresolved": unresolved,
+                "data_traceability": data_traceability,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -83,7 +98,7 @@ class ChangeClosureEvaluator:
         ).encode()
         artifact: dict[str, Any] = {
             "artifact_type": "ChangeClosureResult",
-            "schema_version": "v2",
+            "schema_version": schema_version,
             "closure_result_id": f"closure-{hashlib.sha256(material).hexdigest()[:24]}",
             "change_request_id": value.change_request["change_request_id"],
             "project_id": value.change_request["project_id"],
@@ -101,6 +116,11 @@ class ChangeClosureEvaluator:
             "changed_line_coverage_status": _changed_line_coverage_status(value),
             "status": status,
             "unresolved_items": unresolved,
+            **(
+                {"data_traceability": data_traceability}
+                if schema_version == "v3"
+                else {}
+            ),
         }
         self._contracts.validate_artifact(artifact)
         return artifact
@@ -180,6 +200,105 @@ def _component_refs(value: ChangeClosureInput) -> list[str]:
     if value.ui_result is not None:
         values.append(str(value.ui_result["verification_result_id"]))
     return sorted(set(values))
+
+
+def _data_traceability(value: ChangeClosureInput) -> list[dict[str, object]]:
+    result = value.test_data_result
+    if result is None or result.get("schema_version") != "v3":
+        return []
+    bindings = {
+        str(binding["test_data_id"]): binding
+        for binding in cast(list[dict[str, Any]], result.get("data_bindings", []))
+    }
+    flow_results = {
+        str(flow["flow_id"]): flow
+        for flow in cast(list[dict[str, Any]], result.get("flow_results", []))
+    }
+    evidence = cast(list[dict[str, Any]], result.get("evidence", []))
+    traces: list[dict[str, object]] = []
+    for data_set in cast(list[dict[str, Any]], value.test_data_plan["data_sets"]):
+        test_data_id = str(data_set["test_data_id"])
+        binding = bindings.get(test_data_id)
+        if binding is None:
+            continue
+        binding_id = str(binding["binding_id"])
+        matching_flows = [
+            flow
+            for flow in cast(
+                list[dict[str, Any]], value.test_data_plan["generation_flows"]
+            )
+            if test_data_id in {str(item) for item in flow["test_data_refs"]}
+        ]
+        ui_steps = sorted(
+            {
+                str(step["step_id"])
+                for flow in matching_flows
+                for step in cast(list[dict[str, Any]], flow["steps"])
+                if step.get("channel") == "ui"
+                and step.get("data_binding_ref") == test_data_id
+            }
+        )
+        assertions = sorted(
+            {
+                str(assertion["assertion_id"])
+                for flow in matching_flows
+                for step in [
+                    *cast(list[dict[str, Any]], flow["steps"]),
+                    *cast(list[dict[str, Any]], flow["cleanup_steps"]),
+                ]
+                if step.get("data_binding_ref") == test_data_id
+                for assertion in cast(list[dict[str, Any]], step["postconditions"])
+            }
+        )
+        cleanup_results = [
+            step
+            for flow in matching_flows
+            for step in cast(
+                list[dict[str, Any]],
+                flow_results.get(str(flow["flow_id"]), {}).get("cleanup_results", []),
+            )
+            if binding_id
+            in {str(item) for item in step.get("test_data_binding_refs", [])}
+        ]
+        cleanup_status = (
+            "passed"
+            if cleanup_results
+            and all(step.get("status") == "passed" for step in cleanup_results)
+            else "failed"
+            if cleanup_results
+            else "not_required"
+        )
+        screenshots = sorted(
+            str(item["evidence_ref"])
+            for item in evidence
+            if item.get("evidence_type") == "screenshot"
+            and item.get("test_data_binding_ref") == binding_id
+        )
+        for condition in cast(
+            list[dict[str, Any]], data_set.get("coverage_conditions", [])
+        ):
+            traces.append(
+                {
+                    "criterion_ref": str(condition["criterion_ref"]),
+                    "test_case_ref": str(condition["test_case_ref"]),
+                    "test_data_id": test_data_id,
+                    "ui_step_refs": ui_steps,
+                    "test_data_binding_ref": binding_id,
+                    "provider_type": binding["identity_provider_type"],
+                    "business_values": binding["business_unique_keys"],
+                    "assertion_refs": assertions,
+                    "screenshot_evidence_refs": screenshots,
+                    "cleanup_status": cleanup_status,
+                }
+            )
+    return sorted(
+        traces,
+        key=lambda item: (
+            str(item["criterion_ref"]),
+            str(item["test_case_ref"]),
+            str(item["test_data_id"]),
+        ),
+    )
 
 
 def _modified_paths(edit_result: dict[str, Any] | None) -> list[str]:

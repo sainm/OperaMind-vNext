@@ -12,12 +12,15 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlsplit
 
 import psycopg
 from psycopg import Connection
 from psycopg.rows import dict_row
 
+from operamind.application.data_identity import (
+    is_sensitive_data_identity_name,
+    redact_secret_evidence,
+)
 from operamind.application.test_data_execution import (
     TestDataExecutionEvidence,
     TestDataExecutionRequest,
@@ -25,10 +28,14 @@ from operamind.application.test_data_execution import (
     TestDataStepExecution,
 )
 from operamind.infrastructure.browser import LocalEvidenceStore
+from operamind.infrastructure.test_data.target_database import (
+    TargetDatabaseAdapterRegistry,
+    TargetDatabaseExecutionError,
+    default_target_database_adapters,
+)
 from operamind.local_installation import installation_paths
 
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_NAMED_PARAMETER = re.compile(r"%\(([A-Za-z_][A-Za-z0-9_]*)\)s")
 _RAW_SQL_INPUT_KEYS = frozenset({"sql", "query", "statement", "statement_text"})
 _INPUT_TYPES = frozenset({"string", "integer", "number", "boolean"})
 _IDEMPOTENCY_POLICIES = frozenset(
@@ -40,6 +47,7 @@ _IDEMPOTENCY_POLICIES = frozenset(
 class TargetDataBinding:
     project_id: str
     connection_alias: str
+    dialect: str
     query_binding_id: str
     operation: str
     statement_text: str
@@ -103,11 +111,24 @@ class TargetDataProfile:
 class TargetDataSecretStore:
     """Persist target connection strings outside workspaces and the Canonical DB."""
 
-    def __init__(self, root: Path | None = None) -> None:
+    def __init__(
+        self,
+        root: Path | None = None,
+        *,
+        adapters: TargetDatabaseAdapterRegistry | None = None,
+    ) -> None:
         self._root = (root or installation_paths().data_directory / "target-data-secrets").resolve()
+        self._adapters = adapters or default_target_database_adapters()
 
-    def put(self, *, project_id: str, connection_alias: str, connection_dsn: str) -> None:
-        _validate_connection_dsn(connection_dsn)
+    def put(
+        self,
+        *,
+        project_id: str,
+        connection_alias: str,
+        connection_dsn: str,
+        dialect: str = "postgresql",
+    ) -> None:
+        self._adapters.require(dialect).validate_connection_secret(connection_dsn)
         self._ensure_root()
         destination = self._path(project_id, connection_alias)
         if destination.is_symlink():
@@ -118,19 +139,35 @@ class TargetDataSecretStore:
             temporary.chmod(0o600)
         temporary.replace(destination)
 
-    def get(self, *, project_id: str, connection_alias: str) -> str:
+    def get(
+        self,
+        *,
+        project_id: str,
+        connection_alias: str,
+        dialect: str = "postgresql",
+    ) -> str:
         path = self._path(project_id, connection_alias)
         if path.is_symlink() or not path.is_file():
             raise ValueError(
                 f"Target Data connection secret is not configured for alias: {connection_alias}"
             )
         value = path.read_text(encoding="utf-8").strip()
-        _validate_connection_dsn(value)
+        self._adapters.require(dialect).validate_connection_secret(value)
         return value
 
-    def configured(self, *, project_id: str, connection_alias: str) -> bool:
+    def configured(
+        self,
+        *,
+        project_id: str,
+        connection_alias: str,
+        dialect: str = "postgresql",
+    ) -> bool:
         try:
-            self.get(project_id=project_id, connection_alias=connection_alias)
+            self.get(
+                project_id=project_id,
+                connection_alias=connection_alias,
+                dialect=dialect,
+            )
         except ValueError:
             return False
         return True
@@ -155,14 +192,21 @@ class TargetDataSecretStore:
 class TargetDataProfileRepository:
     """Canonical non-secret Target Data Profile configuration."""
 
-    def __init__(self, connection: Connection[Any]) -> None:
+    def __init__(
+        self,
+        connection: Connection[Any],
+        *,
+        adapters: TargetDatabaseAdapterRegistry | None = None,
+    ) -> None:
         self._connection = connection
+        self._adapters = adapters or default_target_database_adapters()
 
     def replace(
         self,
         *,
         project_id: str,
         connection_alias: str,
+        dialect: str = "postgresql",
         transaction_policy: str,
         bindings: Sequence[Mapping[str, object]],
         reviewed_by: str,
@@ -170,9 +214,11 @@ class TargetDataProfileRepository:
         _validate_profile_input(
             project_id=project_id,
             connection_alias=connection_alias,
+            dialect=dialect,
             transaction_policy=transaction_policy,
             bindings=bindings,
             reviewed_by=reviewed_by,
+            adapters=self._adapters,
         )
         with self._connection.transaction(), self._connection.cursor() as cursor:
             cursor.execute(
@@ -184,13 +230,14 @@ class TargetDataProfileRepository:
                 """
                 INSERT INTO project_target_data_profiles (
                     project_id, connection_alias, dialect, transaction_policy, reviewed_by
-                ) VALUES (%s, %s, 'postgresql', %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (project_id, connection_alias) DO UPDATE
-                SET transaction_policy = EXCLUDED.transaction_policy,
+                SET dialect = EXCLUDED.dialect,
+                    transaction_policy = EXCLUDED.transaction_policy,
                     reviewed_by = EXCLUDED.reviewed_by,
                     reviewed_at = clock_timestamp(), updated_at = clock_timestamp()
                 """,
-                (project_id, connection_alias, transaction_policy, reviewed_by),
+                (project_id, connection_alias, dialect, transaction_policy, reviewed_by),
             )
             cursor.execute(
                 "DELETE FROM project_target_data_query_bindings WHERE project_id = %s",
@@ -270,7 +317,10 @@ class TargetDataProfileRepository:
                 """,
                 (project_id, row["connection_alias"]),
             )
-            bindings = tuple(_binding_from_row(value) for value in cursor.fetchall())
+            bindings = tuple(
+                _binding_from_row(value, dialect=str(row["dialect"]))
+                for value in cursor.fetchall()
+            )
         return TargetDataProfile(
             project_id=str(row["project_id"]),
             connection_alias=str(row["connection_alias"]),
@@ -309,6 +359,10 @@ class TargetDataProfileRepository:
             return ["Project has no reviewed Target Data Profile for SQL TestDataPlan execution"]
         bindings = {value.query_binding_id: value for value in profile.bindings}
         reasons: list[str] = []
+        try:
+            self._adapters.require(profile.dialect)
+        except ValueError as error:
+            reasons.append(str(error))
         for flow, collection, step in sql_steps:
             flow_id = str(flow.get("flow_id", "<unknown>"))
             step_id = str(step.get("step_id", "<unknown>"))
@@ -346,10 +400,12 @@ class ProjectSqlTestDataExecutor:
         control_database_url: str,
         evidence_store: LocalEvidenceStore,
         secret_store: TargetDataSecretStore | None = None,
+        adapters: TargetDatabaseAdapterRegistry | None = None,
     ) -> None:
         self._control_database_url = control_database_url
         self._evidence_store = evidence_store
-        self._secret_store = secret_store or TargetDataSecretStore()
+        self._adapters = adapters or default_target_database_adapters()
+        self._secret_store = secret_store or TargetDataSecretStore(adapters=self._adapters)
 
     def execute(
         self,
@@ -377,42 +433,40 @@ class ProjectSqlTestDataExecutor:
             )
         parameters = _validate_binding_inputs(binding, resolved_inputs)
         identity_source = step.get("_requires_unique_identity_match") is True
+        adapter = self._adapters.require(binding.dialect)
         connection_dsn = self._secret_store.get(
             project_id=request.project_id,
             connection_alias=binding.connection_alias,
+            dialect=binding.dialect,
         )
         try:
-            with (
-                psycopg.connect(connection_dsn, row_factory=dict_row) as target,
-                target.cursor() as cursor,
-            ):
-                try:
-                    _validate_live_columns(cursor, binding, parameters)
-                    _validate_live_identity_constraints(cursor, binding)
-                except ValueError as error:
-                    if identity_source:
-                        raise TestDataStepBlockedError(
-                            f"Identity SQL binding drifted: {binding.query_binding_id}: {error}"
-                        ) from error
-                    raise
-                cursor.execute(binding.statement_text, parameters)
-                affected_rows = max(cursor.rowcount, 0)
-                cursor.execute(binding.read_after_write_statement, parameters)
-                rows = [dict(value) for value in cursor.fetchall()]
-                if identity_source and len(rows) != 1:
-                    raise TestDataStepBlockedError(
-                        "Identity SQL readback must match exactly one database row: "
-                        f"count={len(rows)}"
-                    )
-                _assert_readback(binding, rows)
-        except psycopg.Error as error:
+            database_result = adapter.execute_binding(
+                connection_secret=connection_dsn,
+                binding=binding,
+                parameters=parameters,
+            )
+        except ValueError as error:
+            if identity_source:
+                raise TestDataStepBlockedError(
+                    f"Identity SQL binding drifted: {binding.query_binding_id}: {error}"
+                ) from error
+            raise
+        except TargetDatabaseExecutionError as error:
             raise RuntimeError(
                 "Reviewed SQL binding failed: "
-                f"{binding.query_binding_id} ({error.sqlstate or 'db_error'})"
+                f"{binding.query_binding_id} ({error.dialect}:{error.error_code})"
             ) from error
+        rows = list(database_result.rows)
+        if identity_source and len(rows) != 1:
+            raise TestDataStepBlockedError(
+                "Identity SQL readback must match exactly one database row: "
+                f"count={len(rows)}"
+            )
+        _assert_readback(binding, rows)
         observed = {
             "query_binding_id": binding.query_binding_id,
-            "affected_rows": affected_rows,
+            "database_dialect": binding.dialect,
+            "affected_rows": database_result.affected_rows,
             "row_count": len(rows),
             "rows": [_json_safe(value) for value in rows],
             "read_after_write": "passed",
@@ -425,7 +479,7 @@ class ProjectSqlTestDataExecutor:
             evidence_id=evidence_id,
             scenario_id=_safe_component(flow_id),
             evidence_type="sql",
-            payload=observed,
+            payload=redact_secret_evidence(observed),
         )
         evidence = TestDataExecutionEvidence(
             evidence_id=evidence_id,
@@ -446,14 +500,17 @@ def _validate_profile_input(
     *,
     project_id: str,
     connection_alias: str,
+    dialect: str = "postgresql",
     transaction_policy: str,
     bindings: Sequence[Mapping[str, object]],
     reviewed_by: str,
+    adapters: TargetDatabaseAdapterRegistry | None = None,
 ) -> None:
     if not project_id.strip() or not connection_alias.strip() or not reviewed_by.strip():
         raise ValueError("Target Data Profile identity must not be blank")
     if transaction_policy != "per_binding_transaction":
         raise ValueError("Target Data transaction_policy must be per_binding_transaction")
+    adapter = (adapters or default_target_database_adapters()).require(dialect)
     if not bindings:
         raise ValueError("Target Data Profile requires at least one reviewed query binding")
     ids = [str(value.get("query_binding_id", "")) for value in bindings]
@@ -483,11 +540,7 @@ def _validate_profile_input(
         constraints = value.get("input_constraints")
         if not isinstance(parameter_columns, dict) or not isinstance(constraints, dict):
             raise ValueError(f"{binding_id}: parameter_columns/input_constraints must be objects")
-        parameters = set().union(*(_NAMED_PARAMETER.findall(item) for item in statements))
-        if parameters != set(parameter_columns) or parameters != set(constraints):
-            raise ValueError(
-                f"{binding_id}: named SQL parameters, columns and constraints must match exactly"
-            )
+        adapter.validate_binding_definition(value)
         for parameter, column in parameter_columns.items():
             if _SAFE_IDENTIFIER.fullmatch(str(column)) is None:
                 raise ValueError(f"{binding_id}: column for {parameter} is invalid")
@@ -501,7 +554,32 @@ def _validate_profile_input(
             raise ValueError(f"{binding_id}: read_assertion is invalid")
         if assertion.get("mode") == "row_count" and not isinstance(assertion.get("count"), int):
             raise ValueError(f"{binding_id}: row_count assertion requires an integer count")
+        if operation == "cleanup" and not (
+            assertion.get("mode") == "rows_absent"
+            or (
+                assertion.get("mode") == "row_count"
+                and assertion.get("count") == 0
+            )
+        ):
+            raise ValueError(
+                f"{binding_id}: cleanup binding must prove that the target row is absent"
+            )
         _validate_identity_contract(binding_id, value.get("identity_contract"))
+        if operation == "cleanup":
+            identity_contract = cast(dict[str, object], value["identity_contract"])
+            parameter_targets = {str(column) for column in parameter_columns.values()}
+            primary_key = str(identity_contract["primary_key"])
+            business_keys = {
+                str(column)
+                for column in cast(list[object], identity_contract["business_unique_keys"])
+            }
+            if primary_key not in parameter_targets and not business_keys.issubset(
+                parameter_targets
+            ):
+                raise ValueError(
+                    f"{binding_id}: cleanup binding must target the primary key or every "
+                    "business unique key"
+                )
         policy = str(value.get("idempotency_policy", ""))
         if policy not in _IDEMPOTENCY_POLICIES:
             raise ValueError(f"{binding_id}: idempotency_policy is invalid")
@@ -561,6 +639,7 @@ def _validate_identity_contract(binding_id: str, value: object) -> None:
         )
         or len(business) != len(set(business))
         or len(coverage) != len(set(coverage))
+        or any(is_sensitive_data_identity_name(str(item)) for item in identifiers)
     ):
         raise ValueError(f"{binding_id}: identity_contract columns are invalid")
 
@@ -579,59 +658,67 @@ def _validate_plan_identity_contracts(
         if not isinstance(identity, dict):
             continue
         flow = flow_by_id.get(str(identity.get("source_flow_id", "")))
-        step = next(
+        steps = cast(list[dict[str, Any]], (flow or {}).get("steps", []))
+        source_index = next(
             (
-                value
-                for value in cast(list[dict[str, Any]], (flow or {}).get("steps", []))
+                index
+                for index, value in enumerate(steps)
                 if value.get("step_id") == identity.get("source_step_id")
             ),
             None,
         )
-        binding = bindings.get(str((step or {}).get("target", "")))
-        if binding is None:
-            continue
-        contract = binding.identity_contract
-        expected = [
-            ("primary_key", str(contract["primary_key"])),
-            *(
-                ("business_unique_key", str(column))
-                for column in cast(list[object], contract["business_unique_keys"])
-            ),
-            ("screen_key", str(contract["screen_key"])),
-        ]
-        planned = [
-            cast(dict[str, object], identity.get("primary_key") or {}),
-            *cast(list[dict[str, object]], identity.get("business_unique_keys") or []),
-            cast(dict[str, object], identity.get("screen_key") or {}),
-        ]
-        if len(planned) != len(expected):
-            reasons.append(
-                f"{test_data_id}: planned identity keys differ from reviewed SQL binding"
-            )
-            continue
-        for spec, (_kind, column) in zip(planned, expected, strict=True):
-            if (
-                spec.get("source") != "database"
-                or spec.get("name") != column
-                or str(spec.get("path", "")) not in {
-                    f"rows[0].{column}",
-                    f"$.rows[0].{column}",
-                }
-            ):
+        provider = cast(dict[str, object], identity.get("provider") or {})
+        provider_type = str(provider.get("type", ""))
+        identity_binding: TargetDataBinding | None = None
+        if source_index is not None and provider_type == "database":
+            identity_binding = bindings.get(str(steps[source_index].get("target", "")))
+        elif source_index is not None and provider_type == "hybrid":
+            sql_steps = [
+                step
+                for step in steps[: source_index + 1]
+                if step.get("channel") == "sql"
+            ]
+            if sql_steps:
+                identity_binding = bindings.get(str(sql_steps[-1].get("target", "")))
+            elif _identity_uses_database(identity):
                 reasons.append(
-                    f"{test_data_id}: {column} must bind the reviewed database readback column"
+                    f"{test_data_id}: hybrid database identity source has no SQL step"
                 )
-        if binding.read_assertion != {"mode": "row_count", "count": 1}:
-            reasons.append(
-                f"{test_data_id}: identity SQL binding must assert readback row_count=1"
+        if identity_binding is not None:
+            reasons.extend(
+                _validate_database_identity_specs(
+                    test_data_id=test_data_id,
+                    identity=identity,
+                    binding=identity_binding,
+                    provider_type=provider_type,
+                )
             )
-        allowed_coverage_columns = {
-            str(value)
-            for value in cast(list[object], contract["coverage_columns"])
-        }
         for condition in cast(
             list[dict[str, Any]], data_set.get("coverage_conditions", [])
         ):
+            coverage_flow = flow_by_id.get(str(condition.get("source_flow_id", "")))
+            coverage_step = next(
+                (
+                    value
+                    for value in cast(
+                        list[dict[str, Any]], (coverage_flow or {}).get("steps", [])
+                    )
+                    if value.get("step_id") == condition.get("source_step_id")
+                ),
+                None,
+            )
+            coverage_binding = bindings.get(
+                str((coverage_step or {}).get("target", ""))
+            )
+            if coverage_binding is None:
+                continue
+            allowed_coverage_columns = {
+                str(value)
+                for value in cast(
+                    list[object],
+                    coverage_binding.identity_contract["coverage_columns"],
+                )
+            }
             for key in ("path", "expected_path"):
                 if key not in condition:
                     continue
@@ -639,8 +726,73 @@ def _validate_plan_identity_contracts(
                 if column not in allowed_coverage_columns:
                     reasons.append(
                         f"{test_data_id}: coverage condition column is not reviewed by "
-                        f"{binding.query_binding_id}: {column}"
+                        f"{coverage_binding.query_binding_id}: {column}"
                     )
+    return reasons
+
+
+def _identity_uses_database(identity: Mapping[str, object]) -> bool:
+    return any(
+        value.get("source") == "database"
+        for value in (
+            cast(Mapping[str, object], identity.get("primary_key") or {}),
+            *cast(
+                list[Mapping[str, object]],
+                identity.get("business_unique_keys") or [],
+            ),
+            cast(Mapping[str, object], identity.get("screen_key") or {}),
+            cast(Mapping[str, object], identity.get("match_count") or {}),
+        )
+    )
+
+
+def _validate_database_identity_specs(
+    *,
+    test_data_id: str,
+    identity: Mapping[str, object],
+    binding: TargetDataBinding,
+    provider_type: str,
+) -> list[str]:
+    contract = binding.identity_contract
+    primary = cast(Mapping[str, object], identity.get("primary_key") or {})
+    business = cast(
+        list[Mapping[str, object]], identity.get("business_unique_keys") or []
+    )
+    screen = cast(Mapping[str, object], identity.get("screen_key") or {})
+    reviewed_business = [
+        str(value) for value in cast(list[object], contract["business_unique_keys"])
+    ]
+    reasons: list[str] = []
+    if provider_type == "database" and [str(value.get("name", "")) for value in business] != (
+        reviewed_business
+    ):
+        reasons.append(
+            f"{test_data_id}: planned identity keys differ from reviewed SQL binding"
+        )
+    specifications = [
+        (primary, {str(contract["primary_key"])}),
+        *((value, set(reviewed_business)) for value in business),
+        (screen, {str(contract["screen_key"])}),
+    ]
+    for spec, allowed_columns in specifications:
+        if provider_type == "hybrid" and spec.get("source") != "database":
+            continue
+        column = str(spec.get("name", ""))
+        if (
+            spec.get("source") != "database"
+            or column not in allowed_columns
+            or str(spec.get("path", ""))
+            not in {f"rows[0].{column}", f"$.rows[0].{column}"}
+        ):
+            expected = ", ".join(sorted(allowed_columns))
+            reasons.append(
+                f"{test_data_id}: {expected} must bind the reviewed database "
+                "readback column"
+            )
+    if binding.read_assertion != {"mode": "row_count", "count": 1}:
+        reasons.append(
+            f"{test_data_id}: identity SQL binding must assert readback row_count=1"
+        )
     return reasons
 
 
@@ -693,116 +845,6 @@ def _validate_binding_inputs(
     return result
 
 
-def _validate_live_columns(
-    cursor: Any, binding: TargetDataBinding, parameters: Mapping[str, object]
-) -> None:
-    cursor.execute(
-        """
-        SELECT column_name, is_nullable, data_type, character_maximum_length
-        FROM information_schema.columns
-        WHERE table_schema = %s AND table_name = %s
-        """,
-        (binding.target_schema, binding.target_table),
-    )
-    columns = {str(row["column_name"]): row for row in cursor.fetchall()}
-    for parameter, column_name in binding.parameter_columns.items():
-        column = columns.get(column_name)
-        if column is None:
-            raise ValueError(
-                f"{binding.query_binding_id}: reviewed target column no longer exists: "
-                f"{column_name}"
-            )
-        constraint = binding.input_constraints[parameter]
-        data_type = str(column["data_type"])
-        if not _column_accepts_input_type(str(constraint["type"]), data_type):
-            raise ValueError(
-                f"{binding.query_binding_id}/{parameter}: reviewed input type is incompatible "
-                f"with target column type {data_type}"
-            )
-        if constraint.get("required") is True and parameters[parameter] is None:
-            raise ValueError(f"{binding.query_binding_id}/{parameter}: NULL is not allowed")
-        maximum = column["character_maximum_length"]
-        if (
-            isinstance(parameters[parameter], str)
-            and maximum is not None
-            and len(cast(str, parameters[parameter])) > int(maximum)
-        ):
-            raise ValueError(
-                f"{binding.query_binding_id}/{parameter}: input exceeds target column length"
-            )
-
-
-def _validate_live_identity_constraints(cursor: Any, binding: TargetDataBinding) -> None:
-    contract = binding.identity_contract
-    primary = str(contract["primary_key"])
-    business = tuple(str(value) for value in cast(list[object], contract["business_unique_keys"]))
-    coverage = tuple(str(value) for value in cast(list[object], contract["coverage_columns"]))
-    screen = str(contract["screen_key"])
-    cursor.execute(
-        """
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_schema = %s AND table_name = %s
-        """,
-        (binding.target_schema, binding.target_table),
-    )
-    columns = {str(row["column_name"]) for row in cursor.fetchall()}
-    missing = {primary, screen, *business, *coverage} - columns
-    if missing:
-        raise ValueError(
-            f"{binding.query_binding_id}: reviewed identity columns no longer exist: "
-            f"{sorted(missing)}"
-        )
-    cursor.execute(
-        """
-        SELECT constraint_record.contype AS constraint_type,
-               constraint_record.conname AS constraint_name,
-               column_record.attname AS column_name,
-               key_column.ordinality AS ordinal_position
-        FROM pg_catalog.pg_constraint AS constraint_record
-        JOIN pg_catalog.pg_class AS table_record
-          ON table_record.oid = constraint_record.conrelid
-        JOIN pg_catalog.pg_namespace AS namespace_record
-          ON namespace_record.oid = table_record.relnamespace
-        JOIN unnest(constraint_record.conkey) WITH ORDINALITY
-          AS key_column(attribute_number, ordinality)
-          ON TRUE
-        JOIN pg_catalog.pg_attribute AS column_record
-          ON column_record.attrelid = table_record.oid
-         AND column_record.attnum = key_column.attribute_number
-        WHERE namespace_record.nspname = %s
-          AND table_record.relname = %s
-          AND constraint_record.contype IN ('p', 'u')
-        ORDER BY constraint_record.contype,
-                 constraint_record.conname, key_column.ordinality
-        """,
-        (binding.target_schema, binding.target_table),
-    )
-    constraints: dict[tuple[str, str], list[str]] = {}
-    for row in cursor.fetchall():
-        constraints.setdefault(
-            (str(row["constraint_type"]), str(row["constraint_name"])), []
-        ).append(str(row["column_name"]))
-    primary_constraints = {
-        tuple(columns)
-        for (kind, _name), columns in constraints.items()
-        if kind == "p"
-    }
-    unique_constraints = {
-        tuple(columns)
-        for (kind, _name), columns in constraints.items()
-        if kind == "u"
-    }
-    if (primary,) not in primary_constraints:
-        raise ValueError(
-            f"{binding.query_binding_id}: reviewed primary key is not the live single-column PK"
-        )
-    if business not in unique_constraints:
-        raise ValueError(
-            f"{binding.query_binding_id}: reviewed business key is not a live UNIQUE constraint"
-        )
-
-
 def _assert_readback(binding: TargetDataBinding, rows: Sequence[Mapping[str, object]]) -> None:
     mode = binding.read_assertion["mode"]
     if mode == "rows_present" and not rows:
@@ -813,37 +855,11 @@ def _assert_readback(binding: TargetDataBinding, rows: Sequence[Mapping[str, obj
         raise ValueError(f"{binding.query_binding_id}: readback row count did not match")
 
 
-def _column_accepts_input_type(input_type: str, data_type: str) -> bool:
-    database_type = data_type.lower()
-    compatible = {
-        "string": {
-            "character varying",
-            "character",
-            "text",
-            "uuid",
-            "date",
-            "timestamp without time zone",
-            "timestamp with time zone",
-        },
-        "integer": {"smallint", "integer", "bigint"},
-        "number": {
-            "smallint",
-            "integer",
-            "bigint",
-            "numeric",
-            "decimal",
-            "real",
-            "double precision",
-        },
-        "boolean": {"boolean"},
-    }
-    return database_type in compatible.get(input_type, set())
-
-
-def _binding_from_row(row: Mapping[str, object]) -> TargetDataBinding:
+def _binding_from_row(row: Mapping[str, object], *, dialect: str) -> TargetDataBinding:
     return TargetDataBinding(
         project_id=str(row["project_id"]),
         connection_alias=str(row["connection_alias"]),
+        dialect=dialect,
         query_binding_id=str(row["query_binding_id"]),
         operation=str(row["operation"]),
         statement_text=str(row["statement_text"]),
@@ -859,15 +875,6 @@ def _binding_from_row(row: Mapping[str, object]) -> TargetDataBinding:
         ),
         idempotency_policy=str(row["idempotency_policy"]),
     )
-
-
-def _validate_connection_dsn(value: str) -> None:
-    text = value.strip()
-    parsed = urlsplit(text)
-    if parsed.scheme not in {"postgres", "postgresql"} or not parsed.hostname or not parsed.path:
-        raise ValueError("Target Data connection must be a PostgreSQL URL")
-    if parsed.password is None:
-        raise ValueError("Target Data connection secret must include a password")
 
 
 def _json(value: object) -> str:

@@ -62,6 +62,8 @@ Copy-Item .env.example .env
 
 本機の固定開発 DB 名は `operamind_vnext` です。ソース実行では接続先、Embedding、UI Test の設定をリポジトリ Root の `.env` に置き、実値は Git に追加しません。配布版はユーザー領域の `config.env` を読み込みます。OS の既存環境変数、ユーザー設定、ソース `.env` の順で優先されます。VS Code MCP は Launcher と同じ実行環境を使用するため、Database URL の入力 Dialog は表示されません。
 
+必須／任意の全設定、OS 別 Path、設定値の確認方法、Project 画面の入力、Embedding、Playwright、Target Data SQL Binding、Secret の保存先、障害時の確認方法は [設定ガイド](docs/CONFIGURATION.md) にまとめています。`.env` と `config.env` は端末全体の実行設定、Workspace・設計書・UI URL・被テスト DB は Project ごとの画面設定です。
+
 Windows 配布版の設定は `%LOCALAPPDATA%\OperaMind\config.env`、実行情報は `%LOCALAPPDATA%\OperaMind\runtime.json` に固定します。`config.env` は UTF-8、UTF-8 BOM、CRLF のいずれも受け付けます。Windows の PostgreSQL は Unix socket 形式ではなく、`postgresql://operamind:<PASSWORD>@127.0.0.1:5432/operamind_vnext` のような TCP URL を使用します。Token と runtime 情報は Launcher が生成するため、利用者が編集しません。
 
 Web は単機利用を前提とし、`127.0.0.1` のみで公開します。ユーザー認証はありません。Bridge Token は Launcher がユーザー領域へ生成し、VS Code Extension が SecretStorage へ同期します。
@@ -70,7 +72,9 @@ Web は単機利用を前提とし、`127.0.0.1` のみで公開します。ユ�
 
 Project 登録後の Onboarding はバックグラウンドで `構造抽出 → 設計書学習 → Canonical 文書 → RAG 索引` を順番に実行します。Project ごとの XLSX／DOCX から Sheet、Heading、Header と Sample を抽出し、VS Code 上の GitHub Copilot が Project 専用 `DocumentConventionProfile` 草案を生成します。Web の「設計書学習」で Field Mapping、Stable Key、曖昧点、Sample Coverage を確認し、Coverage 100%／曖昧 0 件の場合だけ Version を適用します。別 Project の学習結果は流用しません。内容だけが変わった場合は現行 Profile で Canonical／RAG を更新し、Sheet、Heading、Header 等の構造が変わった場合は差分学習と再確認を要求します。PostgreSQL の Canonical Data、Profile Version、監査記録は更新可能で、RAG は確認済み Version から自動再構築します。
 
-TestDataPlan で対象システムの HTTP／UI Step を実行する場合は、Project 初期化画面で資格情報を含まない Origin を明示します。SQL を使う Project は同じ画面の「被テストシステム DB データ準備」で接続 Alias と確認済み Query Binding を登録します。接続 Secret はユーザー領域の owner-only SecretStore に保存し、OperaMind DB、ログ、Copilot へ保存・送信しません。Copilot には `query_binding_id`、入力制約、cleanup 関係と確認済み Identity Contract だけを渡し、任意 SQL は受理しません。各 Test Data は実 DB の主キー、業務一意キー、画面識別キーを readback で 1 件に確定し、その Binding と digest を Run／Evidence に固定します。全 UI Step は `operation_scope` を `screen` または `bound_record` として明示し、後続の跨画面・表操作は `bound_record` と `data_binding_ref` を必須として、固定した画面キーの exact Locator 内だけで実行します。0 件、複数件、画面 drift を検出した場合は停止します。行番号、曖昧 Text、AI 推測、固定済み行に対する computer-use fallback は使用しません。各 write Binding は項目型、長さ、必須、列挙・業務制約、実 Table／Column 検査、read-after-write、cleanup、Transaction、冪等方針を満たさなければ Plan 確認前に fail closed になります。Fixture は自動テスト用の注入 Adapter に限定し、production の対象システムデータ準備には使用しません。
+TestDataPlan で対象システムの HTTP／UI Step を実行する場合は、Project 初期化画面で資格情報を含まない Origin を明示します。SQL を使う Project は同じ画面の「被テストシステム DB データ準備」で Database 方言、接続 Alias、確認済み Query Binding を登録します。被テスト DB は `TargetDatabaseAdapter` Registry で分離し、現在は実 PostgreSQL Adapter だけを登録します。未登録方言は blocked とし、別 DB へ fallback しません。接続 Secret はユーザー領域の owner-only SecretStore に保存し、OperaMind DB、ログ、Copilot Context、Evidence へ保存・送信しません。Copilot には `query_binding_id`、入力制約、cleanup 関係と確認済み Identity Contract だけを渡し、任意 SQL は受理しません。各 Test Data は登録済みの実 `DataIdentityProvider`（`database`／`api`／`ui`／`hybrid`）で実観測を解決し、`primary_key`、`business_unique_keys`、`screen_identity_values`、`record_scope_locator`、`match_count`、`evidence_ref` の同一契約へ固定します。Hybrid は各 Source に共通する同名・同値の Identity を必須とし、すべての Source が同じ業務レコードを指すことを検証します。`match_count` は必ず 1 であり、Provider 未登録、source Evidence 欠落、fake、推測、静かな fallback は Plan または実行を blocked にします。`bound_record` 操作の直前には exact Scope が 1 件であることを確認し、その実 DOM から業務一意キーと画面識別値を読み、OperaMind 自身が `observed_identity_digest` を計算して frozen identity digest と比較します。期待 digest や Binding の content digest を観測値として流用できません。全 UI Step は `operation_scope` を `screen` または `bound_record` として明示し、後続の跨画面・表操作は `bound_record` と `data_binding_ref` を必須として、固定した画面キーの exact Locator 内だけで実行します。0 件、複数件、DOM 身元不一致、画面 drift を検出した場合は操作前に停止します。行番号、曖昧 Text、AI 推測、固定済み行に対する computer-use fallback は使用しません。各 write Binding は項目型、長さ、必須、列挙・業務制約、実 Table／Column 検査、read-after-write、cleanup、Transaction、冪等方針を満たさなければ Plan 確認前に fail closed になります。Fixture は自動テスト用の注入 Adapter に限定し、production の対象システムデータ準備には使用しません。
+
+既存の実データは日本語画面「既存テストデータを登録」から、データ名、業務上の一意値、Test Case、保持方針だけで接管できます。確認済み Provider が一件だけを実観測した候補を人工確認した後にだけ `binding_mode=adopted` となります。Run ごとの `RunContext` は読み取り専用 Token と凍結 Binding を保持し、後続 Flow／別 Test Case／Cleanup が同じ実レコードを参照します。「固定データ識別子」では業務値、利用箇所、Evidence、Cleanup を確認でき、普通利用者には SQL、Locator、主キー、Secret、内部 Binding ID を表示しません。詳細設定は [設定ガイド](docs/CONFIGURATION.md) を参照してください。
 
 データを「生成した」ことと、テストを「データでカバーした」ことは別に判定します。OperaMind は確定した AcceptanceCriteria、TestCase、`test_data_id` の全組合せを母数にし、TestDataPlan の `coverage_conditions` と完全一致しなければ Plan を受理しません。各条件は確認済み SQL Binding の readback 列だけを参照し、実行後に実 DB の項目値、状態、境界値、関連関係を再評価します。期待値、実測値、結果、digest、Evidence を Run に保存し、OperaMind が算出した Test Data Coverage が 100% になるまで TestPlan の UI Step、Screenshot、人工確認後の UI 検証へ進みません。AI が Coverage 値や成功結果を自己申告することはできません。
 
@@ -106,6 +110,7 @@ PostgreSQL 統合テストでは、管理用接続だけを `OPERAMIND_TEST_DATA
 
 ## 設計文書
 
+- [設定ガイド](docs/CONFIGURATION.md)
 - [再構成方針](docs/RECONSTRUCTION.md)
 - [全体アーキテクチャ](docs/ARCHITECTURE.md)
 - [MVP スコープ](docs/MVP-SCOPE.md)

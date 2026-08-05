@@ -76,12 +76,33 @@ class ProjectDocumentLearningConfirm(StrictModel):
 class TargetDataProfileUpdate(StrictModel):
     """Reviewed SQL bindings plus a write-only local target connection secret."""
 
+    dialect: str = Field(
+        default="postgresql",
+        min_length=1,
+        max_length=32,
+        pattern=r"^[a-z][a-z0-9_]{0,31}$",
+    )
     connection_alias: str = Field(
         min_length=1, max_length=160, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$"
     )
     connection_dsn: SecretStr | None = None
     transaction_policy: Literal["per_binding_transaction"] = "per_binding_transaction"
     bindings: list[dict[str, object]] = Field(min_length=1, max_length=100)
+
+
+class ExistingTestDataCreate(StrictModel):
+    """Only business-readable values accepted from an ordinary tester."""
+
+    data_name: str = Field(min_length=1, max_length=300)
+    business_unique_value: str = Field(min_length=1, max_length=1000)
+    test_case_ref: str = Field(min_length=1, max_length=300)
+    retain_after_test: bool = False
+
+
+class DataIdentityProfilesUpdate(StrictModel):
+    """Administrator-only reviewed Provider definitions; never ordinary-user input."""
+
+    profiles: list[dict[str, object]] = Field(default_factory=list, max_length=20)
 
 
 class LocalEnvironmentExtensionDiagnostic(StrictModel):

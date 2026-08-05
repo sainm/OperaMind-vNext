@@ -160,7 +160,7 @@ macOS／Linux 例:
 - 設計書の業務値だけを変更した再スキャンは現行 Profile を再利用し、Sheet、Heading、Header を変更した再スキャンは再学習で停止する。
 - production、test、UI、設定、SQL、ビルド定義を含む scan root が生成される。
 
-被テストシステムの DB へ直接データを準備する Project では、Project 設定の「被テストシステム DB データ準備」を開く。通常の変更利用者が SQL を毎回入力するのではなく、管理者／QA が事前レビューした Binding 定義を一度登録する。接続 Alias と PostgreSQL 接続 Secret を入力し、write Binding ごとに `query_binding_id`、命名 Parameter、入力制約、対象 Table／Column、read-after-write、cleanup Binding、Transaction、冪等方針が揃うことを確認する。Secret は保存後に画面へ再表示されず、空欄で再保存すると現在値を維持する。
+被テストシステムの DB へ直接データを準備する Project では、Project 設定の「被テストシステム DB データ準備」を開く。通常の変更利用者が SQL を毎回入力するのではなく、管理者／QA が事前レビューした Binding 定義を一度登録する。Database 方言が登録済み Adapter（現在は `postgresql`）であることを確認し、接続 Alias と PostgreSQL 接続 Secret を入力する。write Binding ごとに `query_binding_id`、命名 Parameter、入力制約、対象 Table／Column、read-after-write、cleanup Binding、Transaction、冪等方針が揃うことを確認する。Secret は保存後に画面へ再表示されず、空欄で再保存すると現在値を維持する。未登録方言は Profile／Secret 保存または Plan 確認で blocked となり、PostgreSQL へ fallback しないことを確認する。
 
 確認点：
 
@@ -547,7 +547,7 @@ Web の `コード変更・コンパイル・テスト` を開き、次を確認
 
 ### Step 7: 実 UI TestPlan / TestDataPlan を確認する
 
-コード Command と Coverage の合格後だけ、Copilot が同じ Change Task 内で実ブラウザ用 `schema_version=v2, plan_kind=ui` の UiTestPlan と TestDataPlan を生成し、`output_stage=test_planning` を記録できることを確認する。TestPlan は単体テストの計画ではなく、実際の画面を操作する UI テスト計画である。
+コード Command と Coverage の合格後だけ、Copilot が同じ Change Task 内で実ブラウザ用 `schema_version=v2, plan_kind=ui` の UiTestPlan と、RunContext／Frozen Binding を持つ `schema_version=v3` の TestDataPlan を生成し、`output_stage=test_planning` を記録できることを確認する。TestPlan は単体テストの計画ではなく、実際の画面を操作する UI テスト計画である。既存の TestDataPlan v1／v2 は履歴表示だけに使用し、新しい正式 Plan または Locator 修正版として確認・実行しない。
 
 OperaMind は記録前に Change Request の全 Business Rule を母数として業務カバレッジを再計算する。100% 未満の場合は次を確認する。
 
@@ -573,9 +573,11 @@ TestDataPlan には次を含める。
 - 依存順に並んだデータ生成 Step
 - 被テストシステムを実際に変更する Setup Step の構造化 `data_effect`（`creates` または `updates`）、必須 Output Binding、および同じ観測値を検証する Assertion。Action 名の「登録」「create」などの文字列だけではデータ生成と判定しない
 - Step 間の変数
-- 各 `test_data_id` を、確認済み SQL readback の実 DB 主キー・業務一意キー・画面識別キーへ結ぶ `identity_binding`。readback と `match_count` は必ず 1 件であること
-- 確定した全 AcceptanceCriteria／TestCase／`test_data_id` の組合せに対応する `coverage_conditions`。業務項目、状態、境界値、関連関係を、Identity Binding と同じ確認済み SQL readback の列で検証すること
+- 各 `test_data_id` を登録済みの実 `DataIdentityProvider`（database／api／ui／hybrid）へ結ぶ `identity_binding`。Provider は `primary_key`、`business_unique_keys`、`screen_identity_values`、`record_scope_locator`、`match_count`、`evidence_ref` を返し、`match_count` は必ず 1 であること。Hybrid は全 Source を同名・同値 Identity で連結し、同一業務レコードであることを検証すること。未登録 Provider、fake、推測、静かな fallback は使用しないこと
+- 確定した全 AcceptanceCriteria／TestCase／`test_data_id` の組合せに対応する `coverage_conditions`。業務項目、状態、境界値、関連関係を、Identity Binding と同じ確認済み Provider Observation の項目で検証すること。database Provider の場合はレビュー済み SQL readback の列を使用する
 - 全 UI Step の `operation_scope=screen|bound_record`。跨画面および表 UI Step は `bound_record` と `data_binding_ref` を持ち、画面識別キーから生成した exact Locator の Scope 内だけを操作し、行番号・曖昧 Text・AI 推測を使用しないこと
+- Copilot が画面設計書、HTML／Template／Frontend Source、Route、Code Graph、Test Case、TestDataPlan、DataIdentityProvider を根拠に、画面ごとに role + name、label、placeholder、test id、title、alt text、安全な CSS、または全 `screen_identity_values` を含む複合 Locator を選択していること。固定 ID や固定表構造を全画面へ強制しないこと
+- click、fill、select など状態を変える Action に、実行直前に読む期待値付き `pre_action_observations` があること。`nth()`、`nth-child`、行番号、曖昧 Text、座標、未検証 Dynamic CSS がないこと
 - 後置および最終 Assertion
 - UI Step と UI Assertion
 - 各 UI Step の限定 Playwright Action、Screenshot
@@ -584,11 +586,20 @@ TestDataPlan には次を含める。
 - 逆順 Cleanup
 - 実行不能時の blocking reason
 
+既存の実データを使用する Test Case では、Plan の最終確認前に次の操作を行う。
+
+1. Project の「既存テストデータ」を開き、「既存テストデータを登録」を表示する。
+2. データ名、業務番号または業務上の一意値、使用する Test Case、テスト終了後の保持有無だけを入力する。SQL、主キー項目名、JSON、Locator、`stable_key`、内部 Binding ID の入力欄がないことを確認する。
+3. 「一意性を確認」を押し、確認済み database／api／ui／hybrid Provider が実行された結果を待つ。
+4. 0 件、複数件、Provider 未設定、Evidence 不足では `blocked` となり、確認ボタンと adopted データ定義が生成されないことを確認する。
+5. 1 件の場合は脱敏された業務摘要、Provider 種別、保持方針を確認し、「確認して採用」を押す。
+6. 人工確認後だけ「固定データ識別子」の実行前計画へ `adopted` データとして現れることを確認する。既存業務値が暗黙に書き換えられていないことを確認する。
+
 複数画面のデータを別々の手動ファイルに分けない。一つの TestDataPlan Flow の変数、依存関係、Assertion、Cleanup として表現する。
 
 Web の `テストデータ・UI 検証` を開き、自然言語手順、生成 Flow、変数、Assertion、Cleanup、Playwright Action と AI 画面操作への限定フォールバックを確認する。Web または VS Code で UiTestPlan／TestDataPlan を確認し、`確認して進む` を押す。確認後に実ブラウザ実行が開始され、Screenshot と最終レポートが生成されることを確認する。
 
-実行後は同画面の `固定データ識別子` で、主キー、業務一意キー、画面識別キー、exact Locator、`match_count=1`、digest、Evidence 参照を確認する。続けて `実 DB データ条件の検証結果` で AcceptanceCriteria、TestCase、TestData、実 DB Path、条件、期待値、実測値、Evidence を確認する。Test Data Coverage は OperaMind がこれらの実測 Proof から算出し、100% 未満では TestPlan の UI Step、Screenshot、最終成功へ進まない。対象 DB では 1 件でも、画面上で 0 件または複数件になった場合も UI Step が `blocked` となる。
+実行後は同画面の `固定データ識別子` で、業務値、Run Token、Provider 種別、使用した Test Case／Flow／Step、Evidence、Cleanup 結果を確認する。普通利用者画面に Provider Ref、主キー、Locator、digest、SQL、Secret、内部 Binding ID が表示されないことも確認する。管理者は内部 Artifact／診断で `match_count=1`、identity digest、Evidence の Scope 一致を監査できる。続けて `実 DB データ条件の検証結果` で AcceptanceCriteria、TestCase、TestData、条件、期待値、実測値、Evidence を確認する。Test Data Coverage は OperaMind がこれらの実測 Proof から算出し、100% 未満では TestPlan の UI Step、Screenshot、最終成功へ進まない。対象 Provider では 1 件でも、画面上で 0 件または複数件になった場合も UI Step が `blocked` となる。Secret、接続情報、認証値が DB、ログ、Copilot Context、Evidence にないことも確認する。
 
 ### Step 8: 自然言語テストケース修正を確認する
 
@@ -609,9 +620,11 @@ Test Case が Web に表示された後、必要に応じて次を実行する�
 - 旧 Run、Evidence、Screenshot、Closure は stale 履歴になる。
 - 旧 Version の結果を新 Version へ流用しない。
 
-### Step 9: 固定コマンドと最終 Diff を確認する
+### Step 9: 最終 Diff と固定 Command Evidence を再確認する
 
-Copilot が `copilot_run_task_command` で CommandExecutionProfile に登録された必須コマンドをすべて実行することを確認する。
+Step 6 で Copilot が `copilot_run_task_command` を使って実行・確定した CommandExecutionProfile の Evidence を再確認する。UI TestPlan の生成または自然言語 Revision はコードを変更しないため、同じ Result Revision／content digest に対する成功 Evidence を再利用し、同じ Command を理由なく二重実行しない。
+
+Plan Revision 中に production code、test code、build file の差分が増えた場合は Plan だけの変更として受理しない。Code Scope と Result Revision が変わるため `コード影響範囲` へ戻り、新しい Scope 確認、compile、test、coverage を完了してから新しい TestPlan を生成する。
 
 対象工程固有のコマンド名や argv は Web/MCP が返した値を使用し、本手順では固定しない。
 
@@ -621,8 +634,8 @@ Copilot が `copilot_run_task_command` で CommandExecutionProfile に登録さ�
 - すべての終了状態が成功
 - working diff が Scope 内
 - TestPlan と TestDataPlan が記録済み
-- Copilot が結果を確定（Git commit またはローカル結果 Snapshot）
-- `copilot_record_task_result` が成功
+- Copilot が Step 6 で結果を確定済み（Git commit またはローカル結果 Snapshot）
+- Step 6 の `copilot_record_task_result` が成功し、現在の Plan が同じ Result Revision を参照
 
 実行後、Git 管理の場合は次を確認する。
 
@@ -648,6 +661,17 @@ Web の `UI 検証` で次を確認する。
 - Screenshot Evidence
 - blocking reason
 
+正式 Run の前に別の Browser 予行 Run が作られていないことを確認する。一つの Browser Context で画面へ移動し、各状態変更 Action の直前に Origin、画面状態、対象 Locator の件数を読み取る。`bound_record` では現在 Project／Run の frozen Binding、record Scope count=1、全業務 Identity 値、全 `screen_identity_values`、`observed_identity_digest`、Scope 内 Action count=1 を確認してから操作する。
+
+Locator を意図的に一つ drift させる確認では、次を合格条件とする。
+
+1. Scope または Action が 0 件／複数件、Identity 不一致、Origin 越境のいずれかになった時点でクリックや更新を実行しない。
+2. Run が `blocked` になり、脱敏 Screenshot、Step Log、Locator 種別、Scope／Action match count、失敗工程が Evidence に残る。
+3. Web／Chat の通常表示には業務目的、対象データ、画面、阻断理由、次の操作だけが表示され、Locator JSON、digest、Raw DOM、内部 Artifact ID、MCP Raw I/O がない。
+4. 利用者が転記操作をしなくても、Evidence が同じ Copilot Change Task に記録され、OperaMind が `ui_test_plan_revision` Task を自動発行し、Copilot が業務期待値を変えずに完全な新 Plan を生成する。発行不能時は `locator_revision_publish_failed` が表示され、元の blocked Evidence は保持される。
+5. 新 Plan は同じ Confirmation API で再確認が必要となり、元 Run の途中では Locator が差し替えられない。
+6. `bound_record` または単なる Locator 誤りに Computer Use fallback が起動しない。許可済み Canvas／Native Dialog などの fallback 後も Playwright が Observation と Screenshot を再取得する。
+
 UI Impact がある場合の合格条件:
 
 - すべての setup Step が成功
@@ -655,6 +679,8 @@ UI Impact がある場合の合格条件:
 - `observe_via=ui` の Assertion が成功
 - サニタイズ済み Screenshot が一件以上
 - Cleanup が成功
+- Binding 付き UI Cleanup の操作後に同じ Frozen Scope が 0 件となり、Database／API Source がある場合は対応 Provider でも対象レコード不存在が確認される
+- 各 UI Step Result に driver、Locator 種別、Scope／Action match count、実画面 Identity、Binding ref、Assertion、Step Log、Screenshot が結び付く
 
 Windows では、UI 実行時に Microsoft Edge が自動で使用され、利用者が Browser Driver や WSL を手動起動しないことも確認する。Edge が存在しない、対象 Origin に接続できない、または UI Binding がない場合は、代替 Browser へ黙って切り替えず blocked にする。
 
@@ -673,6 +699,7 @@ Web の `最終レポート` で次を確認する。
 - UI Impact がある場合は UI Result と Screenshot が成功
 - unresolved item がない
 - Requirement、Document Diff、Impact、Code Diff、TestPlan、TestDataPlan、Command Evidence、UI Evidence が同一 Project／Case／Revision に結び付く
+- 各業務要件から Test Case、UI Step、凍結データ、Provider、実レコード、Assertion／Screenshot、Cleanup までの追跡があり、全 Binding ref が現在の Project／Run に解決する
 
 最後に Web または VS Code の最終レポート確認で `確認して進む` を押す。この確認後に全体 Status が `完了` になれば正常系 E2E は合格とする。
 
@@ -717,7 +744,7 @@ OperaMind: 現在のタスクを再開
 - 新しい Change Task が過去 Analysis Case／ImpactReport と衝突する
 - Copilot が `code_scope` 受理前に production code を変更する
 - TestDataPlan の UI Step に Binding、Origin、唯一 Locator がない
-- DB readback または画面 Scope が 0 件／複数件、あるいは固定 Binding の digest が drift した
+- DB readback または画面 Scope が 0 件／複数件、実 DOM の業務一意キー／画面キーが欠落・不一致、あるいは固定 Binding の digest が drift した。bound record の Action は実行されず、Step Log の `observed_identity_digest` は DOM 実値から計算され、`content_digest` と異なること
 
 ## 12. テスト記録テンプレート
 
@@ -804,6 +831,41 @@ Requirement 例:
 
 同じ ID を前回データから再利用しない。Path は相対 Path、Shell の `~`、資格情報を含む URL を使用しない。
 
+#### 14.1.1 完全閉ループ用の業務シナリオを一つ固定する
+
+単に Button を一回押せるだけの要件では、データ生成、跨画面 Binding、Cleanup、Evidence の全経路を確認できない。完全閉ループ受入では、対象業務に合わせて次の性質を持つシナリオを一つ選ぶ。対象システムに該当機能がない場合は、存在しない機能を作らず、該当しない項目を `not_required` とした理由を記録する。
+
+| 固定項目 | 今回の値 | 合格条件 |
+|---|---|---|
+| 業務一意キー | 例: 経費番号 | DB／API／画面の同じレコードへ解決する |
+| 初期状態 | 例: `RETURNED` | Setup または既存データ検索で実測できる |
+| 画面 A | 例: 一覧画面 | 一意キーを含む Record Scope が一件になる |
+| 画面 B | 例: 詳細画面 | 画面 A と同じ Binding を参照する |
+| 状態変更 Action | 例: 再申請 | Action 前後の業務状態を観測できる |
+| 最終状態 | 例: `APPLIED` | UI と、利用可能な DB／API Provider で一致する |
+| Cleanup | 例: 作成データ削除 | 元の Frozen Binding を使用し、削除後 0 件になる |
+| Screenshot | 画面 A、画面 B、最終結果 | 各 Screenshot が操作中の Binding と結び付く |
+
+完全閉ループでは最低二つの UI Test Case を用意する。
+
+1. `TC-GENERATED`: TestDataPlan が Run 固有 Token を許可済み業務項目へ書き込み、新規データを生成して二画面で同一レコードを操作し、最後に Cleanup する。
+2. `TC-ADOPTED`: 事前に被テストシステムへ存在する一件を「既存テストデータ」画面から接管し、既存業務値を変更せず読み取りまたは許可済み操作を行う。対象要件に既存データ利用が不要な場合は別の異常系 Run として実施してよい。
+
+テスト開始前に、被テストシステムへ同じ業務一意値を持つ不要なレコードがないことを確認する。意図的な複数件阻断テストを行う場合だけ重複データを用意し、正常系 Run とは別の Change ID／Run とする。
+
+#### 14.1.2 利用者操作と自動処理の境界を確認する
+
+利用者が行う確認は次の六種類に限定する。
+
+1. 変更要件
+2. RAG が選定した設計書
+3. 設計書差分
+4. コード影響範囲
+5. Business Coverage 100% 到達後の最終 UI TestPlan／TestDataPlan
+6. 最終レポート
+
+コード編集、Command 実行、Coverage 集計、TestData setup、RunContext 作成、Binding 凍結、Playwright 実行、Screenshot 保存、Cleanup、Closure 集計は自動処理である。利用者が Artifact を Copy、JSON を編集、SQL を貼り付け、Task ID を Chat へ転記しない。Web と VS Code のどちらで確認しても、同じ Stage、Plan Revision、Artifact Digest に対する Confirmation API が一回だけ記録されることを確認する。
+
 ### 14.2 Database と RAG データを空にする
 
 1. OperaMind Web、Launcher、MCP が対象 Database を使用していないことを確認して停止する。
@@ -877,6 +939,18 @@ Migration 後に参照用 Profile や Schema 管理行が存在してもよい�
 - Project Source に `コード品質基線` が表示され、`blocked` の場合は不足項目が初期化通知にも表示される。
 - Project を再選択しても同じ情報が表示される。
 - Browser を更新しても Project が Database から再読込される。
+
+UI Test で実データを生成または接管する場合は、変更要件を登録する前に管理者／QA が Project の DataIdentityProvider を確認する。通常利用者の「既存テストデータ」画面ではこの設定を編集しない。
+
+1. Project 設定で Provider が今回の Project に属することを確認する。
+2. Provider Ref、Provider Type（database／api／ui／hybrid）、Revision、Identity Definition、Lookup Steps、Cleanup Steps を確認する。
+3. database はレビュー済み `query_binding_id`、api はレビュー済み API Binding、ui はレビュー済み UI Observation を参照することを確認する。
+4. hybrid は最後の Lookup Step が、それ以前の全 Source の同一業務キーを照合してから Identity を確定することを確認する。
+5. 保持しないデータには Cleanup Steps があり、任意 SQL、任意 URL、行番号、`nth-child`、曖昧 Text を使用していないことを確認する。
+6. Secret はローカル SecretStore にだけ保存され、Project DB、Web 応答、Copilot Context、Evidence から取得できないことを確認する。
+7. 未対応 DB 方言の場合は Provider が `blocked` となり、PostgreSQL として推測実行されないことを確認する。
+
+Provider が未確認、Revision が drift、Lookup が 0 件／複数件、または Cleanup が安全に定義できない状態では TestPlan を確認しない。
 
 ここで失敗した場合、または `コード品質基線: blocked` の場合は変更要件を登録しない。画面に Path、Git、文書解析、Embedding、Coverage Plugin、Report、Test Source のどこで停止したかが分かる理由が必要である。
 
@@ -960,39 +1034,90 @@ Compile、Test、Coverage の一つでも失敗した場合は UI TestPlan へ�
 ### 14.10 UI TestPlan と TestDataPlan を確認・修正する
 
 1. Web の `テストデータ・UI 検証` を開く。
-2. 各 Case に自然言語の前提条件、操作 Step、期待結果が表示されることを確認する。
-3. 各自然言語 Step に対応する実行 Step が一件以上あることを確認する。
-4. 複数画面を使う場合、データ生成 Flow が一つの変数系列で画面間を連結していることを確認する。
-5. 入力変数、出力変数、後置 Assertion、最終 Assertion、Cleanup を確認する。
-6. Playwright で実行できる操作に `computer_use_fallback` が付いていないことを確認する。
-7. Canvas、画像認識など Playwright で表現できない操作だけに、理由、Objective、最大操作数、観測項目が表示されることを確認する。
-8. 内容を変更する場合は `自然言語で修正` を押し、Case と変更前後を明記して入力する。
-9. `差分を確認` で変更対象を確認し、正しい場合だけ `この内容を適用` を押す。
-10. 新 Version が完成するまで旧 Version が current で、旧 Evidence が新 Version に流用されないことを確認する。
-11. 最終的な Plan が正しい場合だけ `確認して進む` を押す。
+2. UI TestPlan が `schema_version=v2`、`plan_kind=ui`、TestDataPlan が `schema_version=v3` であることを詳細表示で確認する。
+3. 各 Case に自然言語の前提条件、操作 Step、期待結果、対応する Business Rule が表示されることを確認する。
+4. 各自然言語 Step に、一意な `step_id` を持つ実行可能 UI Step が一件以上対応することを確認する。
+5. 全 Business Rule の Coverage が 100% であることを確認する。100% 未満では確認 Button と実行 Buttonが表示されず、未カバー項目が同じ Copilot Change Task へ自動返却されることを確認する。
+6. TestDataPlan の各 `test_data_id` に、今回の Project で確認済みの `identity_binding.provider_ref` があることを確認する。別 Project、旧 Revision、存在しない Provider Ref は不合格とする。
+7. 複数画面を使う場合、Flow の `depends_on` が画面遷移とデータ依存を表し、後続 Flow／別 Test Case が前序 Flow の同じ `test_data_id` を参照することを確認する。存在しない依存、循環依存、同じ出力変数の上書きは不合格とする。
+8. generated データの Setup が許可済み業務項目だけへ Run Token または業務値を書き込み、read-after-write、後置 Assertion、最終 Assertion、逆順 Cleanup を持つことを確認する。
+9. adopted データの Setup が既存業務値を変更せず、人工確認済み ExistingTestDataRegistration を参照することを確認する。
+10. すべての `bound_record` Step が `data_binding_ref` を持ち、Record Scope の内側に相対 Action Locator を持つことを確認する。
+11. Locator が画面構造に応じて role + name、label、placeholder、test id、title、alt text、安全な CSS、または全 `screen_identity_values` の組合せから選択されていることを確認する。`nth()`、`nth-child`、行番号、曖昧 Text、座標、未検証 Dynamic CSS は不合格とする。
+12. click、fill、select など状態を変える Action に期待値付き `pre_action_observations`、Action 後 Observation、業務 Assertion、Screenshot 要求があることを確認する。
+13. Playwright で実行できる操作に `computer_use_fallback` が付いていないことを確認する。Canvas、Native Dialog、非 DOM Control だけに、理由、Objective、最大操作数、人工確認があることを確認する。Frozen Binding の操作には設定できない。
+14. 内容を変更する場合は `自然言語で修正` を押し、Case 名、対象 Step、現在の文言、希望する業務動作、維持する期待結果を入力する。
+15. `差分を確認` で変更対象を確認し、正しい場合だけ `この内容を適用` を押す。旧 Plan を直接編集しない。
+16. Copilot が完全な新しい UI TestPlan／TestDataPlan を返し、Schema、安全、Business Coverage 100% を再検証することを確認する。
+17. 新 Version が完成するまで旧 Version が current で、旧 Run／Evidence／Screenshot が新 Version に流用されないことを確認する。
+18. 最終 Plan の業務内容、対象画面、対象データ、操作、Assertion、Cleanup が正しい場合だけ `確認して進む` を押す。
+
+#### 14.10.1 既存データを接管する場合
+
+1. Header の `既存テストデータ` を押す。
+2. `データ名`、`業務番号または業務上の一意値`、`このデータを使用する Test Case`、`テスト終了後もこのデータを残す` だけを入力する。
+3. SQL、主キー項目、JSON、Locator、Stable Key、内部 Binding ID の入力欄がないことを確認する。
+4. `一意性を確認` を押す。
+5. database／api／ui Provider は一 Source、hybrid Provider は全 Source の照合が完了するまで待つ。
+6. `match_count=1` の場合だけ、脱敏された業務摘要、Provider Type、保持方針、使用 Test Case が表示されることを確認する。
+7. 0 件、複数件、Provider 未設定、Source 間の業務キー不一致、Evidence 不足では `blocked` となり、採用確認ができないことを確認する。
+8. 一件の業務摘要が意図した実レコードであることを確認し、`確認して採用` を一回だけ押す。
+9. `固定データ識別子` を開き、実行前の計画データに `adopted` として表示されることを確認する。
+10. 保持しない場合は同じ `data_binding_ref` を使用する Cleanup が Plan に存在することを確認する。保持する場合は既存業務値を変更しないことを確認する。
+
+#### 14.10.2 generated データが Test Case を実際に覆うことを確認する
+
+1. 各 Acceptance Criterion／Test Case／`test_data_id` の組合せに `coverage_condition` があることを確認する。
+2. 正常値、境界値、状態、親子関係など要件に必要な条件が Setup 入力と read-after-write 実測値の両方で表現されることを確認する。
+3. 単に Test Case ID や業務 Rule 文言を Evidence へ書いただけの項目は Coverage Proof として数えられていないことを確認する。
+4. Setup Output Binding が実レコードの business unique key を返し、Provider Lookup の実測値と一致することを確認する。
+5. TestData Coverage が 100% になる前に Playwright が開始されないことを確認する。
 
 ### 14.11 TestData と実ブラウザ UI テストを確認する
 
-1. TestData の setup が依存順に実行されることを確認する。
-2. 生成値が後続画面へ変数として渡ることを確認する。
-3. 対象 Browser が Project と実行環境の設定どおりであることを確認する。
-4. UI 操作、画面遷移、選択状態、件数、業務 Assertion を確認する。
-5. Case ごとに Screenshot が一件以上保存されることを確認する。
-6. Password、Token、個人情報が Screenshot に含まれないことを確認する。
-7. Cleanup が逆依存順に実行されることを確認する。
-8. UI Test 失敗時も Cleanup が実行されることを確認する。
-9. Web に Step ごとの成功／失敗、変数、Assertion、Screenshot、停止理由が表示されることを確認する。
+Plan 確認後、利用者は別 Run、SQL Import、Browser 予行、手動データ投入を開始しない。OperaMind が次の順序を一つの正式 Run と一つの Browser Context で自動実行することを確認する。
+
+1. Run を作成し、`operamind_run_id`、`test_data_token`、`execution_started_at` を生成して read-only で凍結する。
+2. `test_data_token` が `OM-E2E-YYYYMMDD-XXXXXX` 形式で、同じ Run 内では不変、過去 Run と重複しないことを確認する。
+3. Setup Flow を依存順に実行する。generated は対象システムへ作成または更新し、adopted は確認済み実レコードを読み取る。
+4. database／api／ui／hybrid Provider が実レコードを一件に解決し、`project_id`、`run_id`、`test_data_id`、Identity 値、Provider Revision から TestDataBinding を凍結する。
+5. `固定データ識別子` を開き、実行後の凍結結果に業務可読値、Provider Type、使用 Test Case／Flow／Step が表示されることを確認する。通常表示に主キー、Locator JSON、Digest、SQL、Secret がないことを確認する。
+6. Flow が明示した依存順で実行され、後続 Flow／別 Test Case が同じ Frozen Binding を read-only 参照することを確認する。別 Run／別 Project の Binding、Digest 不一致、上書きは `blocked` とする。
+7. Playwright が Project の許可 Origin を開き、一つの Browser Context を維持することを確認する。正式 Action のための別 Browser 予行 Run がないことを確認する。
+8. 各状態変更 Action の直前に、ページ Origin、画面状態、Record Scope、Action Locator を只読検証することを確認する。
+9. `bound_record` では Frozen Binding の全業務一意キーと全 `screen_identity_values` を実 DOM から読み、`record_scope_match_count=1`、`action_locator_match_count=1`、再計算した `observed_identity_digest` の一致後だけ Action を実行することを確認する。
+10. 一覧画面から詳細画面へ遷移した後も、同じ `test_data_id`／Binding の業務キーが表示され、別レコードを操作していないことを確認する。
+11. Action 後の Observation と業務 Assertion が実測値で成功し、各 Step に Step Log、driver、Locator Type、Scope／Action 件数、Binding Ref が記録されることを確認する。
+12. Case ごと、または Plan 指定 Step ごとに Screenshot が保存され、撮影時に操作していた Binding と関連付くことを確認する。
+13. Password、Token、接続情報、Secret 項目、マスク対象個人情報が Screenshot、DOM Observation、Step Log、Evidence にないことを確認する。
+14. すべての業務 Step 後、Cleanup を逆依存順に実行する。業務 Assertion が失敗した場合も、安全に識別できる範囲で Cleanup を試行することを確認する。
+15. UI Cleanup は元の Frozen `record_scope_locator` を使用し、Action 前に一件、業務 Identity Digest 一致、Action Locator 一件を再確認してから Scope 内だけで削除することを確認する。
+16. UI Cleanup 後に同じ Scope の一致数が 0 件であることを確認する。database／api Provider がある場合は、同じ business unique key が Provider 側でも 0 件であることを確認する。
+17. Cleanup 完了後、Web に Step ごとの成功／失敗、Run 変数、Assertion、Screenshot、Cleanup Result、停止理由が表示されることを確認する。
+
+次のいずれかが起きた場合は Action を実行せず `blocked` にする。
+
+- Record Scope または Action Locator が 0 件／複数件
+- DOM の業務 Identity 値が欠落または Frozen Binding と不一致
+- Origin が Project 設定外
+- Binding が別 Project／別 Run、または Digest が不一致
+- DOM Structure drift
+
+Blocked 時は脱敏 Screenshot、Locator Type、実 match count、公開可能な DOM Observation、失敗工程を保存する。OperaMind が同じ Change Task に簡潔な失敗情報を記録し、新しい `ui_test_plan_revision` Task を自動発行することを確認する。Copilot は業務期待値を変えずに完全な Plan Revision を作り、新 Revision は Schema／安全検証と人工確認を再度通過する。元 Run の途中で Locator を差し替えて続行せず、Computer Use で Binding 対象を推測操作しない。
 
 ### 14.12 最終レポートと再起動耐性を確認する
 
 1. `最終レポート` を開く。
-2. Requirement、設計書差分、Scope、Code Diff、Command、Coverage、UI TestPlan、TestDataPlan、Screenshot が同一 Change ID と Result Revision に結び付いていることを確認する。
-3. Business Coverage が 100%、Changed-line Coverage が最低基準以上であることを確認する。
-4. unresolved item と blocking reason が 0 件であることを確認する。
-5. `確認して進む` を押し、全体 Status が `完了` になることを確認する。
-6. Browser を更新し、完了状態と成果物が維持されることを確認する。
-7. OperaMind Web を再起動し、同じ Project と Change ID を選択して完了状態が復元されることを確認する。
-8. 過去の途中状態や古い Copilot Task の失敗が現在工程を上書きしないことを確認する。
+2. Requirement、設計書差分、Scope、Code Diff、Command、Coverage、UI TestPlan、TestDataPlan、Screenshot が同一 Project、Change ID、Result Revision、Plan Revision、Run ID に結び付いていることを確認する。
+3. 各 Business Rule から `Business Rule → Test Case → UI Step → TestDataBinding → DataIdentityProvider → 実レコード → Assertion／Screenshot → Cleanup` を順に開けることを確認する。
+4. Business Coverage が 100%、Test Data Coverage が 100%、Changed-line Coverage が最低基準以上であることを確認する。
+5. Modified Path が確認済み Code Scope 内、必須 Command がすべて成功、Screenshot と Cleanup Result が現在 Run の Binding に解決することを確認する。
+6. unresolved item と blocking reason が 0 件で、ChangeClosureResult が `passed` であることを確認する。
+7. `確認して進む` を一回だけ押し、全体 Status が `完了` になることを確認する。
+8. Browser を更新し、完了状態と成果物が維持されることを確認する。
+9. OperaMind Web を再起動し、同じ Project と Change ID を選択して完了状態が復元されることを確認する。
+10. VS Code を再起動して `OperaMind: 現在のタスクを再開` を実行し、完了 Task が再編集されず、履歴として表示されることを確認する。
+11. 過去の途中状態や古い Copilot Task の失敗が現在工程を上書きしないことを確認する。
 
 ### 14.13 実行終了時の記録
 
@@ -1008,4 +1133,74 @@ Section 12 の表に加えて、各工程について次を記録する。
 | UI 検証 | | | | UI Plan／Data／Screenshot | | |
 | 最終レポート | | | | Coverage／Closure | | |
 
-失敗または停止した場合も、その時点までの合格項目と最初の停止理由を残す。DB を直接補正して同じ実行を成功扱いにせず、修正後は新しい Change ID で最初から再実行する。
+失敗または停止した場合も、その時点までの合格項目と最初の停止理由を残す。DB を直接補正して同じ実行を成功扱いにしない。Locator Revision、Copilot 再生成、明示的な Retry が製品フローとして提供される場合は同じ Change ID の履歴を保持したまま新しい Plan Revision／Run で再実行する。要件自体を変更した場合、基線を汚染した場合、または安全な再開点を証明できない場合だけ、新しい Change ID で最初から実行する。
+
+### 14.14 完全閉ループの状態遷移チェック表
+
+テスト中は「処理が動いているように見える」だけで合格にせず、`現在のアクション` が次の順序で遷移することを記録する。公開六工程の内側にある自動 Stage は詳細／履歴で確認する。
+
+| No. | 内部 Stage／現在のアクション | 主体 | 利用者操作 | 次へ進む条件 |
+|---:|---|---|---|---|
+| 1 | `requirement_confirmation` | 利用者 | 変更要件を確認 | 対象 Project と要件 Digest が一致 |
+| 2 | `rag_document_confirmation` | 利用者 | RAG 文書と根拠を確認 | Canonical 原本へ復元でき、別 Project 混入なし |
+| 3 | `document_generation` | VS Code GitHub Copilot | なし | Scope 内設計書差分を記録 |
+| 4 | `document_confirmation` | 利用者 | 設計書差分を確認 | 業務要件と差分が一致 |
+| 5 | `impact_analysis` | Copilot／OperaMind | なし | Code Graph と Test Binding を含む Impact が完成 |
+| 6 | `impact_confirmation` | 利用者 | コード影響範囲を確認 | production／test／UI／設定 Scope が妥当 |
+| 7 | `execution_approval` | OperaMind | なし | 確認済み Scope から Edit Packet／Grant を自動生成 |
+| 8 | `code_change` | VS Code GitHub Copilot | なし | Scope 内 Diff、compile、test、coverage が成功して Result を固定 |
+| 9 | `planning` | Copilot／OperaMind | なし | UI TestPlan v2、TestDataPlan v3、Business Coverage 100% |
+| 10 | `test_plan_confirmation` | 利用者 | 最終 Plan と実行範囲を確認 | Revision／Digest が現在 Plan と一致 |
+| 11 | `test_data_execution` | OperaMind | なし | Setup／adopt、Binding 凍結、Test Data Coverage 100% |
+| 12 | `ui_verification` | Playwright | なし | Action 前検証、跨画面 Assertion、Screenshot、Cleanup 成功 |
+| 13 | `closure` | OperaMind | なし | 全 Evidence を同じ Project／Revision／Run に結合 |
+| 14 | `final_report_confirmation` | 利用者 | 最終レポートを確認 | Closure `passed`、unresolved 0 件 |
+| 15 | `completed` | OperaMind | なし | 完了状態を永続化し、再起動後も復元 |
+
+各行で次の四点をテスト記録へ残す。
+
+1. Stage 開始／終了時刻
+2. Web に表示された業務可読な現在アクション
+3. 確認に使用した Revision／Digest の非 Secret 摘要
+4. 成功 Evidence、または最初の Blocking Reason
+
+次の遷移は不合格とする。
+
+- RAG 文書確認前に設計書を変更する
+- 設計書差分確認前に Code Scope を確定する
+- Code Scope 確認前に production code を変更する
+- compile／test／changed-line Coverage 成功前に TestPlan を生成・確認する
+- Business Coverage 100% 前に人工確認または UI Test を開始する
+- Test Data Coverage 100% 前に Playwright を開始する
+- Frozen Binding の Action 前検証に失敗したまま操作を続行する
+- Cleanup または Screenshot Evidence が失敗したまま Closure を `passed` にする
+- 最終レポート確認前に全体 Status を `完了` にする
+
+### 14.15 正常系一回分の最終チェックリスト
+
+次を上から順に一項目ずつ確認し、空欄を残さない。
+
+- [ ] 空 Database または今回使用する Project 基線を確認した
+- [ ] OperaMind Web、VS Code Bridge、GitHub Copilot、対象システムが利用可能である
+- [ ] Code Workspace と全 Document Root を Web から登録した
+- [ ] Git／内部 Git、Canonical Snapshot、RAG Index、Code Quality Baseline が ready である
+- [ ] 対象 DataIdentityProvider と必要な Target Data Binding が確認済みである
+- [ ] 変更要件と RAG 対象設計書を人工確認した
+- [ ] Copilot が Scope 内の設計書だけを変更した
+- [ ] 設計書差分と Code Impact Graph を人工確認した
+- [ ] Copilot が Scope 内のコードとコードテストだけを変更した
+- [ ] Compile、Test、Changed-line Coverage が現在 Result Revision で成功した
+- [ ] UI TestPlan v2 と TestDataPlan v3 が生成された
+- [ ] Business Coverage が 100% になった後だけ最終 Plan を人工確認した
+- [ ] RunContext の三つの System Variable が一意かつ read-only である
+- [ ] generated／adopted データが実 Provider で一件に解決し Frozen Binding になった
+- [ ] Test Data Coverage が実測 Evidence で 100% になった
+- [ ] Playwright が Action 前に実 DOM と Frozen Binding を照合した
+- [ ] 複数画面／複数 Flow が同じ業務レコードを操作した
+- [ ] 各 UI Step に Assertion、Step Log、Binding、Screenshot がある
+- [ ] Cleanup が元 Binding を使用し、UI と利用可能な DB／API で 0 件を確認した
+- [ ] Secret が DB、Log、Copilot Context、Evidence、Screenshot にない
+- [ ] 最終追跡 Chain が全要件から Cleanup まで解決できる
+- [ ] ChangeClosureResult が `passed`、Business Coverage 100%、Test Data Coverage 100% である
+- [ ] 最終レポートを人工確認し、全体 Status が `完了` になった
+- [ ] Browser／OperaMind／VS Code 再起動後も同じ完了状態を復元できた

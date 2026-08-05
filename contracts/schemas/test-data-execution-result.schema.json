@@ -23,7 +23,7 @@
   ],
   "properties": {
     "artifact_type": {"const": "TestDataExecutionResult"},
-    "schema_version": {"const": "v1"},
+    "schema_version": {"enum": ["v1", "v2", "v3"]},
     "execution_result_id": {"type": "string", "minLength": 1},
     "run_id": {"type": "string", "minLength": 1},
     "test_data_plan_id": {"type": "string", "minLength": 1},
@@ -51,6 +51,7 @@
       "items": {"type": "string", "minLength": 1}
     },
     "cleanup_status": {"enum": ["not_required", "passed", "failed", "interrupted"]}
+    ,"run_context": {"$ref": "#/$defs/runContext"}
   },
   "$defs": {
     "identityValue": {
@@ -71,7 +72,66 @@
         "value": {"type": "string", "minLength": 1},
         "name": {"type": "string", "minLength": 1},
         "exact": {"const": true},
-        "frame": {"type": "string", "minLength": 1}
+        "frame": {"type": "string", "minLength": 1},
+        "all": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/frozenLocator"}
+        }
+      },
+      "allOf": [{"if": {"properties": {"by": {"const": "role"}}}, "then": {"required": ["name"]}}]
+    },
+    "namedDomIdentityObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["text", "input_value", "attribute"]},
+        "attribute_name": {"type": "string", "minLength": 1},
+        "locator": {"$ref": "#/$defs/domIdentityLocator"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "attribute"}}, "required": ["kind"]},
+          "then": {"required": ["attribute_name"]},
+          "else": {"not": {"required": ["attribute_name"]}}
+        }
+      ]
+    },
+    "domIdentityLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["by", "value", "exact"],
+      "properties": {
+        "by": {"enum": ["role", "label", "placeholder", "text", "alt_text", "title", "test_id", "css"]},
+        "value": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "minLength": 1},
+        "exact": {"const": true},
+        "all": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/domIdentityLocator"}
+        }
+      },
+      "allOf": [{"if": {"properties": {"by": {"const": "role"}}}, "then": {"required": ["name"]}}]
+    },
+    "identityObservations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["business_unique_keys", "screen_key"],
+      "properties": {
+        "business_unique_keys": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/namedDomIdentityObservation"}
+        },
+        "screen_key": {"$ref": "#/$defs/namedDomIdentityObservation"},
+        "screen_identity_values": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/namedDomIdentityObservation"}
+        }
       }
     },
     "dataBinding": {
@@ -85,17 +145,26 @@
       ],
       "properties": {
         "binding_id": {"type": "string", "minLength": 1},
+        "project_id": {"type": "string", "minLength": 1},
         "run_id": {"type": "string", "minLength": 1},
         "test_data_id": {"type": "string", "minLength": 1},
         "binding_mode": {"enum": ["generated", "adopted"]},
         "source_flow_id": {"type": "string", "minLength": 1},
         "source_step_id": {"type": "string", "minLength": 1},
+        "identity_provider_type": {"enum": ["database", "api", "ui", "hybrid"]},
+        "identity_provider_ref": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,127}$"},
         "primary_key": {"$ref": "#/$defs/identityValue"},
         "business_unique_keys": {
           "type": "array", "minItems": 1, "items": {"$ref": "#/$defs/identityValue"}
         },
         "screen_key": {"$ref": "#/$defs/identityValue"},
         "screen_locator": {"$ref": "#/$defs/frozenLocator"},
+        "screen_identity_values": {
+          "type": "array", "minItems": 1, "items": {"$ref": "#/$defs/identityValue"}
+        },
+        "record_scope_locator": {"$ref": "#/$defs/frozenLocator"},
+        "identity_observations": {"$ref": "#/$defs/identityObservations"},
+        "identity_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "match_count": {"const": 1},
         "frozen_at": {"type": "string", "format": "date-time"},
         "content_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -171,7 +240,26 @@
         "status": {"enum": ["passed", "failed", "blocked", "not_run"]},
         "output_variables": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}},
         "evidence_refs": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
-        "failure_reason": {"type": "string", "minLength": 1}
+        "test_data_binding_refs": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "failure_reason": {"type": "string", "minLength": 1},
+        "failure_stage": {"type": "string", "minLength": 1},
+        "driver": {"enum": ["playwright", "computer_use"]},
+        "locator_type": {"type": "string", "minLength": 1},
+        "record_scope_match_count": {"type": ["integer", "null"], "minimum": 0},
+        "action_locator_match_count": {"type": ["integer", "null"], "minimum": 0},
+        "observed_screen_identity_values": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "value"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "value": {}
+            }
+          }
+        },
+        "observed_identity_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
     },
     "flowResult": {
@@ -183,7 +271,8 @@
         "status": {"enum": ["passed", "failed", "blocked", "not_run"]},
         "step_results": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/stepResult"}},
         "cleanup_results": {"type": "array", "items": {"$ref": "#/$defs/stepResult"}},
-        "deferred_assertion_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+        "deferred_assertion_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "test_data_binding_refs": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
       }
     },
     "evidence": {
@@ -198,11 +287,109 @@
         "evidence_type": {"enum": ["fixture", "request", "response", "sql", "screenshot", "assertion", "step_log", "cleanup", "data_binding", "data_coverage"]},
         "evidence_ref": {"type": "string", "minLength": 1},
         "content_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "sanitized": {"const": true}
+        "sanitized": {"const": true},
+        "test_data_binding_ref": {"type": "string", "minLength": 1}
+      }
+    },
+    "runContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime_variables", "frozen_data_bindings", "flow_dependencies", "evidence_refs"],
+      "properties": {
+        "runtime_variables": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operamind_run_id", "test_data_token", "execution_started_at"],
+          "properties": {
+            "operamind_run_id": {"type": "string", "minLength": 1},
+            "test_data_token": {"type": "string", "pattern": "^OM-E2E-[0-9]{8}-[0-9A-F]{8}$"},
+            "execution_started_at": {"type": "string", "format": "date-time"}
+          }
+        },
+        "frozen_data_bindings": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/dataBinding"}
+        },
+        "flow_dependencies": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1}
+          }
+        },
+        "evidence_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
       }
     }
   },
   "allOf": [
+    {
+      "if": {"properties": {"schema_version": {"const": "v1"}}, "required": ["schema_version"]},
+      "then": {
+        "properties": {
+          "data_bindings": {
+            "items": {
+              "not": {
+                "anyOf": [
+                  {"required": ["identity_observations"]},
+                  {"required": ["identity_digest"]},
+                  {"required": ["identity_provider_type"]},
+                  {"required": ["identity_provider_ref"]},
+                  {"required": ["screen_identity_values"]},
+                  {"required": ["record_scope_locator"]}
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"schema_version": {"const": "v2"}}, "required": ["schema_version"]},
+      "then": {
+        "properties": {
+          "data_bindings": {
+            "items": {
+              "required": [
+                "identity_observations", "identity_digest",
+                "identity_provider_type", "identity_provider_ref",
+                "screen_identity_values", "record_scope_locator"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"schema_version": {"const": "v3"}}, "required": ["schema_version"]},
+      "then": {
+        "required": ["run_context"],
+        "properties": {
+          "data_bindings": {
+            "items": {
+              "required": [
+                "project_id", "identity_observations", "identity_digest",
+                "identity_provider_type", "identity_provider_ref",
+                "screen_identity_values", "record_scope_locator"
+              ]
+            }
+          },
+          "flow_results": {
+            "items": {
+              "required": ["test_data_binding_refs"],
+              "properties": {
+                "step_results": {"items": {"required": ["test_data_binding_refs"]}},
+                "cleanup_results": {"items": {"required": ["test_data_binding_refs"]}}
+              }
+            }
+          }
+        }
+      }
+    },
     {
       "if": {"properties": {"status": {"const": "passed"}}},
       "then": {"properties": {"failure_reasons": {"maxItems": 0}, "cleanup_status": {"enum": ["not_required", "passed"]}}}

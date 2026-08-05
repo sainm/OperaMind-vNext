@@ -640,6 +640,105 @@ class CopilotCodingTaskRepository:
                     (next_stage, coding_task_id),
                 )
 
+    def record_ui_locator_blocked_feedback(
+        self,
+        *,
+        orchestration_id: str,
+        project_id: str,
+        run_id: str,
+        feedback: dict[str, object],
+        actor: str,
+    ) -> str | None:
+        """Attach sanitized real-browser failure feedback to the matching Change Task."""
+
+        if any(not value.strip() for value in (orchestration_id, project_id, run_id, actor)):
+            raise ValueError("UI Locator feedback scope must not be blank")
+        with self._connection.transaction(), self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT task.coding_task_id
+                FROM change_orchestrations AS orchestration
+                JOIN copilot_coding_task_events AS planning_event
+                 ON planning_event.project_id = orchestration.project_id
+                 AND planning_event.event_type = 'outputs_recorded'
+                 AND planning_event.payload ->> 'output_stage'
+                     IN ('test_planning', 'ui_test_revision')
+                 AND planning_event.payload ->> 'test_data_plan_id'
+                     = orchestration.test_data_plan_id
+                JOIN copilot_coding_tasks AS task
+                  ON task.coding_task_id = planning_event.coding_task_id
+                 AND task.project_id = planning_event.project_id
+                WHERE orchestration.orchestration_id = %s
+                  AND orchestration.project_id = %s
+                ORDER BY planning_event.created_at DESC,
+                         planning_event.event_sequence DESC
+                LIMIT 1
+                """,
+                (orchestration_id, project_id),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            record = self._require_locked(cursor, str(row[0]))
+            if record is None:
+                return None
+            payload = {
+                **feedback,
+                "run_id": run_id,
+                "orchestration_id": orchestration_id,
+            }
+            self._append_event(
+                cursor,
+                record=record,
+                event_type="ui_locator_blocked",
+                actor=actor,
+                idempotency_key=f"ui-locator-blocked:{run_id}",
+                payload=payload,
+            )
+            return record.coding_task_id
+
+    def latest_ui_locator_feedback(
+        self,
+        *,
+        orchestration_id: str,
+        project_id: str,
+    ) -> dict[str, object] | None:
+        """Read the latest sanitized locator block for Web/Chat revision proposals."""
+
+        if not orchestration_id.strip() or not project_id.strip():
+            raise ValueError("UI Locator feedback scope must not be blank")
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT event.payload, event.created_at, task.coding_task_id
+                FROM copilot_coding_task_events AS event
+                JOIN copilot_coding_tasks AS task
+                  ON task.coding_task_id = event.coding_task_id
+                 AND task.project_id = event.project_id
+                JOIN change_orchestrations AS orchestration
+                  ON orchestration.orchestration_id
+                     = event.payload ->> 'orchestration_id'
+                 AND orchestration.project_id = event.project_id
+                WHERE event.project_id = %s
+                  AND orchestration.orchestration_id = %s
+                  AND event.event_type = 'ui_locator_blocked'
+                ORDER BY event.created_at DESC, event.event_sequence DESC
+                LIMIT 1
+                """,
+                (project_id, orchestration_id),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        payload = row[0]
+        if not isinstance(payload, dict):
+            return None
+        return {
+            "coding_task_id": str(row[2]),
+            "created_at": row[1].isoformat(),
+            "payload": cast(dict[str, object], payload),
+        }
+
     def bind_execution_scope(
         self,
         *,

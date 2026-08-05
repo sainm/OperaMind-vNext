@@ -16,6 +16,7 @@ from operamind.infrastructure.postgres.errors import PersistenceConflictError
 from operamind.infrastructure.postgres.test_case_execution_authorization_repository import (
     TestCaseExecutionAuthorizationRepository,
 )
+from operamind.run_context_values import build_test_data_token, canonical_digest
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +64,8 @@ class TestDataExecutionRecord:
     status: str
     started_at: datetime
     completed_at: datetime | None
+    test_data_token: str | None = None
+    runtime_variables: dict[str, object] | None = None
     replay_of_run_id: str | None = None
     execution_owner: str | None = None
     heartbeat_at: datetime | None = None
@@ -135,6 +138,16 @@ class TestDataExecutionRepository:
 
     def reserve(self, write: TestDataExecutionRunWrite) -> TestDataExecutionReservation:
         started_at = write.started_at.astimezone(UTC)
+        test_data_token = build_test_data_token(
+            project_id=write.project_id,
+            run_id=write.run_id,
+            started_at=started_at,
+        )
+        runtime_variables = {
+            "operamind_run_id": write.run_id,
+            "test_data_token": test_data_token,
+            "execution_started_at": started_at.isoformat().replace("+00:00", "Z"),
+        }
         identity = (
             write.execution_result_id,
             write.orchestration_id,
@@ -254,9 +267,10 @@ class TestDataExecutionRepository:
                     run_id, execution_result_id, orchestration_id,
                     test_data_plan_id, approval_grant_id, project_id,
                     analysis_case_id, status, created_by, started_at,
-                    replay_of_run_id
+                    replay_of_run_id, test_data_token, runtime_variables
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, 'running', %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, 'running', %s, %s, %s,
+                    %s, %s::jsonb
                 )
                 """,
                 (
@@ -270,6 +284,8 @@ class TestDataExecutionRepository:
                     write.created_by,
                     started_at,
                     write.replay_of_run_id,
+                    test_data_token,
+                    _json(runtime_variables),
                 ),
             )
             record = self._load(cursor, write.run_id, for_update=False)
@@ -360,8 +376,8 @@ class TestDataExecutionRepository:
                     """
                     INSERT INTO test_data_flow_results (
                         run_id, project_id, flow_id, execution_order,
-                        status, deferred_assertion_ids
-                    ) VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+                        status, deferred_assertion_ids, test_data_binding_refs
+                    ) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
                     """,
                     (
                         run_id,
@@ -370,6 +386,7 @@ class TestDataExecutionRepository:
                         flow_order,
                         flow["status"],
                         _json(flow["deferred_assertion_ids"]),
+                        _json(flow.get("test_data_binding_refs", [])),
                     ),
                 )
                 for step in _flow_steps(flow):
@@ -378,10 +395,10 @@ class TestDataExecutionRepository:
                         INSERT INTO test_data_step_results (
                             run_id, project_id, flow_id, phase, step_id,
                             sequence, channel, status, output_variables,
-                            evidence_refs, failure_reason
+                            evidence_refs, failure_reason, test_data_binding_refs
                         ) VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s::jsonb, %s::jsonb, %s
+                            %s::jsonb, %s::jsonb, %s, %s::jsonb
                         )
                         """,
                         (
@@ -396,16 +413,26 @@ class TestDataExecutionRepository:
                             _json(step["output_variables"]),
                             _json(step["evidence_refs"]),
                             step.get("failure_reason"),
+                            _json(step.get("test_data_binding_refs", [])),
                         ),
                     )
-            for evidence in cast(list[dict[str, Any]], artifact["evidence"]):
+            all_evidence = cast(list[dict[str, Any]], artifact["evidence"])
+            # Binding provenance Evidence must exist before its Binding FK is
+            # inserted. Evidence that points at a Binding is inserted only
+            # after the Binding exists, so the reverse FK can stay immediate
+            # and never leave pending trigger events in caller transactions.
+            for evidence in (
+                value
+                for value in all_evidence
+                if value.get("test_data_binding_ref") is None
+            ):
                 cursor.execute(
                     """
                     INSERT INTO test_data_execution_evidence (
                         evidence_id, run_id, project_id, flow_id, phase,
                         step_id, evidence_type, evidence_ref,
-                        content_digest, sanitized
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        content_digest, sanitized, test_data_binding_ref
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         evidence["evidence_id"],
@@ -418,6 +445,36 @@ class TestDataExecutionRepository:
                         evidence["evidence_ref"],
                         evidence["content_digest"],
                         evidence["sanitized"],
+                        evidence.get("test_data_binding_ref"),
+                    ),
+                )
+            run_context = artifact.get("run_context")
+            if isinstance(run_context, dict):
+                runtime_variables = cast(dict[str, object], run_context["runtime_variables"])
+                if (
+                    runtime_variables != current.runtime_variables
+                    or runtime_variables.get("test_data_token") != current.test_data_token
+                ):
+                    raise ValueError("RunContext variables differ from the reserved Run")
+                context_payload = {
+                    "run_id": run_id,
+                    "project_id": project_id,
+                    **run_context,
+                }
+                cursor.execute(
+                    """
+                    INSERT INTO test_data_run_contexts (
+                        run_id, project_id, runtime_variables,
+                        flow_dependencies, evidence_refs, content_digest
+                    ) VALUES (%s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s)
+                    """,
+                    (
+                        run_id,
+                        project_id,
+                        _json(runtime_variables),
+                        _json(run_context["flow_dependencies"]),
+                        _json(run_context["evidence_refs"]),
+                        canonical_digest(context_payload),
                     ),
                 )
             for binding in cast(list[dict[str, Any]], artifact["data_bindings"]):
@@ -425,11 +482,15 @@ class TestDataExecutionRepository:
                     """
                     INSERT INTO test_data_identity_bindings (
                         binding_id, run_id, project_id, test_data_id, binding_mode,
-                        source_flow_id, source_phase, source_step_id, primary_key,
+                        source_flow_id, source_phase, source_step_id,
+                        identity_provider_type, identity_provider_ref, primary_key,
                         business_unique_keys, screen_key, screen_locator, match_count,
+                        screen_identity_values, record_scope_locator,
+                        identity_observations, identity_digest,
                         frozen_at, content_digest, evidence_ref
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, 'setup', %s, %s::jsonb,
+                        %s, %s, %s, %s, %s, %s, 'setup', %s, %s, %s, %s::jsonb,
+                        %s::jsonb, %s::jsonb, %s::jsonb, %s,
                         %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s
                     )
                     """,
@@ -441,14 +502,47 @@ class TestDataExecutionRepository:
                         binding["binding_mode"],
                         binding["source_flow_id"],
                         binding["source_step_id"],
+                        binding.get("identity_provider_type"),
+                        binding.get("identity_provider_ref"),
                         _json(binding["primary_key"]),
                         _json(binding["business_unique_keys"]),
                         _json(binding["screen_key"]),
                         _json(binding["screen_locator"]),
                         binding["match_count"],
+                        _optional_json(binding.get("screen_identity_values")),
+                        _optional_json(binding.get("record_scope_locator")),
+                        _optional_json(binding.get("identity_observations")),
+                        binding.get("identity_digest"),
                         _timestamp(str(binding["frozen_at"])),
                         binding["content_digest"],
                         binding["evidence_ref"],
+                    ),
+                )
+            for evidence in (
+                value
+                for value in all_evidence
+                if value.get("test_data_binding_ref") is not None
+            ):
+                cursor.execute(
+                    """
+                    INSERT INTO test_data_execution_evidence (
+                        evidence_id, run_id, project_id, flow_id, phase,
+                        step_id, evidence_type, evidence_ref,
+                        content_digest, sanitized, test_data_binding_ref
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        evidence["evidence_id"],
+                        run_id,
+                        project_id,
+                        evidence["flow_id"],
+                        evidence["phase"],
+                        evidence["step_id"],
+                        evidence["evidence_type"],
+                        evidence["evidence_ref"],
+                        evidence["content_digest"],
+                        evidence["sanitized"],
+                        evidence["test_data_binding_ref"],
                     ),
                 )
             cursor.execute(
@@ -492,6 +586,8 @@ class TestDataExecutionRepository:
             started_at=record.started_at,
             completed_at=record.completed_at,
             replay_of_run_id=record.replay_of_run_id,
+            test_data_token=record.test_data_token,
+            runtime_variables=record.runtime_variables,
         )
 
     def get_result(self, run_id: str) -> dict[str, Any] | None:
@@ -933,7 +1029,7 @@ class TestDataExecutionRepository:
                    approval_grant_id, project_id, analysis_case_id, status,
                    started_at, completed_at, replay_of_run_id,
                    execution_owner, heartbeat_at, lease_expires_at,
-                   attempt_count, max_attempts
+                   attempt_count, max_attempts, test_data_token, runtime_variables
             FROM test_data_execution_runs
             WHERE run_id = %s
             """
@@ -961,6 +1057,10 @@ class TestDataExecutionRepository:
             lease_expires_at=cast(datetime | None, row[12]),
             attempt_count=int(row[13]),
             max_attempts=int(row[14]),
+            test_data_token=str(row[15]) if row[15] is not None else None,
+            runtime_variables=(
+                cast(dict[str, object], row[16]) if row[16] is not None else None
+            ),
         )
 
     @staticmethod
@@ -978,7 +1078,8 @@ class TestDataExecutionRepository:
     def _normalized_matches(cursor: Cursor[Any], run_id: str, artifact: dict[str, Any]) -> bool:
         cursor.execute(
             """
-            SELECT flow_id, execution_order, status, deferred_assertion_ids
+            SELECT flow_id, execution_order, status, deferred_assertion_ids,
+                   test_data_binding_refs
             FROM test_data_flow_results
             WHERE run_id = %s ORDER BY execution_order
             """,
@@ -991,6 +1092,7 @@ class TestDataExecutionRepository:
                 order,
                 flow["status"],
                 flow["deferred_assertion_ids"],
+                flow.get("test_data_binding_refs", []),
             )
             for order, flow in enumerate(
                 cast(list[dict[str, Any]], artifact["flow_results"]), start=1
@@ -1001,7 +1103,8 @@ class TestDataExecutionRepository:
         cursor.execute(
             """
             SELECT flow_id, phase, step_id, sequence, channel, status,
-                   output_variables, evidence_refs, failure_reason
+                   output_variables, evidence_refs, failure_reason,
+                   test_data_binding_refs
             FROM test_data_step_results
             WHERE run_id = %s
             ORDER BY flow_id, phase, sequence
@@ -1021,6 +1124,7 @@ class TestDataExecutionRepository:
                     step["output_variables"],
                     step["evidence_refs"],
                     step.get("failure_reason"),
+                    step.get("test_data_binding_refs", []),
                 )
                 for flow in cast(list[dict[str, Any]], artifact["flow_results"])
                 for step in _flow_steps(flow)
@@ -1032,8 +1136,11 @@ class TestDataExecutionRepository:
         cursor.execute(
             """
             SELECT binding_id, test_data_id, binding_mode, source_flow_id,
-                   source_step_id, primary_key, business_unique_keys, screen_key,
-                   screen_locator, match_count, frozen_at, content_digest, evidence_ref
+                   source_step_id, identity_provider_type, identity_provider_ref,
+                   primary_key, business_unique_keys, screen_key,
+                   screen_locator, match_count, screen_identity_values,
+                   record_scope_locator, identity_observations, identity_digest,
+                   frozen_at, content_digest, evidence_ref
             FROM test_data_identity_bindings
             WHERE run_id = %s ORDER BY test_data_id
             """,
@@ -1048,11 +1155,17 @@ class TestDataExecutionRepository:
                     value["binding_mode"],
                     value["source_flow_id"],
                     value["source_step_id"],
+                    value.get("identity_provider_type"),
+                    value.get("identity_provider_ref"),
                     value["primary_key"],
                     value["business_unique_keys"],
                     value["screen_key"],
                     value["screen_locator"],
                     value["match_count"],
+                    value.get("screen_identity_values"),
+                    value.get("record_scope_locator"),
+                    value.get("identity_observations"),
+                    value.get("identity_digest"),
                     _timestamp(str(value["frozen_at"])),
                     value["content_digest"],
                     value["evidence_ref"],
@@ -1066,7 +1179,7 @@ class TestDataExecutionRepository:
         cursor.execute(
             """
             SELECT evidence_id, flow_id, phase, step_id, evidence_type,
-                   evidence_ref, content_digest, sanitized
+                   evidence_ref, content_digest, sanitized, test_data_binding_ref
             FROM test_data_execution_evidence
             WHERE run_id = %s ORDER BY evidence_id
             """,
@@ -1083,10 +1196,29 @@ class TestDataExecutionRepository:
                 value["evidence_ref"],
                 value["content_digest"],
                 value["sanitized"],
+                value.get("test_data_binding_ref"),
             )
             for value in cast(list[dict[str, Any]], artifact["evidence"])
         )
-        return actual_evidence == expected_evidence
+        if actual_evidence != expected_evidence:
+            return False
+        run_context = artifact.get("run_context")
+        if not isinstance(run_context, dict):
+            return True
+        cursor.execute(
+            """
+            SELECT runtime_variables, flow_dependencies, evidence_refs
+            FROM test_data_run_contexts
+            WHERE run_id = %s
+            """,
+            (run_id,),
+        )
+        row = cursor.fetchone()
+        return row == (
+            run_context["runtime_variables"],
+            run_context["flow_dependencies"],
+            run_context["evidence_refs"],
+        )
 
 
 def _flow_steps(flow: dict[str, Any]) -> tuple[dict[str, Any], ...]:
@@ -1153,6 +1285,75 @@ def _validate_evidence_bindings(artifact: dict[str, Any]) -> None:
         }
         if hashlib.sha256(_json(payload).encode()).hexdigest() != binding["content_digest"]:
             raise ValueError(f"Frozen data binding digest differs: {binding['test_data_id']}")
+        if artifact.get("schema_version") in {"v2", "v3"}:
+            screen_values = binding["screen_identity_values"]
+            if (
+                not isinstance(screen_values, list)
+                or not screen_values
+                or screen_values[0] != binding["screen_key"]
+                or binding["record_scope_locator"] != binding["screen_locator"]
+            ):
+                raise ValueError(
+                    f"Frozen data binding compatibility aliases differ: "
+                    f"{binding['test_data_id']}"
+                )
+            identity_payload = {
+                "business_unique_keys": binding["business_unique_keys"],
+                "screen_identity_values": screen_values,
+            }
+            if (
+                hashlib.sha256(_json(identity_payload).encode()).hexdigest()
+                != binding["identity_digest"]
+            ):
+                raise ValueError(
+                    f"Frozen data binding identity digest differs: {binding['test_data_id']}"
+                )
+
+    if artifact.get("schema_version") == "v3":
+        _validate_run_binding_refs(artifact, bindings=bindings)
+
+
+def _validate_run_binding_refs(
+    artifact: dict[str, Any], *, bindings: list[dict[str, Any]]
+) -> None:
+    run_id = str(artifact["run_id"])
+    project_id = str(artifact["project_id"])
+    binding_ids = {str(value["binding_id"]) for value in bindings}
+    for binding in bindings:
+        if binding.get("run_id") != run_id or binding.get("project_id") != project_id:
+            raise ValueError("Frozen data Binding belongs to another Run or Project")
+    allowed_unbound_screenshot_refs: set[str] = set()
+    for flow in cast(list[dict[str, Any]], artifact["flow_results"]):
+        observed: set[str] = set()
+        for step in _flow_steps(flow):
+            refs = set(cast(list[str], step.get("test_data_binding_refs", [])))
+            if not refs.issubset(binding_ids):
+                raise ValueError("StepResult references a foreign TestDataBinding")
+            observed.update(refs)
+            if (
+                step.get("channel") == "ui"
+                and step.get("status") == "blocked"
+                and not refs
+                and isinstance(step.get("failure_stage"), str)
+                and str(step["failure_stage"]).strip()
+            ):
+                allowed_unbound_screenshot_refs.update(
+                    str(value)
+                    for value in cast(list[object], step.get("evidence_refs", []))
+                    if isinstance(value, str)
+                )
+        if observed != set(cast(list[str], flow.get("test_data_binding_refs", []))):
+            raise ValueError("FlowResult TestDataBinding refs differ from its Steps")
+    for evidence in cast(list[dict[str, Any]], artifact["evidence"]):
+        binding_ref = evidence.get("test_data_binding_ref")
+        if binding_ref is not None and str(binding_ref) not in binding_ids:
+            raise ValueError("Evidence references a foreign TestDataBinding")
+        if (
+            evidence.get("evidence_type") == "screenshot"
+            and binding_ref is None
+            and evidence.get("evidence_ref") not in allowed_unbound_screenshot_refs
+        ):
+            raise ValueError("Screenshot Evidence has no current TestDataBinding")
 
 
 def _validate_coverage_evidence(
@@ -1352,6 +1553,10 @@ def _timestamp(value: str) -> datetime:
 
 def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def _optional_json(value: object | None) -> str | None:
+    return None if value is None else _json(value)
 
 
 def _event_id(run_id: str, sequence: int, event_type: str) -> str:

@@ -349,6 +349,45 @@ pre { max-height: 240px; overflow: auto; margin: 0; white-space: pre-wrap; }
 .revision-choice > label { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .55rem; align-items: start; }
 .revision-choice input { width: auto; margin-top: .25rem; }
 .revision-choice .revision-operation { margin-top: .45rem; background: var(--soft); }
+.admin-only-settings { border-color: #d8c8a2; background: #fffdf7; }
+.admin-only-settings > summary::after { content: "ADMIN"; margin-left: .5rem; padding: .12rem .36rem; border-radius: 5px; color: #755400; background: #fff0bd; font-size: .58rem; letter-spacing: .08em; }
+.data-binding-dialog { width: min(980px, calc(100vw - 2rem)); max-height: 92vh; padding: 0; overflow: hidden; }
+.data-binding-page { max-height: 92vh; overflow-y: auto; padding: 0 1.5rem 1.5rem; }
+.data-binding-heading { position: sticky; z-index: 2; top: 0; margin: 0 -1.5rem 1.2rem; padding: 1.35rem 1.5rem; border-bottom: 1px solid var(--line); background: rgb(255 255 255 / 96%); backdrop-filter: blur(10px); }
+.data-binding-heading h2 { margin: .28rem 0 0; }
+.data-binding-heading p { margin: .38rem 0 0; color: var(--muted); font-size: .78rem; }
+.existing-data-form { display: grid; gap: .9rem; padding: 1rem; border: 1px solid #c9ded4; border-radius: 14px; background: linear-gradient(135deg, #f8fcfa, #eff8f4); }
+.checkbox-row { display: flex !important; align-items: center; gap: .55rem; }
+.checkbox-row input { width: auto; }
+.business-only-note { margin: 0; color: var(--muted); font-size: .7rem; }
+.data-binding-results { margin-top: 1.4rem; }
+.data-binding-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: .6rem 0 .75rem; }
+.data-binding-section-heading h3 { margin: 0; font-size: .95rem; }
+.frozen-heading { margin-top: 1.6rem; }
+.data-identity-list { display: grid; gap: .75rem; }
+.data-identity-card { padding: .95rem; border: 1px solid var(--line); border-radius: 13px; background: white; box-shadow: 0 6px 18px rgb(29 65 51 / 5%); }
+.data-identity-card.blocked { border-color: #efb8b1; background: #fffafa; }
+.data-identity-card.confirmed, .data-identity-card.frozen { border-color: #b9d8cc; }
+.data-identity-card > header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
+.data-identity-card > header strong, .data-identity-card > header small { display: block; }
+.data-identity-card > header small { margin-top: .2rem; color: var(--muted); }
+.data-business-key { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: .6rem; margin: .8rem 0; padding: .65rem .75rem; border-radius: 9px; background: var(--soft); }
+.data-business-key span { color: var(--muted); font-size: .7rem; font-weight: 750; }
+.data-business-key strong { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .78rem; }
+.business-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; overflow: hidden; margin: .7rem 0; border: 1px solid var(--line); border-radius: 9px; background: var(--line); }
+.business-summary > div { min-width: 0; padding: .58rem .7rem; background: white; }
+.business-summary dt { color: var(--muted); font-size: .64rem; font-weight: 750; }
+.business-summary dd { margin: .15rem 0 0; overflow-wrap: anywhere; font-size: .76rem; font-weight: 700; }
+.data-card-meta { display: flex; flex-wrap: wrap; gap: .4rem; }
+.data-card-meta span { padding: .22rem .46rem; border-radius: 6px; color: var(--muted); background: var(--soft); font-size: .64rem; }
+.data-blocking-reasons { margin: .7rem 0 0; padding: .65rem .65rem .65rem 1.8rem; border-radius: 8px; color: var(--red); background: var(--red-soft); font-size: .7rem; }
+.data-card-actions { display: flex; justify-content: flex-end; margin-top: .8rem; }
+.data-identity-card details { margin-top: .7rem; padding: .55rem .7rem; border: 1px solid var(--line); border-radius: 8px; }
+.data-identity-card details summary { cursor: pointer; font-size: .7rem; font-weight: 750; }
+.binding-trace-list { display: grid; gap: .45rem; margin: .65rem 0 0; padding: 0; list-style: none; }
+.binding-trace-list li { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: .25rem .7rem; padding-top: .45rem; border-top: 1px solid var(--line); font-size: .68rem; }
+.binding-trace-list span, .binding-trace-list small { overflow-wrap: anywhere; color: var(--muted); }
+.binding-trace-list small { grid-column: 1 / -1; }
 
 @media (max-width: 900px) {
   html, body { height: auto; overflow: auto; }

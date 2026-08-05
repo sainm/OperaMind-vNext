@@ -126,6 +126,9 @@ def test_ai_regeneration_rejects_an_unexecutable_test_data_plan_before_persisten
     invalid_plan = copy.deepcopy(bundle["test_data_plan"])
     invalid_plan["generation_flows"][0]["steps"][0]["postconditions"] = []
     service = object.__new__(RevisionService)
+    service._identity_provider_types = lambda _project_id: {  # type: ignore[method-assign]
+        "database.v1": "database"
+    }
 
     with pytest.raises(ValueError, match="postconditions are required"):
         service.apply_ai_regeneration(

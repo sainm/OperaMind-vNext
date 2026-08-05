@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -27,18 +30,118 @@ from operamind.application.test_data_execution import (
     TestDataStepExecution as DataStepExecution,
 )
 from operamind.application.test_data_execution import (
+    _add_v3_binding_refs,
     _assert_postcondition,
     _extract,
     _freeze_step_bindings,
     _is_identity_source_step,
-    _render_bound_locator,
     _resolve_variables,
     _TestDataBindingBlockedError,
     _validate_evidence_identity,
+    _validate_v3_binding_references,
 )
 from operamind.contracts import ContractCatalog
+from operamind.infrastructure.test_data import default_data_identity_providers
+from operamind.run_context_values import canonical_digest
 
 ROOT = Path(__file__).parents[2]
+
+
+def test_v3_binding_reference_validation_fails_closed_for_every_scope_edge() -> None:
+    payload = {
+        "binding_id": "binding-1",
+        "run_id": "run-1",
+        "project_id": "project-1",
+        "test_data_id": "expense-1",
+    }
+    binding = {**payload, "content_digest": canonical_digest(payload), "evidence_ref": "e-1"}
+    artifact: dict[str, Any] = {
+        "run_id": "run-1",
+        "project_id": "project-1",
+        "data_bindings": [binding],
+        "flow_results": [
+            {
+                "test_data_binding_refs": ["binding-1"],
+                "step_results": [{"test_data_binding_refs": ["binding-1"]}],
+                "cleanup_results": [],
+            }
+        ],
+        "evidence": [
+            {
+                "evidence_type": "screenshot",
+                "test_data_binding_ref": "binding-1",
+            }
+        ],
+        "run_context": {
+            "runtime_variables": {"operamind_run_id": "run-1"},
+            "frozen_data_bindings": [binding],
+        },
+    }
+
+    _add_v3_binding_refs(cast(list[dict[str, Any]], artifact["flow_results"]))
+    _validate_v3_binding_references(artifact)
+
+    invalid = deepcopy(artifact)
+    invalid["data_bindings"] = [binding, binding]
+    with pytest.raises(ValueError, match="IDs must be unique"):
+        _validate_v3_binding_references(invalid)
+    invalid = deepcopy(artifact)
+    invalid["data_bindings"][0]["project_id"] = "foreign-project"
+    with pytest.raises(ValueError, match="scope differs"):
+        _validate_v3_binding_references(invalid)
+    invalid = deepcopy(artifact)
+    invalid["data_bindings"][0]["content_digest"] = "0" * 64
+    with pytest.raises(ValueError, match="digest differs"):
+        _validate_v3_binding_references(invalid)
+    invalid = deepcopy(artifact)
+    invalid["flow_results"][0]["step_results"][0]["test_data_binding_refs"] = ["foreign-binding"]
+    with pytest.raises(ValueError, match="StepResult references"):
+        _validate_v3_binding_references(invalid)
+    invalid = deepcopy(artifact)
+    invalid["flow_results"][0]["test_data_binding_refs"] = []
+    with pytest.raises(ValueError, match="FlowResult"):
+        _validate_v3_binding_references(invalid)
+    invalid = deepcopy(artifact)
+    invalid["evidence"][0]["test_data_binding_ref"] = "foreign-binding"
+    with pytest.raises(ValueError, match="Evidence references"):
+        _validate_v3_binding_references(invalid)
+    invalid = deepcopy(artifact)
+    invalid["evidence"][0].pop("test_data_binding_ref")
+    with pytest.raises(ValueError, match="Screenshot Evidence"):
+        _validate_v3_binding_references(invalid)
+    blocked_screen_failure = deepcopy(artifact)
+    blocked_screen_failure["data_bindings"] = []
+    blocked_screen_failure["flow_results"] = [
+        {
+            "test_data_binding_refs": [],
+            "step_results": [
+                {
+                    "channel": "ui",
+                    "status": "blocked",
+                    "failure_stage": "pre_action_locator_validation",
+                    "evidence_refs": ["e-screen"],
+                    "test_data_binding_refs": [],
+                }
+            ],
+            "cleanup_results": [],
+        }
+    ]
+    blocked_screen_failure["evidence"] = [
+        {"evidence_type": "screenshot", "evidence_ref": "e-screen"}
+    ]
+    blocked_screen_failure["run_context"]["frozen_data_bindings"] = []
+    _validate_v3_binding_references(blocked_screen_failure)
+    blocked_screen_failure["flow_results"][0]["step_results"][0]["status"] = "passed"
+    with pytest.raises(ValueError, match="Screenshot Evidence"):
+        _validate_v3_binding_references(blocked_screen_failure)
+    invalid = deepcopy(artifact)
+    invalid["run_context"]["runtime_variables"]["operamind_run_id"] = "foreign-run"
+    with pytest.raises(ValueError, match="RunContext Run identity"):
+        _validate_v3_binding_references(invalid)
+    invalid = deepcopy(artifact)
+    invalid["run_context"]["frozen_data_bindings"] = []
+    with pytest.raises(ValueError, match="RunContext frozen bindings"):
+        _validate_v3_binding_references(invalid)
 
 
 def test_extract_supports_json_array_index_binding_paths() -> None:
@@ -158,20 +261,64 @@ def test_identity_binding_freezes_real_readback_into_run_scoped_evidence() -> No
         variables={},
         frozen_bindings={},
         clock=lambda: datetime(2026, 8, 4, tzinfo=UTC),
-        source_evidence=(),
+        source_evidence=_sql_identity_evidence(),
+        identity_providers=default_data_identity_providers(),
     )
 
     binding = bindings[0]
     assert binding["run_id"] == "run-cross-screen"
     assert binding["primary_key"] == {"name": "id", "value": 41}
-    assert binding["business_unique_keys"] == [
-        {"name": "expense_number", "value": "EXP-041"}
-    ]
+    assert binding["business_unique_keys"] == [{"name": "expense_number", "value": "EXP-041"}]
+    assert binding["identity_provider_type"] == "database"
+    assert binding["identity_provider_ref"] == "database.v1"
+    assert binding["screen_identity_values"] == [{"name": "expense_number", "value": "EXP-041"}]
+    assert binding["record_scope_locator"] == {
+        "by": "css",
+        "value": "[data-expense-number='EXP-041']",
+        "exact": True,
+    }
     assert binding["screen_locator"] == {
         "by": "css",
         "value": "[data-expense-number='EXP-041']",
         "exact": True,
     }
+    assert binding["identity_observations"] == {
+        "business_unique_keys": [
+            {
+                "name": "expense_number",
+                "kind": "attribute",
+                "attribute_name": "data-observed-expense-number",
+            }
+        ],
+        "screen_key": {
+            "name": "expense_number",
+            "kind": "attribute",
+            "attribute_name": "data-observed-expense-number",
+        },
+        "screen_identity_values": [
+            {
+                "name": "expense_number",
+                "kind": "attribute",
+                "attribute_name": "data-observed-expense-number",
+            }
+        ],
+    }
+    expected_identity = {
+        "business_unique_keys": [{"name": "expense_number", "value": "EXP-041"}],
+        "screen_identity_values": [{"name": "expense_number", "value": "EXP-041"}],
+    }
+    assert (
+        binding["identity_digest"]
+        == hashlib.sha256(
+            json.dumps(
+                expected_identity,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+    )
+    assert binding["identity_digest"] != binding["content_digest"]
     assert evidence[0].evidence_type == "data_binding"
     assert evidence[0].content_digest == binding["content_digest"]
     assert _is_identity_source_step(
@@ -184,7 +331,7 @@ def test_identity_binding_freezes_real_readback_into_run_scoped_evidence() -> No
 @pytest.mark.parametrize(
     ("database", "message"),
     [
-        ({"row_count": 0, "rows": []}, "exactly one database row"),
+        ({"row_count": 0, "rows": []}, "exactly one record"),
         (
             {"row_count": 1, "rows": [{"id": 41}]},
             "identity source was not observed",
@@ -194,11 +341,11 @@ def test_identity_binding_freezes_real_readback_into_run_scoped_evidence() -> No
                 "row_count": 1,
                 "rows": [{"id": [41], "expense_number": "EXP-041"}],
             },
-            "primary key must be a scalar",
+            "identity value must be scalar",
         ),
         (
             {"row_count": 1, "rows": [{"id": 41, "expense_number": " "}]},
-            "business unique key must not be blank",
+            "identity value must not be blank",
         ),
     ],
 )
@@ -216,8 +363,56 @@ def test_identity_binding_blocks_incomplete_or_non_unique_readback(
             variables={},
             frozen_bindings={},
             clock=lambda: datetime(2026, 8, 4, tzinfo=UTC),
-            source_evidence=(),
+            source_evidence=_sql_identity_evidence(),
+            identity_providers=default_data_identity_providers(),
         )
+
+
+def test_identity_binding_blocks_when_provider_ref_is_not_registered() -> None:
+    with pytest.raises(_TestDataBindingBlockedError, match="is not configured"):
+        _freeze_step_bindings(
+            plan={"data_sets": [_identity_data_set()]},
+            request=_request(),
+            flow_id="identity-flow",
+            step_id="read-expense",
+            observations={
+                "database": {
+                    "row_count": 1,
+                    "rows": [{"id": 41, "expense_number": "EXP-041"}],
+                }
+            },
+            variables={},
+            frozen_bindings={},
+            clock=lambda: datetime(2026, 8, 4, tzinfo=UTC),
+            source_evidence=_sql_identity_evidence(),
+            identity_providers={},
+        )
+
+
+def test_v2_engine_blocks_before_steps_when_no_real_provider_registry_is_configured() -> None:
+    plan = json.loads(
+        (ROOT / "contracts/examples/test-data-plan.v2.example.json").read_text(encoding="utf-8")
+    )
+    result = DataExecutionEngine(
+        contracts=ContractCatalog.load(ROOT / "contracts"),
+        executors={},
+        identity_providers={},
+        clock=lambda: datetime(2026, 8, 4, tzinfo=UTC),
+    ).execute(
+        plan=plan,
+        request=DataExecutionRequest(
+            execution_result_id="result-no-provider",
+            run_id="run-no-provider",
+            project_id=str(plan["project_id"]),
+            started_at=datetime(2026, 8, 4, tzinfo=UTC),
+        ),
+    )
+
+    assert result["status"] == "blocked"
+    assert any(
+        "DataIdentityProvider is not configured" in reason for reason in result["failure_reasons"]
+    )
+    assert all(flow["status"] == "not_run" for flow in result["flow_results"])
 
 
 def test_identity_binding_rejects_clock_replay_and_unsafe_locator_values() -> None:
@@ -240,7 +435,8 @@ def test_identity_binding_rejects_clock_replay_and_unsafe_locator_values() -> No
             variables={},
             frozen_bindings={},
             clock=lambda: datetime(2026, 8, 4),
-            source_evidence=(),
+            source_evidence=_sql_identity_evidence(),
+            identity_providers=default_data_identity_providers(),
         )
     bindings, _ = _freeze_step_bindings(
         plan=plan,
@@ -251,7 +447,8 @@ def test_identity_binding_rejects_clock_replay_and_unsafe_locator_values() -> No
         variables={},
         frozen_bindings={},
         clock=lambda: datetime(2026, 8, 4, tzinfo=UTC),
-        source_evidence=(),
+        source_evidence=_sql_identity_evidence(),
+        identity_providers=default_data_identity_providers(),
     )
     with pytest.raises(_TestDataBindingBlockedError, match="already frozen"):
         _freeze_step_bindings(
@@ -263,19 +460,8 @@ def test_identity_binding_rejects_clock_replay_and_unsafe_locator_values() -> No
             variables={},
             frozen_bindings={"expense-bound": bindings[0]},
             clock=lambda: datetime(2026, 8, 4, tzinfo=UTC),
-            source_evidence=(),
-        )
-    with pytest.raises(ValueError, match="unsafe"):
-        _render_bound_locator(
-            "expense-bound",
-            {"by": "css", "value": "[data-key='{{value}}']", "exact": True},
-            "EXP' OTHER",
-        )
-    with pytest.raises(ValueError, match="exact matching"):
-        _render_bound_locator(
-            "expense-bound",
-            {"by": "text", "value": "{{value}}", "exact": False},
-            "EXP-041",
+            source_evidence=_sql_identity_evidence(),
+            identity_providers=default_data_identity_providers(),
         )
 
 
@@ -456,9 +642,7 @@ def test_engine_cleans_side_effect_when_create_postcondition_fails() -> None:
     assert result["status"] == "failed"
     assert result["cleanup_status"] == "passed"
     assert calls[-1] == ("cleanup", "delete-expense", {"expense_id": 91})
-    assert [
-        step["status"] for step in result["flow_results"][0]["cleanup_results"]
-    ] == ["passed"]
+    assert [step["status"] for step in result["flow_results"][0]["cleanup_results"]] == ["passed"]
 
 
 def test_engine_skips_cleanup_for_resources_and_ui_that_were_never_created() -> None:
@@ -534,6 +718,37 @@ def test_engine_blocks_when_a_required_channel_executor_is_missing() -> None:
     assert result["status"] == "blocked"
     assert "No executor is configured for channel ui" in result["failure_reasons"][0]
     assert result["flow_results"][0]["step_results"][3]["status"] == "not_run"
+
+
+def test_engine_preserves_structured_pre_action_failure_trace_on_ui_step() -> None:
+    class BlockingUiExecutor(FakeExecutor):
+        def execute(self, **values: object) -> DataStepExecution:
+            raise DataStepBlockedError(
+                "Playwright pre-action observation did not match",
+                trace={
+                    "failure_stage": "pre_action_state_validation",
+                    "driver": "playwright",
+                    "locator_type": "role+name",
+                    "record_scope_match_count": 1,
+                    "action_locator_match_count": 0,
+                },
+            )
+
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    executors: dict[str, Any] = {
+        channel: FakeExecutor(channel, calls) for channel in ("fixture", "http", "sql")
+    }
+    executors["ui"] = BlockingUiExecutor("ui", calls)
+
+    result = _engine(executors).execute(plan=_plan(), request=_request())
+
+    step = result["flow_results"][0]["step_results"][2]
+    assert step["status"] == "blocked"
+    assert step["failure_stage"] == "pre_action_state_validation"
+    assert step["driver"] == "playwright"
+    assert step["locator_type"] == "role+name"
+    assert step["record_scope_match_count"] == 1
+    assert step["action_locator_match_count"] == 0
 
 
 def test_engine_emits_sanitized_live_progress_including_cleanup() -> None:
@@ -620,6 +835,7 @@ def _identity_data_set() -> dict[str, object]:
     return {
         "test_data_id": "expense-bound",
         "identity_binding": {
+            "provider": {"type": "database", "provider_ref": "database.v1"},
             "binding_mode": "generated",
             "source_flow_id": "identity-flow",
             "source_step_id": "read-expense",
@@ -633,12 +849,20 @@ def _identity_data_set() -> dict[str, object]:
                     "name": "expense_number",
                     "source": "database",
                     "path": "rows[0].expense_number",
+                    "dom_observation": {
+                        "kind": "attribute",
+                        "attribute_name": "data-observed-expense-number",
+                    },
                 }
             ],
             "screen_key": {
                 "name": "expense_number",
                 "source": "database",
                 "path": "rows[0].expense_number",
+                "dom_observation": {
+                    "kind": "attribute",
+                    "attribute_name": "data-observed-expense-number",
+                },
                 "locator_template": {
                     "by": "css",
                     "value": "[data-expense-number='{{value}}']",
@@ -656,6 +880,20 @@ def _request() -> DataExecutionRequest:
         run_id="run-cross-screen",
         project_id="visiondemo",
         base_url="http://127.0.0.1:8080",
+    )
+
+
+def _sql_identity_evidence() -> tuple[DataExecutionEvidence, ...]:
+    return (
+        DataExecutionEvidence(
+            evidence_id="identity-sql-evidence",
+            flow_id="identity-flow",
+            step_id="read-expense",
+            phase="setup",
+            evidence_type="sql",
+            evidence_ref="artifact://result-cross-screen/sql/read-expense",
+            content_digest="a" * 64,
+        ),
     )
 
 
@@ -805,5 +1043,5 @@ def _assertion(
         "observe_via": observe_via,
         "subject": subject,
         "operator": operator,
-       "expected": expected,
-   }
+        "expected": expected,
+    }

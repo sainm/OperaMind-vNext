@@ -54,10 +54,10 @@ class _MainFlowService:
             _stage(
                 "compile_test",
                 "コード変更・コンパイル・テスト",
-                "running",
+                "completed",
                 "vscode_github_copilot",
             ),
-            _stage("ui_validation", "テストデータ・UI 検証", "waiting", "operamind"),
+            _stage("ui_validation", "テストデータ・UI 検証", "running", "operamind"),
             _stage("final_report", "最終レポート", "waiting", "operamind"),
         ]
         stages[0]["details"] = {"requirement_text": "経費一覧に差戻し状態を追加する"}
@@ -192,8 +192,8 @@ class _MainFlowService:
             "change_request_id": request_id,
             "project_id": "visiondemo",
             "status": "in_progress",
-            "current_stage": "compile_test",
-            "progress_percent": 50,
+            "current_stage": "ui_validation",
+            "progress_percent": 67,
             "stages": stages,
             "blocking_reasons": [],
         }
@@ -240,10 +240,18 @@ def test_main_change_flow_is_the_only_web_workspace_on_desktop_and_mobile() -> N
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(f"http://127.0.0.1:{port}", wait_until="networkidle")
 
-            expect(page.get_by_role("heading", name="change-ui-001", level=1)).to_be_visible()
+            expect(
+                page.get_by_role(
+                    "heading",
+                    name="経費一覧に差戻し状態を追加する",
+                    level=1,
+                )
+            ).to_be_visible()
+            expect(page.locator("#pageRequestId")).to_have_text("change-ui-001")
             expect(page.locator(".stage-step")).to_have_count(6)
             expect(page.locator(".stage-card")).to_have_count(6)
             expect(page.get_by_text("VS Code GitHub Copilot", exact=True)).to_have_count(2)
+            page.locator("#stage-code_scope > summary").click()
             expect(page.get_by_text("src/ExpenseService.java", exact=True).first).to_be_visible()
             expect(page.locator(".impact-node")).to_have_count(3)
             page.locator('[data-impact-node-index="1"]').click()
@@ -257,10 +265,15 @@ def test_main_change_flow_is_the_only_web_workspace_on_desktop_and_mobile() -> N
             expect(page.locator("[data-impact-node-details]")).to_contain_text(
                 "src/ExpenseRepository.java"
             )
+            page.locator("#stage-compile_test > summary").click()
             expect(page.get_by_text("targeted-unit", exact=True)).to_be_visible()
             expect(page.get_by_text("差戻し状態で検索する", exact=True)).to_be_visible()
-            page.get_by_role("button", name="自然言語で修正").click()
-            expect(page.get_by_role("heading", name="テストケース修正")).to_be_visible()
+            page.locator("#stage-compile_test").get_by_role(
+                "button", name="自然言語で修正"
+            ).click()
+            expect(
+                page.get_by_role("heading", name="UI テスト計画の修正")
+            ).to_be_visible()
             page.get_by_role("button", name="閉じる").last.click()
             expect(page.get_by_text("出力変数: expense_id", exact=True)).to_be_visible()
             expect(page.get_by_text("作成した申請を削除する", exact=True)).to_be_visible()
@@ -271,7 +284,14 @@ def test_main_change_flow_is_the_only_web_workspace_on_desktop_and_mobile() -> N
 
             page.set_viewport_size({"width": 390, "height": 844})
             _assert_no_horizontal_overflow(page)
-            expect(page.get_by_role("heading", name="change-ui-001", level=1)).to_be_visible()
+            expect(
+                page.get_by_role(
+                    "heading",
+                    name="経費一覧に差戻し状態を追加する",
+                    level=1,
+                )
+            ).to_be_visible()
+            expect(page.locator("#pageRequestId")).to_have_text("change-ui-001")
             browser.close()
     finally:
         server.should_exit = True

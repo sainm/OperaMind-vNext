@@ -72,7 +72,8 @@
         "source_test_plan_id": {"type": "string", "minLength": 1},
         "instruction": {"type": "string", "minLength": 1, "maxLength": 10000},
         "confirmed_operations_json": {"type": "string", "minLength": 2, "maxLength": 50000},
-        "selections_json": {"type": "string", "minLength": 2, "maxLength": 20000}
+        "selections_json": {"type": "string", "minLength": 2, "maxLength": 20000},
+        "locator_failure_evidence_json": {"type": "string", "minLength": 2, "maxLength": 50000}
       }
     },
     "retry_of_coding_task_id": {"type": "string", "minLength": 1},

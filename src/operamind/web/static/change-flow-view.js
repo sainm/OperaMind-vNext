@@ -76,6 +76,7 @@
     data_coverage_percent: "実データ条件カバレッジ",
     data_coverage_proofs: "実 DB データ条件の検証結果",
     screenshots: "スクリーンショット",
+    locator_failure_feedback: "Locator 検証の停止",
     closure_status: "完了判定",
     business_coverage_status: "業務カバレッジ状態",
     business_coverage_percent: "業務カバレッジ",
@@ -202,6 +203,13 @@
         ? `<a href="${escapeHtml(item.content_url)}" target="_blank" rel="noreferrer"><img src="${escapeHtml(item.content_url)}" alt="UI 検証スクリーンショット"></a>`
         : '<span class="evidence-chip">スクリーンショット未取得</span>').join("")}</div>`;
     }
+    if (key === "locator_failure_feedback" && typeof value === "object" && value !== null) {
+      const failures = Array.isArray(value.failures) ? value.failures : [];
+      return `<div class="blocker-box"><strong>操作前検証で停止</strong>
+        <ul>${failures.map(item => `<li>${escapeHtml(item.failure_reason || "Locator 検証に失敗しました。")}</li>`).join("")}</ul>
+        <p>${escapeHtml(value.next_action || "新しい UI TestPlan Revision を確認してください。")}</p>
+      </div>`;
+    }
     if (key === "changes" && Array.isArray(value)) {
       return `<ul class="value-list">${value.map(item => `<li>${renderDocumentChange(item)}</li>`).join("")}</ul>`;
     }
@@ -275,26 +283,25 @@
 
   function renderDataBinding(item) {
     if (typeof item !== "object" || item === null) return escapeHtml(item);
-    const primary = item.primary_key || {};
-    const screen = item.screen_key || {};
     const business = Array.isArray(item.business_unique_keys)
       ? item.business_unique_keys.map(value => `${value.name}: ${value.value}`).join(" · ")
       : "";
-    const locator = item.screen_locator || {};
-    const digest = String(item.content_digest || "");
+    const screenValues = Array.isArray(item.screen_identity_values) && item.screen_identity_values.length
+      ? item.screen_identity_values
+      : item.screen_key ? [item.screen_key] : [];
+    const screen = screenValues.map(value => `${value.name}: ${value.value}`).join(" · ");
+    const provider = item.identity_provider_type || "";
     return `<article class="plan-card">
       <div class="list-heading">
         <strong>${escapeHtml(item.test_data_id || "テストデータ")}</strong>
         <span class="status-badge passed">一意 ${escapeHtml(item.match_count || 0)} 件</span>
       </div>
-      <small>${escapeHtml(item.binding_mode === "generated" ? "生成データ" : "既存データを接管")} · 実行時に固定</small>
+      <small>${escapeHtml(item.binding_mode === "generated" ? "生成データ" : "既存データを接管")} · 実行時に固定${provider ? ` · ${escapeHtml(provider)}` : ""}</small>
       <dl class="field-deltas">
-        <div><dt>DB 主キー</dt><dd>${escapeHtml(primary.name || "-")}: ${escapeHtml(primary.value ?? "-")}</dd></div>
         <div><dt>業務一意キー</dt><dd>${escapeHtml(business || "-")}</dd></div>
-        <div><dt>画面識別キー</dt><dd>${escapeHtml(screen.name || "-")}: ${escapeHtml(screen.value ?? "-")}</dd></div>
-        <div><dt>厳密 Locator</dt><dd>${escapeHtml(locator.by || "-")} · ${escapeHtml(locator.value || "-")}</dd></div>
+        <div><dt>画面識別値</dt><dd>${escapeHtml(screen || "-")}</dd></div>
       </dl>
-      <small>Evidence ${escapeHtml(item.evidence_ref || "-")} · digest ${escapeHtml(digest ? digest.slice(0, 12) : "-")}</small>
+      <small>${item.frozen_at ? `固定日時 ${escapeHtml(item.frozen_at)}` : "実行時に固定"}</small>
     </article>`;
   }
 

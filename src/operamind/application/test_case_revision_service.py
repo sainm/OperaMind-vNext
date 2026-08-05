@@ -18,6 +18,9 @@ from operamind.contracts import ContractCatalog
 from operamind.infrastructure.postgres.change_orchestration_repository import (
     ChangeOrchestrationRepository,
 )
+from operamind.infrastructure.postgres.existing_test_data_repository import (
+    ExistingTestDataRepository,
+)
 from operamind.infrastructure.postgres.test_case_revision_repository import (
     TestCaseRevisionRepository,
 )
@@ -32,8 +35,18 @@ class TestCaseRevisionService:
         contracts = ContractCatalog.load(root / "contracts")
         self._orchestrations = ChangeOrchestrationRepository(connection, contracts)
         self._revisions = TestCaseRevisionRepository(connection, contracts)
+        self._identity_profiles = ExistingTestDataRepository(connection)
         self._analyzer = TestCaseChangeAnalyzer(repository_root=root)
-        self._planner = TestCaseRevisionPlanner(repository_root=root)
+        self._planner = TestCaseRevisionPlanner(
+            repository_root=root,
+            identity_provider_types_for_project=self._identity_provider_types,
+        )
+
+    def _identity_provider_types(self, project_id: str) -> dict[str, str]:
+        return {
+            profile.provider_ref: profile.provider_type
+            for profile in self._identity_profiles.profiles(project_id)
+        }
 
     def propose(self, *, change_request_id: str, instruction: str, actor: str) -> dict[str, Any]:
         bundle = self._orchestrations.latest_bundle(change_request_id)
@@ -150,7 +163,13 @@ class TestCaseRevisionService:
 
         if not actor.strip():
             raise ValueError("AI Test Case revision source must not be blank")
-        blockers = validate_test_data_plan_artifact(test_data_plan)
+        project_id = str(test_data_plan.get("project_id", ""))
+        if not project_id:
+            raise ValueError("Regenerated TestDataPlan Project must not be blank")
+        blockers = validate_test_data_plan_artifact(
+            test_data_plan,
+            identity_provider_types=self._identity_provider_types(project_id),
+        )
         if blockers:
             raise ValueError(
                 "Regenerated TestDataPlan is not executable: " + "; ".join(blockers)

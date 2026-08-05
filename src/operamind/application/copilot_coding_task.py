@@ -70,6 +70,9 @@ from operamind.infrastructure.postgres.copilot_coding_task_repository import (
     CopilotCodingTaskRepository,
 )
 from operamind.infrastructure.postgres.document_node_repository import DocumentNodeRepository
+from operamind.infrastructure.postgres.existing_test_data_repository import (
+    ExistingTestDataRepository,
+)
 from operamind.infrastructure.postgres.profile_repository import ProfileRepository
 from operamind.infrastructure.postgres.search_index_repository import SearchIndexRepository
 from operamind.infrastructure.postgres.web_control_plane_repository import (
@@ -185,9 +188,15 @@ class CopilotCodingTaskPublishRequest:
                 "confirmed_operations_json",
                 "selections_json",
             }
-            if set(self.plan_revision_context) != required_context or any(
-                not isinstance(value, str) or not value.strip()
-                for value in self.plan_revision_context.values()
+            allowed_context = required_context | {"locator_failure_evidence_json"}
+            context_keys = set(self.plan_revision_context)
+            if (
+                not required_context.issubset(context_keys)
+                or not context_keys.issubset(allowed_context)
+                or any(
+                    not isinstance(value, str) or not value.strip()
+                    for value in self.plan_revision_context.values()
+                )
             ):
                 raise ValueError("UI TestPlan revision context is incomplete")
             if self.edit_packet_id is not None or self.approval_grant_id is not None:
@@ -241,6 +250,7 @@ class CopilotCodingTaskService:
         self._profile_repository = ProfileRepository(connection, self._profiles)
         self._index_repository = SearchIndexRepository(connection)
         self._document_nodes = DocumentNodeRepository(connection)
+        self._existing_test_data = ExistingTestDataRepository(connection)
         self._provider: CodingTaskDeliveryProvider = LocalBridgeCopilotProvider()
 
     def publish(self, request: CopilotCodingTaskPublishRequest) -> dict[str, object]:
@@ -602,6 +612,25 @@ class CopilotCodingTaskService:
             bundle = ChangeOrchestrationRepository(self._connection, self._contracts).bundle(
                 str(context["source_orchestration_id"])
             )
+            revision_inputs: dict[str, object] = {
+                "source_ui_test_plan": bundle["test_plan"],
+                "source_test_data_plan": bundle["test_data_plan"],
+                "revision_instruction": context["instruction"],
+                "confirmed_change_summary": json.loads(str(context["confirmed_operations_json"])),
+                "target_data_bindings": _public_target_data_profile(
+                    TargetDataProfileRepository(self._connection).get(
+                        str(immutable_task["project_id"])
+                    )
+                ),
+                "confirmed_existing_test_data": _confirmed_existing_test_data_context(
+                    self._existing_test_data,
+                    str(immutable_task["project_id"]),
+                ),
+            }
+            if context.get("locator_failure_evidence_json"):
+                revision_inputs["locator_failure_evidence"] = json.loads(
+                    str(context["locator_failure_evidence_json"])
+                )
             return {
                 "coding_task": _public_mcp_task(immutable_task),
                 "stage_status": _ready_stage_status(
@@ -610,19 +639,7 @@ class CopilotCodingTaskService:
                 ),
                 "stage_contract": _stage_contract(task.current_stage),
                 "workspace": {"root": task.workspace_root},
-                "inputs": {
-                    "source_ui_test_plan": bundle["test_plan"],
-                    "source_test_data_plan": bundle["test_data_plan"],
-                    "revision_instruction": context["instruction"],
-                    "confirmed_change_summary": json.loads(
-                        str(context["confirmed_operations_json"])
-                    ),
-                    "target_data_bindings": _public_target_data_profile(
-                        TargetDataProfileRepository(self._connection).get(
-                            str(immutable_task["project_id"])
-                        )
-                    ),
-                },
+                "inputs": revision_inputs,
                 "constraints": {"execution_scope": {"bound": False, "read_only": True}},
             }
         automation_repository = ChangeAutomationRepository(self._connection)
@@ -727,6 +744,14 @@ class CopilotCodingTaskService:
                 "target_data_bindings": _public_target_data_profile(
                     TargetDataProfileRepository(self._connection).get(task.project_id)
                 ),
+                "data_identity_providers": _public_data_identity_providers(
+                    self._existing_test_data,
+                    task.project_id,
+                ),
+                "confirmed_existing_test_data": _confirmed_existing_test_data_context(
+                    self._existing_test_data,
+                    task.project_id,
+                ),
                 "business_coverage": {
                     "required_coverage_percent": 100,
                     "business_requirements": copy.deepcopy(
@@ -765,6 +790,7 @@ class CopilotCodingTaskService:
                     "source": "actual reviewed SQL readback only",
                 },
                 "rules": [
+                    "TestPlan は v2、TestDataPlan は RunContext を持つ v3 の完全版にする。",
                     (
                         "各 business_rule_id を実行可能な browser UI Case で覆い、"
                         "自然言語の全 step_id を TestDataPlan の Playwright Step に対応させる。"
@@ -774,9 +800,22 @@ class CopilotCodingTaskService:
                         "限定済み設計・コード根拠から取得し、推測しない。"
                     ),
                     (
-                        "各 test_data_id は生成または接管後、確認済み SQL readback から"
-                        "実 DB 主キー、業務 UNIQUE キー、画面キー、row_count=1 を"
-                        " identity_binding に定義する。"
+                        "各 test_data_id は data_identity_providers に列挙された実 Provider"
+                        "だけを選び、database/api/ui/hybrid の実観測から主キー、業務 UNIQUE"
+                        "キー、画面キー、match_count=1 を identity_binding に定義する。"
+                        "未登録 Provider、fake、推測、静かな fallback は禁止する。"
+                        "業務 UNIQUE キーと画面キーには、"
+                        "同じ bound record の実 DOM から値を読む exact dom_observation を"
+                        "定義し、期待 digest を観測値として出力しない。"
+                    ),
+                    (
+                        "Secret、接続情報、認証値を identity_binding、Copilot Context、"
+                        "ログ、Evidence に含めない。"
+                    ),
+                    (
+                        "confirmed_existing_test_data で対象 Test Case に登録済みのデータは、"
+                        "reviewed_plan_fragment の test_data_id、adopted identity_binding、"
+                        "lookup/cleanup Flow を保持して TestDataPlan に組み込む。"
                     ),
                     (
                         "各 acceptance_criteria_ref x test_case_id x test_data_id に"
@@ -802,6 +841,28 @@ class CopilotCodingTaskService:
                         " computer_use_fallback を使う。Screenshot は機密表示を mask する。"
                     ),
                     (
+                        "Locator は設計書、HTML/Template/Frontend、Route、Code Graph、"
+                        "TestCase、TestDataPlan、DataIdentityProvider の根拠だけから生成する。"
+                        "role は accessible name 必須、semantic locator は exact=true、"
+                        "record scope は container と全 screen_identity_values の交差条件で"
+                        "定義する。nth/nth-child、row number、座標、曖昧 text、動的 hash CSS、"
+                        "未検証の推測は禁止する。"
+                    ),
+                    (
+                        "正式 UI Run は一つの Browser Context を使い、各 action の直前に"
+                        "approved Origin、現在 Project/Run の frozen Binding、"
+                        "record Scope count=1、全 DOM identity digest、"
+                        "action locator count=1 と Scope 内包を OperaMind 自身で"
+                        "検証する。失敗時は action を実行しない。"
+                    ),
+                    (
+                        "Locator 0件/複数件、DOM drift、identity 欠落/不一致、Origin 外は"
+                        "blocked Evidence とし、"
+                        "同じ Copilot Task に返す。AI は同じ Run 内で Locator を修正して続行せず、"
+                        "新しい Plan Revision を生成し、Schema・安全検査・人工確認後に"
+                        "新 Run を開始する。"
+                    ),
+                    (
                         "不足要件が返った場合は両計画の完全版を再生成する。"
                         "業務 Coverage 100% 未満では人工確認へ進まない。"
                     ),
@@ -810,6 +871,42 @@ class CopilotCodingTaskService:
             impact = self._artifacts.get(str(code_refs["impact_report_id"]))
             if impact is None or impact.get("artifact_type") != "ImpactReport":
                 raise RuntimeError("Copilot Change Task Impact Report Artifact is missing")
+            planning_input["locator_generation"] = {
+                "source_documents": self._public_document_changes(coding_task_id),
+                "source_code_files": {
+                    "read_only": list(cast(list[object], packet.get("read_only_files", []))),
+                    "editable": list(cast(list[object], packet.get("editable_files", []))),
+                    "tests": list(cast(list[object], packet.get("test_files", []))),
+                },
+                "code_graph": {
+                    "snapshot_id": impact.get("code_graph_snapshot_id"),
+                    "repository_revision": impact.get("repository_revision"),
+                    "paths": [
+                        {
+                            key: item[key]
+                            for key in (
+                                "target_path",
+                                "target_symbols",
+                                "graph_path_refs",
+                                "test_file_refs",
+                            )
+                            if key in item
+                        }
+                        for item in cast(list[dict[str, object]], impact.get("items", []))
+                    ],
+                },
+                "required_locator_inputs": [
+                    "business_action",
+                    "target_page",
+                    "operation_type",
+                    "operation_scope",
+                    "test_data_id",
+                    "pre_action_observations",
+                    "post_action_observations",
+                    "business_assertions",
+                    "screenshot_requirement",
+                ],
+            }
             planning_input["required_ui_scenario_ids"] = copy.deepcopy(
                 impact.get("required_ui_scenario_refs", [])
             )
@@ -819,6 +916,11 @@ class CopilotCodingTaskService:
         }
         if planning_input is not None:
             inputs["planning"] = planning_input
+        locator_feedback = _latest_locator_failure_feedback(
+            cast(list[dict[str, object]], task_view.get("events", []))
+        )
+        if locator_feedback is not None:
+            inputs["locator_failure_feedback"] = locator_feedback
         return {
             "coding_task": _public_mcp_task(cast(dict[str, object], task_view["task"])),
             "stage_status": _ready_stage_status(
@@ -1415,7 +1517,7 @@ class CopilotCodingTaskService:
             artifact=test_data_plan,
             expected={
                 "artifact_type": "TestDataPlan",
-                "schema_version": "v2",
+                "schema_version": "v3",
                 "project_id": task.project_id,
                 "test_plan_id": test_plan_id,
                 "status": "ready",
@@ -1448,8 +1550,20 @@ class CopilotCodingTaskService:
             test_data_plan=test_data_plan,
             ui_impacted=impact.get("ui_impact_status") == "impacted",
         )
+        _validate_confirmed_existing_test_data_usage(
+            repository=self._existing_test_data,
+            project_id=task.project_id,
+            test_plan=test_plan,
+            test_data_plan=test_data_plan,
+        )
         _validate_required_ui_scenario_scope(test_plan=test_plan, impact=impact)
-        blockers = validate_test_data_plan_artifact(test_data_plan)
+        blockers = validate_test_data_plan_artifact(
+            test_data_plan,
+            identity_provider_types=_project_identity_provider_types(
+                self._existing_test_data,
+                task.project_id,
+            ),
+        )
         if "sql" in test_data_plan_channels(test_data_plan):
             blockers.extend(
                 _project_target_data_blockers(
@@ -1566,7 +1680,7 @@ class CopilotCodingTaskService:
             artifact=test_data_plan,
             expected={
                 "artifact_type": "TestDataPlan",
-                "schema_version": "v2",
+                "schema_version": "v3",
                 "project_id": task.project_id,
                 "test_plan_id": str(test_plan.get("test_plan_id") or ""),
                 "status": "ready",
@@ -1577,7 +1691,19 @@ class CopilotCodingTaskService:
             test_data_plan=test_data_plan,
             ui_impacted=True,
         )
-        blockers = validate_test_data_plan_artifact(test_data_plan)
+        _validate_confirmed_existing_test_data_usage(
+            repository=self._existing_test_data,
+            project_id=task.project_id,
+            test_plan=test_plan,
+            test_data_plan=test_data_plan,
+        )
+        blockers = validate_test_data_plan_artifact(
+            test_data_plan,
+            identity_provider_types=_project_identity_provider_types(
+                self._existing_test_data,
+                task.project_id,
+            ),
+        )
         if "sql" in test_data_plan_channels(test_data_plan):
             blockers.extend(
                 _project_target_data_blockers(
@@ -1972,9 +2098,7 @@ def _validate_planning_alignment(
         test_data_plan=test_data_plan,
     )
     if coverage_reasons:
-        raise ValueError(
-            "Test data coverage alignment failed: " + "; ".join(coverage_reasons)
-        )
+        raise ValueError("Test data coverage alignment failed: " + "; ".join(coverage_reasons))
 
 
 def _validate_required_ui_scenario_scope(
@@ -2117,12 +2241,14 @@ def _public_target_data_profile(profile: TargetDataProfile | None) -> dict[str, 
     if profile is None:
         return {
             "available": False,
+            "dialect": None,
             "connection_alias": None,
             "transaction_policy": None,
             "bindings": [],
         }
     return {
         "available": True,
+        "dialect": profile.dialect,
         "connection_alias": profile.connection_alias,
         "transaction_policy": profile.transaction_policy,
         "bindings": [
@@ -2143,6 +2269,134 @@ def _public_target_data_profile(profile: TargetDataProfile | None) -> dict[str, 
     }
 
 
+def _public_data_identity_providers(
+    repository: ExistingTestDataRepository,
+    project_id: str,
+) -> list[dict[str, object]]:
+    """Expose reviewed Project Provider contracts, never observations or secrets."""
+
+    return [
+        {
+            "provider_ref": profile.provider_ref,
+            "type": profile.provider_type,
+            "revision": profile.revision,
+            "content_digest": profile.content_digest,
+            "identity_definition": copy.deepcopy(profile.identity_definition),
+            "lookup_steps": copy.deepcopy(list(profile.lookup_steps)),
+            "cleanup_steps": copy.deepcopy(list(profile.cleanup_steps)),
+            "business_summary_fields": list(profile.business_summary_fields),
+        }
+        for profile in repository.profiles(project_id)
+    ]
+
+
+def _project_identity_provider_types(
+    repository: ExistingTestDataRepository,
+    project_id: str,
+) -> dict[str, str]:
+    return {
+        profile.provider_ref: profile.provider_type
+        for profile in repository.profiles(project_id)
+    }
+
+
+def _confirmed_existing_test_data_context(
+    repository: ExistingTestDataRepository,
+    project_id: str,
+) -> list[dict[str, object]]:
+    """Expose reviewed adopted fragments to the bounded local planning Task."""
+
+    return [
+        {
+            "data_name": value.data_name,
+            "business_unique_value": value.business_unique_value,
+            "test_case_ref": value.test_case_ref,
+            "retain_after_test": value.retain_after_test,
+            "provider_type": value.provider_type,
+            "business_summary": copy.deepcopy(value.business_summary or {}),
+            "reviewed_plan_fragment": copy.deepcopy(value.plan_data_definition),
+        }
+        for value in repository.list_for_project(project_id)
+        if value.status == "confirmed" and value.plan_data_definition is not None
+    ]
+
+
+def _validate_confirmed_existing_test_data_usage(
+    *,
+    repository: ExistingTestDataRepository,
+    project_id: str,
+    test_plan: Mapping[str, object],
+    test_data_plan: Mapping[str, object],
+) -> None:
+    """Require confirmed adopted data to be used by its generated Test Case."""
+
+    case_ids = {
+        str(value.get("test_case_id"))
+        for value in cast(list[dict[str, object]], test_plan.get("test_cases", []))
+    }
+    data_sets = {
+        str(value.get("test_data_id")): value
+        for value in cast(list[dict[str, object]], test_data_plan.get("data_sets", []))
+    }
+    flows = {
+        str(value.get("flow_id")): value
+        for value in cast(list[dict[str, object]], test_data_plan.get("generation_flows", []))
+    }
+    for registration in repository.list_for_project(project_id):
+        if registration.status != "confirmed" or registration.plan_data_definition is None:
+            continue
+        if registration.test_case_ref not in case_ids:
+            raise ValueError(
+                "Confirmed existing test data references a missing Test Case: "
+                f"{registration.test_case_ref}"
+            )
+        fragment = registration.plan_data_definition
+        reviewed_data_set = cast(Mapping[str, object], fragment["data_set"])
+        reviewed_flow = cast(Mapping[str, object], fragment["generation_flow"])
+        test_data_id = str(reviewed_data_set["test_data_id"])
+        actual_data_set = data_sets.get(test_data_id)
+        actual_flow = flows.get(str(reviewed_flow["flow_id"]))
+        if actual_data_set is None or actual_flow is None:
+            raise ValueError(
+                "Confirmed existing test data is missing from TestDataPlan: "
+                f"{registration.data_name}"
+            )
+        if (
+            actual_data_set.get("identity_binding")
+            != reviewed_data_set.get("identity_binding")
+            or actual_data_set.get("setup_actions") != []
+            or actual_data_set.get("cleanup_policy")
+            != reviewed_data_set.get("cleanup_policy")
+            or registration.test_case_ref
+            not in cast(list[object], actual_data_set.get("test_case_refs", []))
+            or actual_flow.get("steps") != reviewed_flow.get("steps")
+            or actual_flow.get("cleanup_steps") != reviewed_flow.get("cleanup_steps")
+            or actual_flow.get("cleanup_policy") != reviewed_flow.get("cleanup_policy")
+            or test_data_id
+            not in cast(list[object], actual_flow.get("test_data_refs", []))
+            or registration.test_case_ref
+            not in cast(list[object], actual_flow.get("test_case_refs", []))
+        ):
+            raise ValueError(
+                "Confirmed existing test data differs from its reviewed adopted fragment: "
+                f"{registration.data_name}"
+            )
+
+
+def _latest_locator_failure_feedback(
+    events: list[dict[str, object]],
+) -> dict[str, object] | None:
+    """Expose only the latest sanitized browser block to the same Copilot Task."""
+
+    for event in reversed(events):
+        if event.get("event_type") != "ui_locator_blocked":
+            continue
+        payload = event.get("payload")
+        if isinstance(payload, dict):
+            return copy.deepcopy(payload)
+    return None
+
+
 def _project_target_data_blockers(
     *, connection: Connection[Any], project_id: str, plan: Mapping[str, object]
 ) -> list[str]:
@@ -2154,10 +2408,9 @@ def _project_target_data_blockers(
     if profile is not None and not TargetDataSecretStore().configured(
         project_id=project_id,
         connection_alias=profile.connection_alias,
+        dialect=profile.dialect,
     ):
-        reasons.append(
-            "Project Target Data connection Secret is not configured for SQL execution"
-        )
+        reasons.append("Project Target Data connection Secret is not configured for SQL execution")
     return sorted(set(reasons))
 
 
@@ -2220,10 +2473,37 @@ def _stage_contract(stage: str, *, verification_only: bool = False) -> dict[str,
             "stop_condition": "業務 Coverage 100% で計画受理後は人工確認を待つ。",
             "rules": [
                 "copilot_record_change_outputs の inputSchema を計画形式の正とする。",
+                "TestPlan は schema_version=v2、TestDataPlan は schema_version=v3 とする。",
                 (
-                    "全 test_data_id に SQL readback identity_binding を定義し、"
+                    "全 test_data_id に登録済みの実 DataIdentityProvider を使う"
+                    " identity_binding を定義し、match_count=1 を実観測で証明する。"
+                    "fake、推測、静かな fallback は禁止する。"
+                ),
+                (
+                    "業務 UNIQUE キーと画面キーを同じ record の実 DOM から読む"
+                    " exact dom_observation を定義する。"
+                ),
+                "Secret、接続情報、認証値を計画、Context、ログ、Evidence に含めない。",
+                (
                     "全 UI Step の operation_scope を明示し、record UI Step は"
                     " bound_record と data_binding_ref で一意に scope する。"
+                ),
+                (
+                    "Locator は role+accessible name、label、placeholder、test_id、"
+                    "title、alt_text、"
+                    "安全 CSS または record Scope 内の相対 Locator を使い、"
+                    "複数の screen_identity_values は"
+                    "全条件の交差で一致させる。Locator JSON を利用者入力にしない。"
+                ),
+                (
+                    "画面または業務データを変更する各 Playwright Action は、実行直前に"
+                    " reviewed pre_action_observations (expected 付き) を読み取り、"
+                    "一致しなければ action を実行せず blocked Evidence を返す。"
+                ),
+                (
+                    "正式実行中の 0/複数 match、identity mismatch、Scope 外 action、Origin drift は"
+                    "Playwright の blocked Evidence として返し、同じ Run の続行や"
+                    "Computer Use fallback をしない。"
                 ),
                 (
                     "全 AcceptanceCriteria/TestCase/TestData の組合せに、実 SQL"
@@ -2249,12 +2529,21 @@ def _stage_contract(stage: str, *, verification_only: bool = False) -> dict[str,
             "stop_condition": "再作成した計画の記録後は人工確認を待つ。",
             "rules": [
                 "コード、設計書、Git 履歴を変更しない。",
-                "既存の identity_binding と data_binding_ref の決定性を維持する。",
+                "TestPlan v2 と TestDataPlan v3 の完全版を再生成する。",
+                (
+                    "既存の identity_binding、実 DOM の exact dom_observation、"
+                    "data_binding_ref の決定性を維持する。"
+                ),
                 (
                     "全 AcceptanceCriteria/TestCase/TestData に対応する"
                     " coverage_conditions を完全版で維持し、Coverage を自己申告しない。"
                 ),
                 "Playwright を優先し、確認済みの capability gap だけを fallback にする。",
+                (
+                    "Locator 失敗 Evidence を受け取った場合、実 DOM の公開 Observation と"
+                    "match_count だけを根拠に"
+                    "完全な新 Plan を生成する。失敗した Run を再利用せず、人工確認を待つ。"
+                ),
             ],
         },
     }

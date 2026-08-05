@@ -119,6 +119,41 @@ class FakeService:
             },
         }
 
+    def existing_test_data(self, project_id: str) -> dict[str, object]:
+        return {"project_id": project_id, "registrations": [], "count": 0}
+
+    def project_data_identity_profiles(self, project_id: str) -> dict[str, object]:
+        return {"project_id": project_id, "profiles": [], "count": 0}
+
+    def configure_project_data_identity_profiles(
+        self, **values: object
+    ) -> dict[str, object]:
+        self.calls.append(("project-data-identity-profiles", values))
+        return {
+            "project_id": values["project_id"],
+            "profiles": list(values["profiles"]),  # type: ignore[arg-type]
+        }
+
+    def register_existing_test_data(self, **values: object) -> dict[str, object]:
+        self.calls.append(("existing-test-data-register", values))
+        return {
+            "registration": {
+                "data_name": values["data_name"],
+                "business_unique_value": values["business_unique_value"],
+                "test_case_ref": values["test_case_ref"],
+                "retain_after_test": values["retain_after_test"],
+                "status": "candidate",
+                "business_summary": {"expense_number": values["business_unique_value"]},
+            }
+        }
+
+    def confirm_existing_test_data(self, **values: object) -> dict[str, object]:
+        self.calls.append(("existing-test-data-confirm", values))
+        return {"registration": {"status": "confirmed"}}
+
+    def fixed_data_identifiers(self, project_id: str) -> dict[str, object]:
+        return {"project_id": project_id, "planned": [], "frozen": []}
+
     def confirm_project_document_learning(self, **values: object) -> dict[str, object]:
         self.calls.append(("project-document-learning-confirm", values))
         return {"project_id": values["project_id"], "learning": {"status": "confirmed"}}
@@ -535,6 +570,51 @@ def test_target_data_profile_route_never_puts_connection_secret_in_command_recei
     assert "local-password" not in str(command)
     configured = next(value for name, value in fake.calls if name == "project-target-data")
     assert configured["connection_dsn"] == connection_secret
+    assert configured["dialect"] == "postgresql"
+
+
+def test_existing_data_route_accepts_only_business_readable_input() -> None:
+    client, fake = client_with_fake()
+    headers = {
+        "X-OperaMind-Actor": "test-operator",
+        "Idempotency-Key": "existing-data-1",
+    }
+    payload = {
+        "data_name": "差戻し済み経費",
+        "business_unique_value": "EXP-20260805-0012",
+        "test_case_ref": "TC-EXPENSE-01",
+        "retain_after_test": True,
+    }
+
+    response = client.post(
+        "/api/v1/projects/demo/existing-test-data",
+        json=payload,
+        headers=headers,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["registration"]["status"] == "candidate"
+    call = next(value for name, value in fake.calls if name == "existing-test-data-register")
+    assert call == {"project_id": "demo", **payload, "actor": "test-operator"}
+
+    rejected = client.post(
+        "/api/v1/projects/demo/existing-test-data",
+        json={**payload, "sql": "SELECT * FROM expenses"},
+        headers={**headers, "Idempotency-Key": "existing-data-2"},
+    )
+    assert rejected.status_code == 422
+    assert len(
+        [value for name, value in fake.calls if name == "existing-test-data-register"]
+    ) == 1
+
+
+def test_fixed_data_identifiers_are_read_only_business_projection() -> None:
+    client, _ = client_with_fake()
+
+    response = client.get("/api/v1/projects/demo/fixed-data-identifiers")
+
+    assert response.status_code == 200
+    assert response.json() == {"project_id": "demo", "planned": [], "frozen": []}
 
 
 def test_project_onboarding_routes_expose_preflight_rebuild_and_retry() -> None:
@@ -731,8 +811,12 @@ def test_openapi_contains_only_six_stage_web_and_token_protected_bridge_routes()
         "/api/v1/projects/{project_id}",
         "/api/v1/projects/{project_id}/onboarding",
         "/api/v1/projects/{project_id}/document-learning",
-            "/api/v1/projects/{project_id}/document-learning/confirm",
-            "/api/v1/projects/{project_id}/target-data-profile",
+        "/api/v1/projects/{project_id}/document-learning/confirm",
+        "/api/v1/projects/{project_id}/target-data-profile",
+        "/api/v1/projects/{project_id}/data-identity-profiles",
+        "/api/v1/projects/{project_id}/existing-test-data",
+        "/api/v1/projects/{project_id}/existing-test-data/{registration_id}/confirm",
+        "/api/v1/projects/{project_id}/fixed-data-identifiers",
         "/api/v1/projects/{project_id}/onboarding/retry",
         "/api/v1/projects/{project_id}/preflight",
         "/api/v1/change-requests",

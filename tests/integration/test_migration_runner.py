@@ -159,6 +159,13 @@ def test_migrations_apply_once_and_record_checksum() -> None:
         "0076",
         "0077",
         "0078",
+        "0079",
+        "0080",
+        "0081",
+        "0082",
+        "0083",
+        "0084",
+        "0085",
     )
     assert second == ()
     assert rows == [
@@ -540,6 +547,41 @@ def test_migrations_apply_once_and_record_checksum() -> None:
             "project_onboarding_active_unique",
             catalog.migrations[77].checksum,
         ),
+        (
+            "0079",
+            "test_data_dom_identity",
+            catalog.migrations[78].checksum,
+        ),
+        (
+            "0080",
+            "data_identity_providers",
+            catalog.migrations[79].checksum,
+        ),
+        (
+            "0081",
+            "target_database_adapter_contract",
+            catalog.migrations[80].checksum,
+        ),
+        (
+            "0082",
+            "existing_data_run_context",
+            catalog.migrations[81].checksum,
+        ),
+        (
+            "0083",
+            "immediate_test_data_binding_evidence",
+            catalog.migrations[82].checksum,
+        ),
+        (
+            "0084",
+            "ui_locator_blocked_feedback",
+            catalog.migrations[83].checksum,
+        ),
+        (
+            "0085",
+            "existing_data_provider_snapshot",
+            catalog.migrations[84].checksum,
+        ),
     ]
     assert "document_discovery_bound" in event_constraint
     assert identity_contract_type == ("jsonb",)
@@ -549,6 +591,8 @@ def test_migrations_apply_once_and_record_checksum() -> None:
         "test_data_identity_bindings_evidence_scope_fk",
         "test_data_identity_bindings_run_data_unique",
         "test_data_identity_bindings_evidence_ref_unique",
+        "test_data_identity_bindings_dom_identity_consistent",
+        "test_data_identity_bindings_provider_consistent",
     }.issubset(identity_binding_constraints)
     assert "data_binding" in evidence_type_constraint
     assert "data_coverage" in evidence_type_constraint
@@ -787,6 +831,13 @@ def test_applied_migration_checksum_mismatch_is_rejected(tmp_path: Path) -> None
         "0076_test_data_binding_evidence_scope.sql",
         "0077_test_data_coverage_evidence.sql",
         "0078_project_onboarding_active_unique.sql",
+        "0079_test_data_dom_identity.sql",
+        "0080_data_identity_providers.sql",
+        "0081_target_database_adapter_contract.sql",
+        "0082_existing_data_run_context.sql",
+        "0083_immediate_test_data_binding_evidence.sql",
+        "0084_ui_locator_blocked_feedback.sql",
+        "0085_existing_data_provider_snapshot.sql",
     ):
         (tmp_path / version).write_text(
             (ROOT / "migrations" / version).read_text(encoding="utf-8"),
@@ -868,7 +919,16 @@ def test_active_onboarding_uniqueness_keeps_run_owned_by_active_learning() -> No
                 """
             )
 
-        assert MigrationRunner(connection, catalog).apply() == ("0078",)
+        assert MigrationRunner(connection, catalog).apply() == (
+            "0078",
+            "0079",
+            "0080",
+            "0081",
+            "0082",
+            "0083",
+            "0084",
+            "0085",
+        )
         with connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -1290,6 +1350,13 @@ def test_locator_observation_migration_upgrades_candidate_identity_with_existing
         "0076",
         "0077",
         "0078",
+        "0079",
+        "0080",
+        "0081",
+        "0082",
+        "0083",
+        "0084",
+        "0085",
     )
     assert candidates == [
         ("knowledge-v1", "shared-status-label"),
@@ -1408,6 +1475,13 @@ def test_profile_rebuild_lifecycle_migrates_legacy_requests_fail_closed() -> Non
             "0076",
             "0077",
             "0078",
+            "0079",
+            "0080",
+            "0081",
+            "0082",
+            "0083",
+            "0084",
+            "0085",
         )
         with connection.cursor() as cursor:
             cursor.execute(
@@ -1551,6 +1625,13 @@ def test_snapshot_variant_provenance_migration_backfills_legacy_facts() -> None:
             "0076",
             "0077",
             "0078",
+            "0079",
+            "0080",
+            "0081",
+            "0082",
+            "0083",
+            "0084",
+            "0085",
         )
         with connection.cursor() as cursor:
             cursor.execute(

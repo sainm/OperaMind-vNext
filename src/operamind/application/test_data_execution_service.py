@@ -9,6 +9,7 @@ from typing import Any
 
 from psycopg import Connection
 
+from operamind.application.data_identity import DataIdentityProvider
 from operamind.application.test_data_execution import (
     TestDataChannelExecutor,
     TestDataExecutionEngine,
@@ -99,6 +100,7 @@ class TestDataExecutionService:
         connection: Connection[Any],
         contracts: ContractCatalog,
         executors: Mapping[str, TestDataChannelExecutor],
+        identity_providers: Mapping[str, DataIdentityProvider] | None = None,
         clock: Callable[[], datetime] | None = None,
         progress_sink: Callable[[TestDataExecutionProgress], None] | None = None,
     ) -> None:
@@ -108,6 +110,7 @@ class TestDataExecutionService:
         self._engine = TestDataExecutionEngine(
             contracts=contracts,
             executors=self._executors,
+            identity_providers=identity_providers,
             clock=self._clock,
             progress_sink=progress_sink,
         )

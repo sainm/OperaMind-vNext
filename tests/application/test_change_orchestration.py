@@ -229,6 +229,7 @@ def _input() -> ChangeOrchestrationInput:
                 ],
                 "cleanup_policy": "isolated_environment",
                 "identity_binding": {
+                    "provider": {"type": "database", "provider_ref": "database.v1"},
                     "binding_mode": "generated",
                     "source_flow_id": "flow-expense-default-seed",
                     "source_step_id": "load-default-seed",
@@ -242,12 +243,20 @@ def _input() -> ChangeOrchestrationInput:
                             "name": "expense_number",
                             "source": "database",
                             "path": "rows[0].expense_number",
+                            "dom_observation": {
+                                "kind": "attribute",
+                                "attribute_name": "data-observed-expense-number",
+                            },
                         }
                     ],
                     "screen_key": {
                         "name": "expense_number",
                         "source": "database",
                         "path": "rows[0].expense_number",
+                        "dom_observation": {
+                            "kind": "attribute",
+                            "attribute_name": "data-observed-expense-number",
+                        },
                         "locator_template": {
                             "by": "css",
                             "value": "[data-expense-number='{{value}}']",

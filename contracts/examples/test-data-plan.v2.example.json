@@ -12,17 +12,30 @@
       "setup_actions": [],
       "cleanup_policy": "isolated_environment",
       "identity_binding": {
+        "provider": {"type": "database", "provider_ref": "database.v1"},
         "binding_mode": "generated",
         "source_flow_id": "expense-status-ui-flow",
         "source_step_id": "read-expense-identity",
         "primary_key": {"name": "id", "source": "database", "path": "rows[0].id"},
         "business_unique_keys": [
-          {"name": "expense_number", "source": "database", "path": "rows[0].expense_number"}
+          {
+            "name": "expense_number",
+            "source": "database",
+            "path": "rows[0].expense_number",
+            "dom_observation": {
+              "kind": "attribute",
+              "attribute_name": "data-observed-expense-number"
+            }
+          }
         ],
         "screen_key": {
           "name": "expense_number",
           "source": "database",
           "path": "rows[0].expense_number",
+          "dom_observation": {
+            "kind": "attribute",
+            "attribute_name": "data-observed-expense-number"
+          },
           "locator_template": {
             "by": "css",
             "value": "[data-expense-number='{{value}}']",
@@ -96,6 +109,14 @@
             "action": "fill",
             "locator": {"by": "label", "value": "件名", "exact": true},
             "value": "差戻し確認用経費",
+            "pre_action_observations": [
+              {
+                "key": "expense_title_input_enabled",
+                "kind": "enabled",
+                "locator": {"by": "label", "value": "件名", "exact": true},
+                "expected": true
+              }
+            ],
             "observations": [
               {
                 "key": "expense_title",
@@ -131,6 +152,14 @@
             "action": "select_option",
             "locator": {"by": "label", "value": "状態", "exact": true},
             "value": "RETURNED",
+            "pre_action_observations": [
+              {
+                "key": "created_status_select_enabled",
+                "kind": "enabled",
+                "locator": {"by": "label", "value": "状態", "exact": true},
+                "expected": true
+              }
+            ],
             "observations": [
               {
                 "key": "created_expense_status",
@@ -166,6 +195,14 @@
             "mask_locators": [],
             "action": "click",
             "locator": {"by": "role", "value": "button", "name": "登録", "exact": true},
+            "pre_action_observations": [
+              {
+                "key": "save_button_enabled",
+                "kind": "enabled",
+                "locator": {"by": "role", "value": "button", "name": "登録", "exact": true},
+                "expected": true
+              }
+            ],
             "observations": [
               {"key": "saved_page_title", "kind": "title"},
               {
@@ -261,6 +298,14 @@
             "action": "select_option",
             "locator": {"by": "label", "value": "状態", "exact": true},
             "value": "RETURNED",
+            "pre_action_observations": [
+              {
+                "key": "search_status_select_enabled",
+                "kind": "enabled",
+                "locator": {"by": "label", "value": "状態", "exact": true},
+                "expected": true
+              }
+            ],
             "observations": [
               {
                 "key": "selected_status",
@@ -295,12 +340,20 @@
             "mask_locators": [],
             "action": "click",
             "locator": {"by": "role", "value": "button", "name": "検索", "exact": true},
-          "observations": [
-            {
-              "key": "url",
-              "kind": "url"
-            }
-          ]
+            "pre_action_observations": [
+              {
+                "key": "search_button_enabled",
+                "kind": "enabled",
+                "locator": {"by": "role", "value": "button", "name": "検索", "exact": true},
+                "expected": true
+              }
+            ],
+            "observations": [
+              {
+                "key": "url",
+                "kind": "url"
+              }
+            ]
           },
           "computer_use_fallback": {
             "reason": "virtualized_ui",

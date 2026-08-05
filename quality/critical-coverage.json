@@ -52,11 +52,14 @@
       "src/operamind/infrastructure/postgres/project_onboarding_repository.py"
     ],
     "target_test_data": [
+      "src/operamind/application/data_identity.py",
       "src/operamind/application/test_data_coverage.py",
       "src/operamind/application/test_data_flow.py",
       "src/operamind/application/test_data_execution.py",
       "src/operamind/infrastructure/test_data/executors.py",
+      "src/operamind/infrastructure/test_data/identity.py",
       "src/operamind/infrastructure/test_data/target_data.py",
+      "src/operamind/infrastructure/test_data/target_database.py",
       "src/operamind/infrastructure/postgres/test_data_execution_repository.py"
     ],
     "task_scheduling": [

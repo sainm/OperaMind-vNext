@@ -227,6 +227,8 @@ def test_projection_exposes_exactly_six_product_stages_and_no_internal_approval(
                         {
                             "test_data_id": "expense-returned-data",
                             "binding_mode": "generated",
+                            "identity_provider_type": "database",
+                            "identity_provider_ref": "database.v1",
                             "primary_key": {"name": "id", "value": 42},
                             "business_unique_keys": [
                                 {"name": "expense_number", "value": "EXP-042"}
@@ -235,11 +237,34 @@ def test_projection_exposes_exactly_six_product_stages_and_no_internal_approval(
                                 "name": "expense_number",
                                 "value": "EXP-042",
                             },
+                            "screen_identity_values": [
+                                {"name": "expense_number", "value": "EXP-042"}
+                            ],
                             "screen_locator": {
                                 "by": "css",
                                 "value": "[data-expense-number='EXP-042']",
                                 "exact": True,
                             },
+                            "record_scope_locator": {
+                                "by": "css",
+                                "value": "[data-expense-number='EXP-042']",
+                                "exact": True,
+                            },
+                            "identity_observations": {
+                                "business_unique_keys": [
+                                    {
+                                        "name": "expense_number",
+                                        "kind": "attribute",
+                                        "attribute_name": "data-observed-expense-number",
+                                    }
+                                ],
+                                "screen_key": {
+                                    "name": "expense_number",
+                                    "kind": "attribute",
+                                    "attribute_name": "data-observed-expense-number",
+                                },
+                            },
+                            "identity_digest": "c" * 64,
                             "match_count": 1,
                             "frozen_at": "2026-08-04T00:00:00Z",
                             "content_digest": "a" * 64,
@@ -349,20 +374,15 @@ def test_projection_exposes_exactly_six_product_stages_and_no_internal_approval(
         {
             "test_data_id": "expense-returned-data",
             "binding_mode": "generated",
-            "primary_key": {"name": "id", "value": 42},
+            "identity_provider_type": "database",
             "business_unique_keys": [
                 {"name": "expense_number", "value": "EXP-042"}
             ],
-            "screen_key": {"name": "expense_number", "value": "EXP-042"},
-            "screen_locator": {
-                "by": "css",
-                "value": "[data-expense-number='EXP-042']",
-                "exact": True,
-            },
+            "screen_identity_values": [
+                {"name": "expense_number", "value": "EXP-042"}
+            ],
             "match_count": 1,
             "frozen_at": "2026-08-04T00:00:00Z",
-            "content_digest": "a" * 64,
-            "evidence_ref": "artifact://result/data-binding/expense-returned-data",
         }
     ]
     assert result["stages"][4]["details"]["data_coverage_status"] == "passed"

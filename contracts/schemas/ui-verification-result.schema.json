@@ -20,7 +20,7 @@
   ],
   "properties": {
     "artifact_type": {"const": "UiVerificationResult"},
-    "schema_version": {"enum": ["v1", "v2"]},
+    "schema_version": {"enum": ["v1", "v2", "v3"]},
     "verification_result_id": {"type": "string", "minLength": 1},
     "orchestration_id": {"type": "string", "minLength": 1},
     "test_data_execution_result_id": {"type": "string", "minLength": 1},
@@ -41,6 +41,7 @@
           "status": {"enum": ["passed", "failed", "blocked", "skipped"]},
           "impact_item_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
           "evidence_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "test_data_binding_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
           "failure_category": {"enum": ["none", "business_assertion", "environment", "test_data", "locator", "authentication", "blocked"]},
           "summary": {"type": "string"}
         }
@@ -77,6 +78,15 @@
     {
       "if": {"properties": {"schema_version": {"const": "v2"}}},
       "then": {"required": ["orchestration_id", "test_data_execution_result_id"]}
+    },
+    {
+      "if": {"properties": {"schema_version": {"const": "v3"}}},
+      "then": {
+        "required": ["orchestration_id", "test_data_execution_result_id"],
+        "properties": {
+          "scenario_results": {"items": {"required": ["test_data_binding_refs"]}}
+        }
+      }
     },
     {
       "if": {"required": ["recovery"]},

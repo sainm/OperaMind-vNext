@@ -89,6 +89,13 @@ def test_repository_migrations_are_sequential_and_transaction_free() -> None:
         "0076",
         "0077",
         "0078",
+        "0079",
+        "0080",
+        "0081",
+        "0082",
+        "0083",
+        "0084",
+        "0085",
     ]
     assert all(len(migration.checksum) == 64 for migration in catalog.migrations)
 
@@ -122,6 +129,46 @@ def test_test_data_execution_has_a_persisted_lease() -> None:
     assert "execution_owner text" in migration
     assert "lease_expires_at timestamptz" in migration
     assert "test_data_execution_runs_running_lease_idx" in migration
+
+
+def test_target_database_dialect_storage_is_adapter_extensible_and_safe() -> None:
+    migration = (
+        ROOT / "migrations" / "0081_target_database_adapter_contract.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "DROP CONSTRAINT project_target_data_profiles_dialect_valid" in migration
+    assert "dialect ~ '^[a-z][a-z0-9_]{0,31}$'" in migration
+    assert "Application registry remains authoritative" in migration
+
+
+def test_existing_data_and_run_context_are_persisted_fail_closed() -> None:
+    migration = (
+        ROOT / "migrations" / "0082_existing_data_run_context.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "CREATE TABLE existing_test_data_registrations" in migration
+    assert "CREATE TABLE test_data_run_contexts" in migration
+    assert "test_data_token ~ '^OM-E2E-" in migration
+    assert "DEFERRABLE INITIALLY DEFERRED" in migration
+    assert "provider_type IN ('database', 'api', 'ui', 'hybrid')" in migration
+
+    immediate_fk = (
+        ROOT / "migrations" / "0083_immediate_test_data_binding_evidence.sql"
+    ).read_text(encoding="utf-8")
+    assert "NOT DEFERRABLE" in immediate_fk
+    assert "DROP CONSTRAINT test_data_execution_evidence_binding_fk" in immediate_fk
+
+    feedback = (ROOT / "migrations" / "0084_ui_locator_blocked_feedback.sql").read_text(
+        encoding="utf-8"
+    )
+    assert "ui_locator_blocked" in feedback
+
+    provider_snapshot = (
+        ROOT / "migrations" / "0085_existing_data_provider_snapshot.sql"
+    ).read_text(encoding="utf-8")
+    assert "provider_revision integer" in provider_snapshot
+    assert "provider_digest text" in provider_snapshot
+    assert "provider_snapshot_pair" in provider_snapshot
 
 
 def test_project_onboarding_is_staged_and_recoverable() -> None:

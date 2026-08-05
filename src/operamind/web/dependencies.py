@@ -22,6 +22,7 @@ def get_service(request: Request) -> Iterator[WebControlPlaneService]:
         yield WebControlPlaneService(
             connection=connection,
             repository_root=root,
+            control_database_url=database_url,
             orchestration_scheduling_policy=request.app.state.orchestration_scheduling_policy,
         )
 

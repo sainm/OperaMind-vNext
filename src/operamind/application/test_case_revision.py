@@ -6,11 +6,13 @@ import copy
 import hashlib
 import json
 import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
 from operamind.application.change_orchestration import ChangeOrchestrationResult
+from operamind.application.data_identity import DEFAULT_DATA_IDENTITY_PROVIDER_TYPES
 from operamind.application.test_data_flow import validate_test_data_plan_artifact
 from operamind.contracts import ContractCatalog
 
@@ -155,8 +157,19 @@ class TestCaseChangeAnalyzer:
 class TestCaseRevisionPlanner:
     """Apply confirmed operations and regenerate every dependent planning Artifact."""
 
-    def __init__(self, *, repository_root: Path) -> None:
+    def __init__(
+        self,
+        *,
+        repository_root: Path,
+        identity_provider_types_for_project: (
+            Callable[[str], Mapping[str, str]] | None
+        ) = None,
+    ) -> None:
         self._contracts = ContractCatalog.load(repository_root.resolve() / "contracts")
+        self._identity_provider_types_for_project = (
+            identity_provider_types_for_project
+            or (lambda _project_id: DEFAULT_DATA_IDENTITY_PROVIDER_TYPES)
+        )
 
     def plan(
         self,
@@ -353,7 +366,12 @@ class TestCaseRevisionPlanner:
         source_orchestration = cast(dict[str, Any], source_bundle["orchestration"])
         if proposal["source_orchestration_id"] != source_orchestration["orchestration_id"]:
             raise ValueError("Test Case proposal source Orchestration differs")
-        data_blockers = validate_test_data_plan_artifact(test_data)
+        data_blockers = validate_test_data_plan_artifact(
+            test_data,
+            identity_provider_types=self._identity_provider_types_for_project(
+                str(source_orchestration["project_id"])
+            ),
+        )
         test_data["status"] = "blocked" if data_blockers else "ready"
         test_data["blocking_reasons"] = data_blockers
         test_plan["status"] = "ready"

@@ -91,6 +91,15 @@ def test_real_chrome_executor_runs_actions_and_persists_screenshots(tmp_path: Pa
                 "playwright": {
                     "action": "click",
                     "locator": {"by": "role", "value": "button", "name": "Show returned"},
+                    "pre_action_observations": [
+                        {"key": "page_title", "kind": "title", "expected": "Expense UI"},
+                        {
+                            "key": "show_button_count",
+                            "kind": "count",
+                            "locator": {"by": "role", "value": "button", "name": "Show returned"},
+                            "expected": 1,
+                        },
+                    ],
                     "mask_locators": [],
                     "observations": [
                         {

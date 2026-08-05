@@ -75,6 +75,7 @@ def _record(value: dict[str, object]) -> TargetDataBinding:
     return TargetDataBinding(
         project_id="expense",
         connection_alias="expense_test_db",
+        dialect="postgresql",
         query_binding_id=str(value["query_binding_id"]),
         operation=str(value["operation"]),
         statement_text=str(value["statement_text"]),
@@ -111,14 +112,27 @@ def test_secret_store_keeps_password_outside_workspace_and_owner_only(tmp_path: 
     assert not store.configured(project_id="expense", connection_alias="expense_test_db")
 
 
-def test_secret_store_rejects_non_postgresql_or_passwordless_connections(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "dsn",
+    (
+        "mysql://tester:secret@127.0.0.1/expense",
+        "oracle://tester:secret@127.0.0.1/expense",
+    ),
+)
+def test_secret_store_rejects_non_postgresql_connections(
+    tmp_path: Path, dsn: str
+) -> None:
     store = TargetDataSecretStore(tmp_path / "secrets")
     with pytest.raises(ValueError, match="PostgreSQL URL"):
         store.put(
             project_id="expense",
             connection_alias="expense_test_db",
-            connection_dsn="mysql://tester:secret@127.0.0.1/expense",
+            connection_dsn=dsn,
         )
+
+
+def test_secret_store_rejects_passwordless_connections(tmp_path: Path) -> None:
+    store = TargetDataSecretStore(tmp_path / "secrets")
     with pytest.raises(ValueError, match="include a password"):
         store.put(
             project_id="expense",
@@ -145,6 +159,17 @@ def test_profile_requires_named_inputs_cleanup_readback_and_idempotency() -> Non
             connection_alias="expense_test_db",
             transaction_policy="per_binding_transaction",
             bindings=[invalid, _binding("cleanup")],
+            reviewed_by="qa",
+        )
+
+    unsafe_cleanup = _binding("cleanup")
+    unsafe_cleanup["read_assertion"] = {"mode": "rows_present"}
+    with pytest.raises(ValueError, match="must prove that the target row is absent"):
+        _validate_profile_input(
+            project_id="expense",
+            connection_alias="expense_test_db",
+            transaction_policy="per_binding_transaction",
+            bindings=[_binding("write"), unsafe_cleanup],
             reviewed_by="qa",
         )
 
@@ -177,6 +202,7 @@ def test_plan_coverage_condition_must_use_a_reviewed_readback_column() -> None:
             {
                 "test_data_id": "expense-returned-data",
                 "identity_binding": {
+                    "provider": {"type": "database", "provider_ref": "database.v1"},
                     "source_flow_id": "expense-flow",
                     "source_step_id": "read-expense",
                     "primary_key": {
@@ -198,10 +224,12 @@ def test_plan_coverage_condition_must_use_a_reviewed_readback_column() -> None:
                     },
                 },
                 "coverage_conditions": [
-                    {
-                        "condition_id": "unreviewed-owner-condition",
-                        "path": "rows[0].owner_password",
-                    }
+                        {
+                            "condition_id": "unreviewed-owner-condition",
+                            "source_flow_id": "expense-flow",
+                            "source_step_id": "read-expense",
+                            "path": "rows[0].owner_password",
+                        }
                 ],
             }
         ],
@@ -231,6 +259,86 @@ def test_plan_coverage_condition_must_use_a_reviewed_readback_column() -> None:
     ]
 
 
+@pytest.mark.parametrize("provider_type", ["api", "hybrid"])
+def test_non_database_identity_uses_its_separate_sql_step_for_coverage_validation(
+    provider_type: str,
+) -> None:
+    identity_source = "api" if provider_type == "api" else "ui"
+    identity_step = "read-api" if provider_type == "api" else "read-ui"
+    channel = "http" if provider_type == "api" else "ui"
+    identity = {
+        "provider": {"type": provider_type, "provider_ref": f"{provider_type}.v1"},
+        "source_flow_id": "expense-flow",
+        "source_step_id": identity_step,
+        "primary_key": {
+            "name": "expense_id",
+            "source": "database" if provider_type == "hybrid" else identity_source,
+            "path": "rows[0].expense_id" if provider_type == "hybrid" else "record.id",
+        },
+        "business_unique_keys": [
+            {
+                "name": "expense_number",
+                "source": "database" if provider_type == "hybrid" else identity_source,
+                "path": (
+                    "rows[0].expense_number"
+                    if provider_type == "hybrid"
+                    else "record.expense_number"
+                ),
+            }
+        ],
+        "screen_key": {
+            "name": "expense_number",
+            "source": identity_source,
+            "path": "record.expense_number",
+        },
+        "match_count": {
+            "source": "database" if provider_type == "hybrid" else identity_source,
+            "path": "row_count" if provider_type == "hybrid" else "match_count",
+        },
+    }
+    plan = {
+        "data_sets": [
+            {
+                "test_data_id": "expense-returned-data",
+                "identity_binding": identity,
+                "coverage_conditions": [
+                    {
+                        "condition_id": "status-condition",
+                        "source_flow_id": "expense-flow",
+                        "source_step_id": "read-database",
+                        "path": "rows[0].status",
+                    }
+                ],
+            }
+        ],
+        "generation_flows": [
+            {
+                "flow_id": "expense-flow",
+                "steps": [
+                    {
+                        "step_id": "read-database",
+                        "channel": "sql",
+                        "target": "upsert_expense",
+                    },
+                    {
+                        "step_id": identity_step,
+                        "channel": channel,
+                        "target": "GET /api/expense" if channel == "http" else None,
+                    },
+                ],
+                "cleanup_steps": [],
+            }
+        ],
+    }
+
+    reasons = target_data_module._validate_plan_identity_contracts(
+        plan=plan,
+        bindings={"upsert_expense": _record(_binding("write"))},
+    )
+
+    assert reasons == []
+
+
 def test_copilot_target_data_context_excludes_statements_and_connection_secret() -> None:
     binding = _record(_binding("write"))
     profile = TargetDataProfile(
@@ -247,6 +355,7 @@ def test_copilot_target_data_context_excludes_statements_and_connection_secret()
     serialized = str(context)
 
     assert context["available"] is True
+    assert context["dialect"] == "postgresql"
     assert "upsert_expense" in serialized
     assert "expense_number" in serialized
     assert "statement_text" not in serialized

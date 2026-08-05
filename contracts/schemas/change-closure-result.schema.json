@@ -7,7 +7,7 @@
   "required": ["artifact_type", "schema_version", "closure_result_id", "change_request_id", "project_id", "input_mode", "artifact_refs", "structured_change_refs", "modified_paths", "test_results", "ui_status", "business_coverage_percent", "status", "unresolved_items"],
   "properties": {
     "artifact_type": {"const": "ChangeClosureResult"},
-    "schema_version": {"enum": ["v1", "v2"]},
+    "schema_version": {"enum": ["v1", "v2", "v3"]},
     "closure_result_id": {"type": "string", "minLength": 1},
     "change_request_id": {"type": "string", "minLength": 1},
     "project_id": {"type": "string", "minLength": 1},
@@ -34,6 +34,37 @@
     "business_coverage_percent": {"type": "number", "minimum": 0, "maximum": 100},
     "changed_line_coverage_percent": {"type": "number", "minimum": 0, "maximum": 100},
     "changed_line_coverage_status": {"enum": ["passed", "failed", "missing", "not_required"]},
+    "data_traceability": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["criterion_ref", "test_case_ref", "test_data_id", "ui_step_refs", "test_data_binding_ref", "provider_type", "business_values", "assertion_refs", "screenshot_evidence_refs", "cleanup_status"],
+        "properties": {
+          "criterion_ref": {"type": "string", "minLength": 1},
+          "test_case_ref": {"type": "string", "minLength": 1},
+          "test_data_id": {"type": "string", "minLength": 1},
+          "ui_step_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "test_data_binding_ref": {"type": "string", "minLength": 1},
+          "provider_type": {"enum": ["database", "api", "ui", "hybrid"]},
+          "business_values": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "value"],
+              "properties": {
+                "name": {"type": "string", "minLength": 1},
+                "value": {"type": ["string", "number", "integer", "boolean"]}
+              }
+            }
+          },
+          "assertion_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "screenshot_evidence_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "cleanup_status": {"enum": ["passed", "failed", "not_required"]}
+        }
+      }
+    },
     "status": {"enum": ["passed", "failed", "blocked", "reanalysis_required"]},
     "unresolved_items": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
   },
@@ -53,6 +84,12 @@
       "if": {"properties": {"schema_version": {"const": "v2"}}},
       "then": {
         "required": ["changed_line_coverage_percent", "changed_line_coverage_status"]
+      }
+    },
+    {
+      "if": {"properties": {"schema_version": {"const": "v3"}}},
+      "then": {
+        "required": ["changed_line_coverage_percent", "changed_line_coverage_status", "data_traceability"]
       }
     }
   ]

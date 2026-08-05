@@ -6,10 +6,19 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
+from operamind.application.data_identity import (
+    DataIdentityProvider,
+    DataIdentityResolveRequest,
+    DataIdentitySourceEvidence,
+)
+from operamind.application.run_context import (
+    RunContext,
+    flow_dependencies_from_plan,
+)
 from operamind.application.test_data_coverage import (
     conditions_for_step,
     evaluate_condition,
@@ -17,6 +26,7 @@ from operamind.application.test_data_coverage import (
 )
 from operamind.application.test_data_flow import validate_test_data_plan_artifact
 from operamind.contracts import ContractCatalog
+from operamind.run_context_values import canonical_digest
 
 _VARIABLE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -26,6 +36,16 @@ _NUMERIC_PREDICATE = re.compile(r"^\s*(>=|<=|>|<)\s*(-?\d+(?:\.\d+)?)\s*$")
 
 class TestDataStepBlockedError(RuntimeError):
     """Raised when a required channel binding or environment is unavailable."""
+
+    def __init__(
+        self,
+        message: str,
+        evidence: tuple[TestDataExecutionEvidence, ...] = (),
+        trace: Mapping[str, object] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.evidence = evidence
+        self.trace = dict(trace or {})
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +114,7 @@ class TestDataExecutionEvidence:
     evidence_ref: str
     content_digest: str
     sanitized: bool = True
+    test_data_binding_ref: str | None = None
 
     def __post_init__(self) -> None:
         values = (
@@ -110,9 +131,11 @@ class TestDataExecutionEvidence:
             raise ValueError("Test data Evidence ref/digest is invalid")
         if not self.sanitized:
             raise ValueError("Test data Evidence must be sanitized")
+        if self.test_data_binding_ref is not None and not self.test_data_binding_ref.strip():
+            raise ValueError("Test data Evidence Binding ref must not be blank")
 
     def to_artifact(self) -> dict[str, object]:
-        return {
+        artifact: dict[str, object] = {
             "evidence_id": self.evidence_id,
             "flow_id": self.flow_id,
             "step_id": self.step_id,
@@ -122,6 +145,9 @@ class TestDataExecutionEvidence:
             "content_digest": self.content_digest,
             "sanitized": True,
         }
+        if self.test_data_binding_ref is not None:
+            artifact["test_data_binding_ref"] = self.test_data_binding_ref
+        return artifact
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +155,7 @@ class TestDataStepExecution:
     source_values: Mapping[str, object]
     evidence: tuple[TestDataExecutionEvidence, ...]
     failure_reason: str | None = None
+    trace: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,11 +196,13 @@ class TestDataExecutionEngine:
         *,
         contracts: ContractCatalog,
         executors: Mapping[str, TestDataChannelExecutor],
+        identity_providers: Mapping[str, DataIdentityProvider] | None = None,
         clock: Callable[[], datetime] | None = None,
         progress_sink: Callable[[TestDataExecutionProgress], None] | None = None,
     ) -> None:
         self._contracts = contracts
         self._executors = dict(executors)
+        self._identity_providers = dict(identity_providers or {})
         self._clock = clock or (lambda: datetime.now(UTC))
         self._progress_sink = progress_sink
 
@@ -188,11 +217,33 @@ class TestDataExecutionEngine:
             raise ValueError("Test data execution requires a TestDataPlan Artifact")
         if plan["project_id"] != request.project_id:
             raise ValueError("TestDataPlan Project does not match the execution request")
-        started = self._iso(request.started_at or self._clock())
+        started_at = request.started_at or self._clock()
+        started = self._iso(started_at)
         flows = cast(list[dict[str, Any]], plan["generation_flows"])
+        run_context = (
+            RunContext(
+                project_id=request.project_id,
+                run_id=request.run_id,
+                execution_started_at=started_at,
+                flow_dependencies=flow_dependencies_from_plan(flows),
+            )
+            if plan.get("schema_version") == "v3"
+            else None
+        )
+        if run_context is not None:
+            flows_by_id = {str(flow["flow_id"]): flow for flow in flows}
+            flows = [flows_by_id[flow_id] for flow_id in run_context.execution_order]
         self._emit("run_started", status="running")
         semantic_blockers = (
-            validate_test_data_plan_artifact(plan) if plan.get("schema_version") == "v2" else []
+            validate_test_data_plan_artifact(
+                plan,
+                identity_provider_types={
+                    provider_ref: provider.provider_type
+                    for provider_ref, provider in self._identity_providers.items()
+                },
+            )
+            if plan.get("schema_version") in {"v2", "v3"}
+            else []
         )
         if semantic_blockers:
             blocked_artifact = self._blocked_plan_result(
@@ -201,12 +252,15 @@ class TestDataExecutionEngine:
                 started,
                 flows,
                 reasons=semantic_blockers,
+                run_context=run_context,
             )
             self._contracts.validate_artifact(blocked_artifact)
             self._emit("run_completed", status="blocked")
             return blocked_artifact
         if plan["status"] != "ready":
-            blocked_artifact = self._blocked_plan_result(plan, request, started, flows)
+            blocked_artifact = self._blocked_plan_result(
+                plan, request, started, flows, run_context=run_context
+            )
             self._contracts.validate_artifact(blocked_artifact)
             self._emit("run_completed", status="blocked")
             return blocked_artifact
@@ -224,7 +278,11 @@ class TestDataExecutionEngine:
                 continue
             flow_id = str(flow["flow_id"])
             self._emit("flow_started", flow_id=flow_id, status="running")
-            variables: dict[str, object] = {}
+            variables = (
+                run_context.local_variables_for_flow(flow_id)
+                if run_context is not None
+                else {}
+            )
             observations: dict[str, object] = {}
             cleanup_dependency_ids: set[str] = set()
             attempted_channels: set[str] = set()
@@ -243,7 +301,7 @@ class TestDataExecutionEngine:
                 try:
                     attempted_channels.add(str(step["channel"]))
                     if (
-                        plan.get("schema_version") == "v2"
+                        plan.get("schema_version") in {"v2", "v3"}
                         and step.get("channel") == "ui"
                         and cast(list[object], step.get("test_step_refs", []))
                         and summarize_data_coverage(
@@ -263,20 +321,39 @@ class TestDataExecutionEngine:
                         variables=variables,
                         frozen_bindings=frozen_bindings,
                         phase="setup",
+                        run_context=run_context,
                     )
                     bindings, binding_evidence = _freeze_step_bindings(
                         plan=plan,
                         request=request,
                         flow_id=flow_id,
                         step_id=step_id,
-                        observations=observed,
+                        observations={**observations, **observed},
                         variables=variables,
                         frozen_bindings=frozen_bindings,
                         clock=self._clock,
                         source_evidence=evidence,
+                        identity_source_evidence=(
+                            *(
+                                value
+                                for value in all_evidence
+                                if value.flow_id == flow_id and value.phase == "setup"
+                            ),
+                            *evidence,
+                        ),
+                        identity_providers=self._identity_providers,
                     )
                     for binding in bindings:
+                        if run_context is not None:
+                            run_context.freeze_binding(binding)
                         frozen_bindings[str(binding["test_data_id"])] = binding
+                    if run_context is not None:
+                        step_result["test_data_binding_refs"] = sorted(
+                            {
+                                *cast(list[str], step_result["test_data_binding_refs"]),
+                                *(str(binding["binding_id"]) for binding in bindings),
+                            }
+                        )
                     coverage, coverage_evidence = _evaluate_step_data_coverage(
                         plan=plan,
                         request=request,
@@ -330,6 +407,7 @@ class TestDataExecutionEngine:
                             "blocked",
                             reason,
                             evidence_refs=tuple(value.evidence_ref for value in error.evidence),
+                            trace=error.trace,
                         )
                     )
                     failure_reasons.append(reason)
@@ -354,6 +432,7 @@ class TestDataExecutionEngine:
                             "blocked",
                             reason,
                             evidence_refs=tuple(value.evidence_ref for value in error.evidence),
+                            trace=error.trace,
                         )
                     )
                     failure_reasons.append(reason)
@@ -369,7 +448,19 @@ class TestDataExecutionEngine:
                     )
                 except TestDataStepBlockedError as error:
                     reason = f"{flow['flow_id']}/{step['step_id']}: {error}"
-                    step_results.append(_failed_step(step, "setup", "blocked", reason))
+                    all_evidence.extend(error.evidence)
+                    step_results.append(
+                        _failed_step(
+                            step,
+                            "setup",
+                            "blocked",
+                            reason,
+                            evidence_refs=tuple(
+                                value.evidence_ref for value in error.evidence
+                            ),
+                            trace=error.trace,
+                        )
+                    )
                     failure_reasons.append(reason)
                     flow_status = "blocked"
                     stopped = True
@@ -535,6 +626,7 @@ class TestDataExecutionEngine:
                             variables=variables,
                             frozen_bindings=frozen_bindings,
                             phase="cleanup",
+                            run_context=run_context,
                         )
                         cleanup_results.append(result)
                         cleanup_dependency_ids.add(step_id)
@@ -564,7 +656,19 @@ class TestDataExecutionEngine:
                             )
                             continue
                         reason = f"{flow['flow_id']}/{step['step_id']} cleanup: {error}"
-                        cleanup_results.append(_failed_step(step, "cleanup", "blocked", reason))
+                        all_evidence.extend(error.evidence)
+                        cleanup_results.append(
+                            _failed_step(
+                                step,
+                                "cleanup",
+                                "blocked",
+                                reason,
+                                evidence_refs=tuple(
+                                    value.evidence_ref for value in error.evidence
+                                ),
+                                trace=error.trace,
+                            )
+                        )
                         failure_reasons.append(reason)
                         cleanup_failed = True
                         self._emit(
@@ -636,14 +740,14 @@ class TestDataExecutionEngine:
             str(value["test_data_id"]) for value in cast(list[dict[str, Any]], plan["data_sets"])
         }
         if (
-            plan.get("schema_version") == "v2"
+            plan.get("schema_version") in {"v2", "v3"}
             and not stopped
             and (set(frozen_bindings) != expected_binding_ids)
         ):
             missing = sorted(expected_binding_ids - set(frozen_bindings))
             failure_reasons.append(f"Test data identity bindings were not frozen: {missing}")
             status = "blocked"
-        if plan.get("schema_version") == "v2" and data_coverage["status"] != "passed":
+        if plan.get("schema_version") in {"v2", "v3"} and data_coverage["status"] != "passed":
             failure_reasons.append(
                 f"Executable Test Data Coverage is below 100%: {data_coverage['coverage_percent']}"
             )
@@ -654,9 +758,14 @@ class TestDataExecutionEngine:
                 if any(value["status"] == "blocked" for value in flow_results)
                 else "failed"
             )
+        if run_context is not None:
+            run_context.add_evidence_refs(
+                tuple(value.evidence_ref for value in all_evidence)
+            )
+            _add_v3_binding_refs(flow_results)
         artifact: dict[str, Any] = {
             "artifact_type": "TestDataExecutionResult",
-            "schema_version": "v1",
+            "schema_version": _execution_result_schema_version(plan),
             "execution_result_id": request.execution_result_id,
             "run_id": request.run_id,
             "test_data_plan_id": plan["test_data_plan_id"],
@@ -673,6 +782,9 @@ class TestDataExecutionEngine:
                 "failed" if cleanup_failed else "passed" if cleanup_required else "not_required"
             ),
         }
+        if run_context is not None:
+            artifact["run_context"] = run_context.to_artifact()
+            _validate_v3_binding_references(artifact)
         _validate_evidence_identity(all_evidence)
         self._contracts.validate_artifact(artifact)
         self._emit("run_completed", status=status)
@@ -689,25 +801,33 @@ class TestDataExecutionEngine:
         if not reason.strip():
             raise ValueError("Test data recovery reason must not be blank")
         self._contracts.validate_artifact(plan)
+        started_at = request.started_at or self._clock()
+        flows = cast(list[dict[str, Any]], plan["generation_flows"])
+        flow_results = [_not_run_flow(flow) for flow in flows]
         artifact: dict[str, Any] = {
             "artifact_type": "TestDataExecutionResult",
-            "schema_version": "v1",
+            "schema_version": _execution_result_schema_version(plan),
             "execution_result_id": request.execution_result_id,
             "run_id": request.run_id,
             "test_data_plan_id": plan["test_data_plan_id"],
             "project_id": request.project_id,
             "status": "interrupted",
-            "started_at": self._iso(request.started_at or self._clock()),
+            "started_at": self._iso(started_at),
             "completed_at": self._iso(self._clock()),
-            "flow_results": [
-                _not_run_flow(flow) for flow in cast(list[dict[str, Any]], plan["generation_flows"])
-            ],
+            "flow_results": flow_results,
             "data_bindings": [],
             "data_coverage": summarize_data_coverage(plan=plan, proofs=[]),
             "evidence": [],
             "failure_reasons": [reason],
             "cleanup_status": "interrupted",
         }
+        _attach_empty_v3_run_context(
+            artifact=artifact,
+            plan=plan,
+            request=request,
+            started_at=started_at,
+            flows=flows,
+        )
         self._contracts.validate_artifact(artifact)
         return artifact
 
@@ -722,25 +842,33 @@ class TestDataExecutionEngine:
         if not reason.strip():
             raise ValueError("Test data failure reason must not be blank")
         self._contracts.validate_artifact(plan)
+        started_at = request.started_at or self._clock()
+        flows = cast(list[dict[str, Any]], plan["generation_flows"])
+        flow_results = [_not_run_flow(flow) for flow in flows]
         artifact: dict[str, Any] = {
             "artifact_type": "TestDataExecutionResult",
-            "schema_version": "v1",
+            "schema_version": _execution_result_schema_version(plan),
             "execution_result_id": request.execution_result_id,
             "run_id": request.run_id,
             "test_data_plan_id": plan["test_data_plan_id"],
             "project_id": request.project_id,
             "status": "failed",
-            "started_at": self._iso(request.started_at or self._clock()),
+            "started_at": self._iso(started_at),
             "completed_at": self._iso(self._clock()),
-            "flow_results": [
-                _not_run_flow(flow) for flow in cast(list[dict[str, Any]], plan["generation_flows"])
-            ],
+            "flow_results": flow_results,
             "data_bindings": [],
             "data_coverage": summarize_data_coverage(plan=plan, proofs=[]),
             "evidence": [],
             "failure_reasons": [reason],
             "cleanup_status": "failed",
         }
+        _attach_empty_v3_run_context(
+            artifact=artifact,
+            plan=plan,
+            request=request,
+            started_at=started_at,
+            flows=flows,
+        )
         self._contracts.validate_artifact(artifact)
         return artifact
 
@@ -776,6 +904,7 @@ class TestDataExecutionEngine:
         variables: dict[str, object],
         frozen_bindings: Mapping[str, dict[str, Any]],
         phase: str,
+        run_context: RunContext | None = None,
     ) -> tuple[
         dict[str, Any],
         dict[str, object],
@@ -785,20 +914,41 @@ class TestDataExecutionEngine:
         executor = self._executors.get(channel)
         if executor is None:
             raise TestDataStepBlockedError(f"No executor is configured for channel {channel}")
-        resolved = cast(dict[str, object], _resolve_variables(step["inputs"], variables))
+        visible_variables = (
+            run_context.variables_for_flow(str(flow["flow_id"]))
+            if run_context is not None
+            else variables
+        )
+        resolved = cast(
+            dict[str, object], _resolve_variables(step["inputs"], visible_variables)
+        )
         resolved_step = dict(step)
         if "target" in resolved_step:
-            resolved_step["target"] = _resolve_variables(resolved_step["target"], variables)
+            resolved_step["target"] = _resolve_variables(
+                resolved_step["target"], visible_variables
+            )
         if "playwright" in resolved_step:
-            resolved_step["playwright"] = _resolve_variables(resolved_step["playwright"], variables)
+            resolved_step["playwright"] = _resolve_variables(
+                resolved_step["playwright"], visible_variables
+            )
         binding_ref = str(step.get("data_binding_ref", ""))
+        binding: dict[str, Any] | None = None
         if binding_ref:
-            binding = frozen_bindings.get(binding_ref)
+            binding = (
+                dict(run_context.resolve_binding(binding_ref))
+                if run_context is not None
+                else frozen_bindings.get(binding_ref)
+            )
             if binding is None:
                 raise TestDataStepBlockedError(
-                    f"Data binding is missing for UI operation: {binding_ref}"
+                    f"Data binding is missing for operation: {binding_ref}"
                 )
             resolved_step["_frozen_data_binding"] = binding
+        elif plan.get("schema_version") == "v3" and channel == "ui":
+            # v3 screenshots are data Evidence. Navigation or other screen-level
+            # preparation may run before a record is in scope, but it must not
+            # publish an unbound screenshot that could be mistaken for record proof.
+            resolved_step["_suppress_unbound_screenshot"] = True
         if _is_identity_source_step(
             plan=plan,
             flow_id=str(flow["flow_id"]),
@@ -810,26 +960,29 @@ class TestDataExecutionEngine:
             flow_id=str(flow["flow_id"]),
             step=resolved_step,
             resolved_inputs=resolved,
-            variables=variables,
+            variables=visible_variables,
             phase=phase,
         )
         observations = dict(execution.source_values)
-        if binding_ref:
+        if binding_ref and channel == "ui":
             ui = observations.get("ui")
             if not isinstance(ui, Mapping):
                 raise _TestDataBindingBlockedError(
                     f"Bound UI operation returned no binding verification: {binding_ref}",
                     execution.evidence,
                 )
-            binding = frozen_bindings[binding_ref]
+            if binding is None:
+                raise TestDataStepBlockedError(
+                    f"Data binding is missing for UI operation: {binding_ref}"
+                )
             if ui.get("binding_match_count") != 1:
                 raise _TestDataBindingBlockedError(
-                    f"Bound UI locator did not match exactly once: {binding_ref}",
+                    f"Frozen Binding の record scope が 1 件ではありません: {binding_ref}",
                     execution.evidence,
                 )
-            if ui.get("binding_content_digest") != binding["content_digest"]:
+            if ui.get("observed_identity_digest") != binding["identity_digest"]:
                 raise _TestDataBindingBlockedError(
-                    f"Data binding drift was detected during UI operation: {binding_ref}",
+                    f"Frozen Binding と DOM の身元が一致しません: {binding_ref}",
                     execution.evidence,
                 )
         output_names: list[str] = []
@@ -847,15 +1000,29 @@ class TestDataExecutionEngine:
                     )
                 if exists:
                     variable = str(binding["variable"])
-                    variables[variable] = output
+                    if run_context is not None:
+                        run_context.set_local_variable(
+                            flow_id=str(flow["flow_id"]),
+                            name=variable,
+                            value=output,
+                        )
+                    else:
+                        variables[variable] = output
                     output_names.append(variable)
             for assertion in cast(list[dict[str, Any]], step["postconditions"]):
-                _assert_postcondition(assertion, observations, variables)
+                _assert_postcondition(
+                    assertion,
+                    observations,
+                    (
+                        run_context.variables_for_flow(str(flow["flow_id"]))
+                        if run_context is not None
+                        else visible_variables
+                    ),
+                )
         except (AssertionError, ValueError) as error:
             raise _TestDataStepFailedError(str(error), execution.evidence) from error
         evidence_refs = [value.evidence_ref for value in execution.evidence]
-        return (
-            {
+        step_result: dict[str, Any] = {
                 "step_id": step["step_id"],
                 "sequence": step["sequence"],
                 "channel": channel,
@@ -863,7 +1030,15 @@ class TestDataExecutionEngine:
                 "status": "passed",
                 "output_variables": sorted(output_names),
                 "evidence_refs": evidence_refs,
-            },
+            }
+        if channel == "ui":
+            step_result.update(_ui_step_trace(execution.trace))
+        if run_context is not None:
+            step_result["test_data_binding_refs"] = (
+                [str(binding["binding_id"])] if binding is not None else []
+            )
+        return (
+            step_result,
             observations,
             execution.evidence,
         )
@@ -875,14 +1050,16 @@ class TestDataExecutionEngine:
         started: str,
         flows: list[dict[str, Any]],
         reasons: list[str] | None = None,
+        run_context: RunContext | None = None,
     ) -> dict[str, Any]:
         blocking_reasons = reasons or [
             f"TestDataPlan is blocked: {value}"
             for value in cast(list[str], plan["blocking_reasons"])
         ]
-        return {
+        flow_results = [_not_run_flow(flow) for flow in flows]
+        artifact: dict[str, Any] = {
             "artifact_type": "TestDataExecutionResult",
-            "schema_version": "v1",
+            "schema_version": _execution_result_schema_version(plan),
             "execution_result_id": request.execution_result_id,
             "run_id": request.run_id,
             "test_data_plan_id": plan["test_data_plan_id"],
@@ -890,13 +1067,18 @@ class TestDataExecutionEngine:
             "status": "blocked",
             "started_at": started,
             "completed_at": self._iso(self._clock()),
-            "flow_results": [_not_run_flow(flow) for flow in flows],
+            "flow_results": flow_results,
             "data_bindings": [],
             "data_coverage": summarize_data_coverage(plan=plan, proofs=[]),
             "evidence": [],
             "failure_reasons": blocking_reasons or ["TestDataPlan is blocked"],
             "cleanup_status": "not_required",
         }
+        if run_context is not None:
+            _add_v3_binding_refs(flow_results)
+            artifact["run_context"] = run_context.to_artifact()
+            _validate_v3_binding_references(artifact)
+        return artifact
 
     @staticmethod
     def _iso(value: datetime) -> str:
@@ -962,6 +1144,8 @@ def _freeze_step_bindings(
     frozen_bindings: Mapping[str, dict[str, Any]],
     clock: Callable[[], datetime],
     source_evidence: tuple[TestDataExecutionEvidence, ...],
+    identity_source_evidence: tuple[TestDataExecutionEvidence, ...] | None = None,
+    identity_providers: Mapping[str, DataIdentityProvider] | None = None,
 ) -> tuple[list[dict[str, Any]], tuple[TestDataExecutionEvidence, ...]]:
     candidates = [
         data_set
@@ -983,6 +1167,9 @@ def _freeze_step_bindings(
                 observations=observations,
                 variables=variables,
                 frozen_at=frozen_at,
+                source_evidence=identity_source_evidence or source_evidence,
+                identity_providers=identity_providers or {},
+                include_project_scope=plan.get("schema_version") == "v3",
             )
             for data_set in candidates
         ]
@@ -1015,47 +1202,78 @@ def _freeze_binding(
     observations: Mapping[str, object],
     variables: Mapping[str, object],
     frozen_at: datetime,
+    source_evidence: tuple[TestDataExecutionEvidence, ...],
+    identity_providers: Mapping[str, DataIdentityProvider],
+    include_project_scope: bool = False,
 ) -> dict[str, Any]:
+    del variables
     test_data_id = str(data_set["test_data_id"])
     identity = cast(dict[str, Any], data_set["identity_binding"])
-    count = _identity_source_value(
-        cast(dict[str, Any], identity["match_count"]), observations, variables
-    )
-    if isinstance(count, bool) or not isinstance(count, int) or count != 1:
+    provider_definition = identity.get("provider")
+    if not isinstance(provider_definition, Mapping):
+        raise ValueError(f"{test_data_id} has no configured DataIdentityProvider")
+    provider_ref = str(provider_definition.get("provider_ref", ""))
+    provider_type = str(provider_definition.get("type", ""))
+    provider = identity_providers.get(provider_ref)
+    if provider is None:
         raise ValueError(
-            f"{test_data_id} must resolve to exactly one database row; count={count!r}"
+            f"{test_data_id} DataIdentityProvider is not configured: {provider_ref or '<blank>'}"
         )
-    primary = _frozen_identity_value(
-        test_data_id,
-        "primary key",
-        cast(dict[str, Any], identity["primary_key"]),
-        observations,
-        variables,
-    )
-    business = [
-        _frozen_identity_value(
-            test_data_id,
-            "business unique key",
-            value,
-            observations,
-            variables,
+    if provider.provider_type != provider_type:
+        raise ValueError(
+            f"{test_data_id} DataIdentityProvider type differs: "
+            f"expected={provider_type!r} actual={provider.provider_type!r}"
         )
-        for value in cast(list[dict[str, Any]], identity["business_unique_keys"])
-    ]
-    screen_spec = cast(dict[str, Any], identity["screen_key"])
-    screen = _frozen_identity_value(
-        test_data_id,
-        "screen key",
-        screen_spec,
-        observations,
-        variables,
-    )
-    locator = _render_bound_locator(
-        test_data_id,
-        cast(dict[str, object], screen_spec["locator_template"]),
-        screen["value"],
-    )
     binding_id = _binding_id(request.run_id, test_data_id)
+    provider_result = provider.resolve(
+        DataIdentityResolveRequest(
+            project_id=request.project_id,
+            run_id=request.run_id,
+            test_data_id=test_data_id,
+            provider_ref=provider_ref,
+            identity_definition=identity,
+            observations=observations,
+            source_evidence=tuple(
+                DataIdentitySourceEvidence(
+                    evidence_type=value.evidence_type,
+                    evidence_ref=value.evidence_ref,
+                    sanitized=value.sanitized,
+                )
+                for value in source_evidence
+            ),
+            evidence_ref=(
+                f"artifact://{request.execution_result_id}/data-bindings/{binding_id}"
+            ),
+        )
+    )
+    resolved = provider_result.to_mapping()
+    primary = cast(dict[str, object], resolved["primary_key"])
+    business = cast(list[dict[str, object]], resolved["business_unique_keys"])
+    screen_values = cast(list[dict[str, object]], resolved["screen_identity_values"])
+    record_scope_locator = cast(dict[str, object], resolved["record_scope_locator"])
+    configured_screen_specs = identity.get("screen_identity_values")
+    screen_specs = (
+        cast(list[dict[str, Any]], configured_screen_specs)
+        if isinstance(configured_screen_specs, list) and configured_screen_specs
+        else [cast(dict[str, Any], identity["screen_key"])]
+    )
+    screen = screen_values[0]
+    identity_observations = {
+        "business_unique_keys": [
+            _frozen_dom_identity_observation(value)
+            for value in cast(list[dict[str, Any]], identity["business_unique_keys"])
+        ],
+        "screen_key": _frozen_dom_identity_observation(screen_specs[0]),
+        "screen_identity_values": [
+            _frozen_dom_identity_observation(value) for value in screen_specs
+        ],
+    }
+    identity_digest = _canonical_digest(
+        {
+            "business_unique_keys": business,
+            "screen_identity_values": screen_values,
+        }
+    )
     payload: dict[str, Any] = {
         "binding_id": binding_id,
         "run_id": request.run_id,
@@ -1063,69 +1281,49 @@ def _freeze_binding(
         "binding_mode": identity["binding_mode"],
         "source_flow_id": identity["source_flow_id"],
         "source_step_id": identity["source_step_id"],
+        "identity_provider_type": provider_type,
+        "identity_provider_ref": provider_ref,
         "primary_key": primary,
         "business_unique_keys": business,
+        "screen_identity_values": screen_values,
+        "record_scope_locator": record_scope_locator,
         "screen_key": screen,
-        "screen_locator": locator,
-        "match_count": 1,
+        "screen_locator": record_scope_locator,
+        "identity_observations": identity_observations,
+        "identity_digest": identity_digest,
+        "match_count": provider_result.match_count,
         "frozen_at": frozen_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
     }
+    if include_project_scope:
+        payload["project_id"] = request.project_id
     content_digest = _canonical_digest(payload)
     return {
         **payload,
         "content_digest": content_digest,
-        "evidence_ref": (f"artifact://{request.execution_result_id}/data-bindings/{binding_id}"),
+        "evidence_ref": provider_result.evidence_ref,
     }
 
 
-def _identity_source_value(
-    spec: Mapping[str, object],
-    observations: Mapping[str, object],
-    variables: Mapping[str, object],
-) -> object:
-    source_name = str(spec["source"])
-    source = variables if source_name == "variables" else observations.get(source_name)
-    exists, value = _extract(source, str(spec["path"]))
-    if not exists:
-        raise ValueError(f"identity source was not observed: {source_name}.{spec['path']}")
-    return value
-
-
-def _frozen_identity_value(
-    test_data_id: str,
-    label: str,
-    spec: Mapping[str, object],
-    observations: Mapping[str, object],
-    variables: Mapping[str, object],
-) -> dict[str, object]:
-    value = _identity_source_value(spec, observations, variables)
-    if isinstance(value, str | int | float | bool):
-        scalar = value
-    else:
-        raise ValueError(f"{test_data_id} {label} must be a scalar value")
-    if isinstance(scalar, str) and not scalar.strip():
-        raise ValueError(f"{test_data_id} {label} must not be blank")
-    return {"name": str(spec["name"]), "value": scalar}
-
-
-def _render_bound_locator(
-    test_data_id: str,
-    template: Mapping[str, object],
-    value: object,
-) -> dict[str, object]:
-    text = str(value)
-    by = str(template["by"])
-    if by == "css" and re.fullmatch(r"[A-Za-z0-9._:-]+", text) is None:
+def _frozen_dom_identity_observation(spec: Mapping[str, object]) -> dict[str, object]:
+    raw = spec.get("dom_observation")
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{spec.get('name', '<unknown>')} の DOM 身元観測定義がありません")
+    observation = {"name": str(spec["name"]), **dict(raw)}
+    kind = str(observation.get("kind", ""))
+    if kind not in {"text", "input_value", "attribute"}:
+        raise ValueError(f"{spec['name']} の DOM 身元観測種別が不正です")
+    if kind == "attribute" and not str(observation.get("attribute_name", "")).strip():
+        raise ValueError(f"{spec['name']} の DOM 属性名がありません")
+    locator = observation.get("locator")
+    if locator is not None and (
+        not isinstance(locator, Mapping)
+        or locator.get("exact") is not True
+        or locator.get("frame") is not None
+    ):
         raise ValueError(
-            f"{test_data_id} screen key is unsafe for the reviewed CSS locator template"
+            f"{spec['name']} の DOM 身元 Locator は bound container 内の exact 指定が必須です"
         )
-    locator = {
-        key: (str(item).replace("{{value}}", text) if isinstance(item, str) else item)
-        for key, item in template.items()
-    }
-    if locator.get("exact") is not True:
-        raise ValueError(f"{test_data_id} screen locator must use exact matching")
-    return locator
+    return observation
 
 
 def _binding_evidence(binding: Mapping[str, object]) -> TestDataExecutionEvidence:
@@ -1197,6 +1395,11 @@ def _binding_id(run_id: str, test_data_id: str) -> str:
     return f"test-data-binding-{digest[:32]}"
 
 
+def _execution_result_schema_version(plan: Mapping[str, object]) -> str:
+    version = str(plan.get("schema_version", "v1"))
+    return version if version in {"v2", "v3"} else "v1"
+
+
 def _canonical_digest(value: object) -> str:
     canonical = json.dumps(
         value,
@@ -1205,6 +1408,103 @@ def _canonical_digest(value: object) -> str:
         sort_keys=True,
     )
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _add_v3_binding_refs(flow_results: list[dict[str, Any]]) -> None:
+    for flow in flow_results:
+        refs: set[str] = set()
+        for step in (
+            *cast(list[dict[str, Any]], flow["step_results"]),
+            *cast(list[dict[str, Any]], flow["cleanup_results"]),
+        ):
+            step_refs = cast(list[str], step.setdefault("test_data_binding_refs", []))
+            refs.update(step_refs)
+        flow["test_data_binding_refs"] = sorted(refs)
+
+
+def _validate_v3_binding_references(artifact: Mapping[str, object]) -> None:
+    bindings = cast(list[dict[str, Any]], artifact["data_bindings"])
+    by_id = {str(binding["binding_id"]): binding for binding in bindings}
+    if len(by_id) != len(bindings):
+        raise ValueError("TestDataBinding IDs must be unique within one Run")
+    run_id = str(artifact["run_id"])
+    project_id = str(artifact["project_id"])
+    for binding in bindings:
+        if binding.get("run_id") != run_id or binding.get("project_id") != project_id:
+            raise ValueError("TestDataBinding scope differs from its execution Result")
+        payload = {
+            key: value
+            for key, value in binding.items()
+            if key not in {"content_digest", "evidence_ref"}
+        }
+        if binding.get("content_digest") != canonical_digest(payload):
+            raise ValueError("TestDataBinding digest differs from its frozen content")
+    allowed_unbound_screenshot_refs: set[str] = set()
+    for flow in cast(list[dict[str, Any]], artifact["flow_results"]):
+        flow_refs = set(cast(list[str], flow["test_data_binding_refs"]))
+        step_refs: set[str] = set()
+        for step in (
+            *cast(list[dict[str, Any]], flow["step_results"]),
+            *cast(list[dict[str, Any]], flow["cleanup_results"]),
+        ):
+            refs = set(cast(list[str], step["test_data_binding_refs"]))
+            if not refs.issubset(by_id):
+                raise ValueError("StepResult references a foreign TestDataBinding")
+            step_refs.update(refs)
+            if (
+                step.get("channel") == "ui"
+                and step.get("status") == "blocked"
+                and not refs
+                and isinstance(step.get("failure_stage"), str)
+                and str(step["failure_stage"]).strip()
+            ):
+                allowed_unbound_screenshot_refs.update(
+                    str(value)
+                    for value in cast(list[object], step.get("evidence_refs", []))
+                    if isinstance(value, str)
+                )
+        if flow_refs != step_refs:
+            raise ValueError("FlowResult TestDataBinding refs differ from its Steps")
+    for evidence in cast(list[dict[str, Any]], artifact["evidence"]):
+        binding_ref = evidence.get("test_data_binding_ref")
+        if binding_ref is not None and str(binding_ref) not in by_id:
+            raise ValueError("Evidence references a foreign TestDataBinding")
+        if (
+            evidence.get("evidence_type") == "screenshot"
+            and binding_ref is None
+            and evidence.get("evidence_ref") not in allowed_unbound_screenshot_refs
+        ):
+            raise ValueError("Screenshot Evidence has no current TestDataBinding")
+    run_context = cast(Mapping[str, object], artifact["run_context"])
+    runtime_variables = cast(
+        Mapping[str, object], run_context.get("runtime_variables", {})
+    )
+    if runtime_variables.get("operamind_run_id") != run_id:
+        raise ValueError("RunContext Run identity differs")
+    context_bindings = cast(list[dict[str, Any]], run_context["frozen_data_bindings"])
+    if context_bindings != [by_id[key] for key in sorted(by_id)]:
+        raise ValueError("RunContext frozen bindings differ from execution Result")
+
+
+def _attach_empty_v3_run_context(
+    *,
+    artifact: dict[str, Any],
+    plan: Mapping[str, object],
+    request: TestDataExecutionRequest,
+    started_at: datetime,
+    flows: list[dict[str, Any]],
+) -> None:
+    if plan.get("schema_version") != "v3":
+        return
+    context = RunContext(
+        project_id=request.project_id,
+        run_id=request.run_id,
+        execution_started_at=started_at,
+        flow_dependencies=flow_dependencies_from_plan(flows),
+    )
+    _add_v3_binding_refs(cast(list[dict[str, Any]], artifact["flow_results"]))
+    artifact["run_context"] = context.to_artifact()
+    _validate_v3_binding_references(artifact)
 
 
 def _satisfies(actual: object, expected: object) -> bool:
@@ -1271,8 +1571,9 @@ def _failed_step(
     reason: str,
     *,
     evidence_refs: tuple[str, ...] = (),
+    trace: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    return {
+    result: dict[str, object] = {
         "step_id": step["step_id"],
         "sequence": step["sequence"],
         "channel": step["channel"],
@@ -1282,6 +1583,27 @@ def _failed_step(
         "evidence_refs": list(evidence_refs),
         "failure_reason": reason,
     }
+    if step.get("channel") == "ui" and trace:
+        result.update(_ui_step_trace(trace))
+    return result
+
+
+def _ui_step_trace(value: Mapping[str, object]) -> dict[str, object]:
+    """Project the public UI execution trace onto the StepResult."""
+
+    result: dict[str, object] = {}
+    for key in (
+        "failure_stage",
+        "driver",
+        "locator_type",
+        "record_scope_match_count",
+        "action_locator_match_count",
+        "observed_screen_identity_values",
+        "observed_identity_digest",
+    ):
+        if key in value and value[key] is not None:
+            result[key] = value[key]
+    return result
 
 
 def _not_run_step(

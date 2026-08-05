@@ -10,11 +10,23 @@ from operamind.infrastructure.test_data.executors import (
     HttpTransport,
     PlaywrightActionResult,
     PlaywrightCapabilityError,
+    PlaywrightPreActionBlockedError,
     PlaywrightSession,
     PlaywrightUiTestDataExecutor,
     SafeHttpTestDataExecutor,
     UiDataActionResult,
     UrllibHttpTransport,
+)
+from operamind.infrastructure.test_data.existing import (
+    ReviewedExistingDataObservationResolver,
+)
+from operamind.infrastructure.test_data.identity import (
+    ApiDataIdentityProvider,
+    DatabaseDataIdentityProvider,
+    HybridDataIdentityProvider,
+    UiDataIdentityProvider,
+    configured_data_identity_providers,
+    default_data_identity_providers,
 )
 from operamind.infrastructure.test_data.target_data import (
     ProjectSqlTestDataExecutor,
@@ -23,25 +35,47 @@ from operamind.infrastructure.test_data.target_data import (
     TargetDataProfileRepository,
     TargetDataSecretStore,
 )
+from operamind.infrastructure.test_data.target_database import (
+    PostgresqlTargetDatabaseAdapter,
+    TargetDatabaseAdapter,
+    TargetDatabaseAdapterRegistry,
+    TargetDatabaseExecutionError,
+    TargetDatabaseExecutionResult,
+    default_target_database_adapters,
+)
 
 __all__ = [
+    "ApiDataIdentityProvider",
     "BoundFixtureTestDataExecutor",
     "BoundSqlTestDataExecutor",
     "BoundUiTestDataExecutor",
     "ComputerUseActionResult",
     "ComputerUseSession",
+    "DatabaseDataIdentityProvider",
     "HttpResponse",
     "HttpTransport",
+    "HybridDataIdentityProvider",
     "PlaywrightActionResult",
     "PlaywrightCapabilityError",
+    "PlaywrightPreActionBlockedError",
     "PlaywrightSession",
     "PlaywrightUiTestDataExecutor",
+    "PostgresqlTargetDatabaseAdapter",
     "ProjectSqlTestDataExecutor",
+    "ReviewedExistingDataObservationResolver",
     "SafeHttpTestDataExecutor",
     "TargetDataBinding",
     "TargetDataProfile",
     "TargetDataProfileRepository",
     "TargetDataSecretStore",
+    "TargetDatabaseAdapter",
+    "TargetDatabaseAdapterRegistry",
+    "TargetDatabaseExecutionError",
+    "TargetDatabaseExecutionResult",
     "UiDataActionResult",
+    "UiDataIdentityProvider",
     "UrllibHttpTransport",
+    "configured_data_identity_providers",
+    "default_data_identity_providers",
+    "default_target_database_adapters",
 ]

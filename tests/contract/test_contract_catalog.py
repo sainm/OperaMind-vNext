@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,107 @@ def test_unknown_artifact_type_is_rejected() -> None:
         catalog.validate_artifact({"artifact_type": "Unknown", "schema_version": "v1"})
 
     assert captured.value.report.issues[0].code == "artifact.unknown_type"
+
+
+def test_v2_test_data_plan_requires_real_dom_identity_observations() -> None:
+    catalog = ContractCatalog.load(ROOT / "contracts")
+    artifact = json.loads(
+        (ROOT / "contracts/examples/test-data-plan.v2.example.json").read_text()
+    )
+
+    catalog.validate_artifact(artifact)
+    identity = artifact["data_sets"][0]["identity_binding"]
+    without_business_observation = deepcopy(artifact)
+    del without_business_observation["data_sets"][0]["identity_binding"][
+        "business_unique_keys"
+    ][0]["dom_observation"]
+    without_screen_observation = deepcopy(artifact)
+    del without_screen_observation["data_sets"][0]["identity_binding"]["screen_key"][
+        "dom_observation"
+    ]
+
+    assert identity["business_unique_keys"][0]["dom_observation"]
+    with pytest.raises(ArtifactValidationError):
+        catalog.validate_artifact(without_business_observation)
+    with pytest.raises(ArtifactValidationError):
+        catalog.validate_artifact(without_screen_observation)
+
+
+def test_execution_result_dom_identity_locator_cannot_escape_its_container() -> None:
+    catalog = ContractCatalog.load(ROOT / "contracts")
+    artifact = json.loads(
+        (ROOT / "contracts/examples/test-data-execution-result.v1.example.json").read_text()
+    )
+    artifact["schema_version"] = "v2"
+    artifact["data_bindings"] = [
+        {
+            "binding_id": "binding-expense",
+            "run_id": "test-data-run-expense",
+            "test_data_id": "expense-returned-data",
+            "binding_mode": "generated",
+            "source_flow_id": "flow-expense",
+            "source_step_id": "create-expense",
+            "identity_provider_type": "database",
+            "identity_provider_ref": "database.v1",
+            "primary_key": {"name": "id", "value": 41},
+            "business_unique_keys": [
+                {"name": "expense_number", "value": "EXP-041"}
+            ],
+            "screen_key": {"name": "expense_number", "value": "EXP-041"},
+            "screen_identity_values": [
+                {"name": "expense_number", "value": "EXP-041"}
+            ],
+            "screen_locator": {
+                "by": "css",
+                "value": "[data-expense-number='EXP-041']",
+                "exact": True,
+            },
+            "record_scope_locator": {
+                "by": "css",
+                "value": "[data-expense-number='EXP-041']",
+                "exact": True,
+            },
+            "identity_observations": {
+                "business_unique_keys": [
+                    {
+                        "name": "expense_number",
+                        "kind": "attribute",
+                        "attribute_name": "data-expense-number",
+                        "locator": {
+                            "by": "css",
+                            "value": ":scope",
+                            "exact": True,
+                        },
+                    }
+                ],
+                "screen_key": {
+                    "name": "expense_number",
+                    "kind": "attribute",
+                    "attribute_name": "data-expense-number",
+                },
+            },
+            "identity_digest": "b" * 64,
+            "match_count": 1,
+            "frozen_at": "2026-08-04T00:00:00Z",
+            "content_digest": "c" * 64,
+            "evidence_ref": "evidence://visiondemo/test-data-run-expense/binding-expense",
+        }
+    ]
+
+    catalog.validate_artifact(artifact)
+    incomplete_current = deepcopy(artifact)
+    del incomplete_current["data_bindings"][0]["identity_digest"]
+    with pytest.raises(ArtifactValidationError):
+        catalog.validate_artifact(incomplete_current)
+    legacy_with_v2_binding = deepcopy(artifact)
+    legacy_with_v2_binding["schema_version"] = "v1"
+    with pytest.raises(ArtifactValidationError):
+        catalog.validate_artifact(legacy_with_v2_binding)
+    artifact["data_bindings"][0]["identity_observations"]["business_unique_keys"][0][
+        "locator"
+    ]["frame"] = "iframe#foreign"
+    with pytest.raises(ArtifactValidationError):
+        catalog.validate_artifact(artifact)
 
 
 def test_ready_ingestion_artifact_requires_exact_build_and_profile_identity() -> None:

@@ -13,6 +13,7 @@ const state = {
   revisionProposal: null,
   impactNodePath: null,
   documentLearning: null,
+  identityProfilesLoaded: false,
   commandKeys: new Map()
 };
 
@@ -46,6 +47,21 @@ const elements = {
   projectRescanButton: document.getElementById("projectRescanButton"),
   projectReindexButton: document.getElementById("projectReindexButton"),
   projectRetryButton: document.getElementById("projectRetryButton"),
+  existingTestDataButton: document.getElementById("existingTestDataButton"),
+  fixedDataIdentifiersButton: document.getElementById("fixedDataIdentifiersButton"),
+  existingTestDataDialog: document.getElementById("existingTestDataDialog"),
+  existingTestDataForm: document.getElementById("existingTestDataForm"),
+  existingDataName: document.getElementById("existingDataName"),
+  existingBusinessValue: document.getElementById("existingBusinessValue"),
+  existingTestCaseRef: document.getElementById("existingTestCaseRef"),
+  existingRetainAfterTest: document.getElementById("existingRetainAfterTest"),
+  submitExistingTestDataButton: document.getElementById("submitExistingTestDataButton"),
+  existingTestDataList: document.getElementById("existingTestDataList"),
+  fixedDataIdentifiersDialog: document.getElementById("fixedDataIdentifiersDialog"),
+  plannedDataCount: document.getElementById("plannedDataCount"),
+  frozenDataCount: document.getElementById("frozenDataCount"),
+  plannedDataIdentifiers: document.getElementById("plannedDataIdentifiers"),
+  frozenDataIdentifiers: document.getElementById("frozenDataIdentifiers"),
   documentLearningDialog: document.getElementById("documentLearningDialog"),
   documentLearningStatus: document.getElementById("documentLearningStatus"),
   documentLearningContent: document.getElementById("documentLearningContent"),
@@ -65,9 +81,11 @@ const elements = {
   projectWorkspaceRoot: document.getElementById("projectWorkspaceRoot"),
   projectDocumentRoots: document.getElementById("projectDocumentRoots"),
   projectTestBaseUrl: document.getElementById("projectTestBaseUrl"),
+  projectTargetDataDialect: document.getElementById("projectTargetDataDialect"),
   projectTargetDataAlias: document.getElementById("projectTargetDataAlias"),
   projectTargetDataDsn: document.getElementById("projectTargetDataDsn"),
   projectTargetDataBindings: document.getElementById("projectTargetDataBindings"),
+  projectDataIdentityProfiles: document.getElementById("projectDataIdentityProfiles"),
   projectTargetDataStatus: document.getElementById("projectTargetDataStatus"),
   projectFormStatus: document.getElementById("projectFormStatus"),
   submitProjectButton: document.getElementById("submitProjectButton"),
@@ -166,7 +184,7 @@ function renderProjectSummary(project) {
     : "UI テスト URL 未設定";
   const targetData = project.target_data_profile;
   elements.projectTargetDataSummary.textContent = targetData
-    ? `DB データ準備: ${targetData.connection_alias} · Binding ${Number(targetData.query_binding_ids?.length || 0).toLocaleString("ja-JP")} 件${targetData.secret_configured ? "" : " · Secret 未設定"}`
+    ? `DB データ準備: ${targetData.dialect || "postgresql"} / ${targetData.connection_alias} · Binding ${Number(targetData.query_binding_ids?.length || 0).toLocaleString("ja-JP")} 件${targetData.secret_configured ? "" : " · Secret 未設定"}`
     : "DB データ準備: 未設定（HTTP/UI のみ）";
   const targetProject = project.target_project || {};
   const qualityMissing = targetProject.quality_missing_signals || [];
@@ -196,6 +214,143 @@ function renderProjectSummary(project) {
       : "旧登録 · Git 基線情報なし";
     return `<li>${view.escapeHtml(root)}<small>${view.escapeHtml(baselineLabel)}</small></li>`;
   }).join("");
+}
+
+async function openExistingTestDataPage() {
+  if (!state.projectId) return showNotice("先にプロジェクトを選択してください。", "error");
+  elements.existingTestDataDialog.showModal();
+  await loadExistingTestData();
+}
+
+async function loadExistingTestData() {
+  if (!state.projectId) return;
+  elements.existingTestDataList.innerHTML = '<p class="empty">実データを確認しています。</p>';
+  const result = await api(`/api/v1/projects/${encodeURIComponent(state.projectId)}/existing-test-data`);
+  const items = result.registrations || [];
+  elements.existingTestDataList.innerHTML = items.length
+    ? items.map(renderExistingTestData).join("")
+    : '<p class="empty">登録済みの既存テストデータはありません。</p>';
+  for (const button of elements.existingTestDataList.querySelectorAll("[data-confirm-registration]")) {
+    button.addEventListener("click", () => confirmExistingTestData(button.dataset.confirmRegistration));
+  }
+}
+
+function renderExistingTestData(item) {
+  const statusLabels = {candidate: "確認待ち", confirmed: "確認済み", blocked: "阻断"};
+  const summary = Object.entries(item.business_summary || {}).map(([name, value]) =>
+    `<div><dt>${view.escapeHtml(name)}</dt><dd>${view.escapeHtml(String(value))}</dd></div>`
+  ).join("");
+  const reasons = (item.blocking_reasons || []).map(reason =>
+    `<li>${view.escapeHtml(reason)}</li>`
+  ).join("");
+  return `<article class="data-identity-card ${view.escapeHtml(item.status)}">
+    <header>
+      <div><strong>${view.escapeHtml(item.data_name)}</strong><small>${view.escapeHtml(item.test_case_ref)}</small></div>
+      <span class="status-badge ${item.status === "confirmed" ? "success" : item.status === "blocked" ? "error" : "neutral"}">${view.escapeHtml(statusLabels[item.status] || item.status)}</span>
+    </header>
+    <p class="data-business-key"><span>業務一意値</span><strong>${view.escapeHtml(item.business_unique_value)}</strong></p>
+    ${summary ? `<dl class="business-summary">${summary}</dl>` : ""}
+    <div class="data-card-meta">
+      <span>${view.escapeHtml(item.provider_type || "Provider 未確定")}</span>
+      <span>一致 ${item.match_count == null ? "未確定" : Number(item.match_count).toLocaleString("ja-JP")} 件</span>
+      <span>Evidence ${Number(item.evidence_count || 0).toLocaleString("ja-JP")} 件</span>
+      <span>${item.retain_after_test ? "終了後も保持" : "終了後に Cleanup"}</span>
+    </div>
+    ${reasons ? `<ul class="data-blocking-reasons">${reasons}</ul>` : ""}
+    ${item.status === "candidate" ? `<div class="data-card-actions"><button class="primary" type="button" data-confirm-registration="${view.escapeHtml(item.registration_id)}">この一件を確認</button></div>` : ""}
+  </article>`;
+}
+
+async function registerExistingTestData(event) {
+  event.preventDefault();
+  if (!state.projectId) return;
+  const scope = `existing-test-data:${state.projectId}:${crypto.randomUUID()}`;
+  elements.submitExistingTestDataButton.disabled = true;
+  try {
+    const result = await api(`/api/v1/projects/${encodeURIComponent(state.projectId)}/existing-test-data`, {
+      method: "POST",
+      idempotencyScope: scope,
+      body: JSON.stringify({
+        data_name: elements.existingDataName.value.trim(),
+        business_unique_value: elements.existingBusinessValue.value.trim(),
+        test_case_ref: elements.existingTestCaseRef.value.trim(),
+        retain_after_test: elements.existingRetainAfterTest.checked
+      })
+    });
+    clearCommandKey(scope);
+    elements.existingTestDataForm.reset();
+    await loadExistingTestData();
+    showNotice(
+      result.registration?.status === "candidate"
+        ? "実データが一件だけ一致しました。業務摘要を確認してください。"
+        : "実データを一意に確認できないため阻断しました。",
+      result.registration?.status === "candidate" ? "success" : "error"
+    );
+  } catch (error) {
+    showNotice(error.message, "error");
+  } finally {
+    elements.submitExistingTestDataButton.disabled = false;
+  }
+}
+
+async function confirmExistingTestData(registrationId) {
+  const scope = `existing-test-data-confirm:${state.projectId}:${registrationId}`;
+  try {
+    await api(`/api/v1/projects/${encodeURIComponent(state.projectId)}/existing-test-data/${encodeURIComponent(registrationId)}/confirm`, {
+      method: "POST",
+      idempotencyScope: scope,
+      body: "{}"
+    });
+    clearCommandKey(scope);
+    await loadExistingTestData();
+    showNotice("既存データを adopted TestDataPlan データとして確認しました。", "success");
+  } catch (error) {
+    showNotice(error.message, "error");
+  }
+}
+
+async function openFixedDataIdentifiersPage() {
+  if (!state.projectId) return showNotice("先にプロジェクトを選択してください。", "error");
+  elements.fixedDataIdentifiersDialog.showModal();
+  elements.plannedDataIdentifiers.innerHTML = '<p class="empty">計画を読み込んでいます。</p>';
+  elements.frozenDataIdentifiers.innerHTML = '<p class="empty">凍結結果を読み込んでいます。</p>';
+  const result = await api(`/api/v1/projects/${encodeURIComponent(state.projectId)}/fixed-data-identifiers`);
+  elements.plannedDataCount.textContent = `${Number(result.planned_count || 0).toLocaleString("ja-JP")} 件`;
+  elements.frozenDataCount.textContent = `${Number(result.frozen_count || 0).toLocaleString("ja-JP")} 件`;
+  elements.plannedDataIdentifiers.innerHTML = result.planned?.length
+    ? result.planned.map(renderPlannedDataIdentifier).join("")
+    : '<p class="empty">確認済みの計画データはありません。</p>';
+  elements.frozenDataIdentifiers.innerHTML = result.frozen?.length
+    ? result.frozen.map(renderFrozenDataIdentifier).join("")
+    : '<p class="empty">まだ Run で凍結されたデータはありません。</p>';
+}
+
+function renderPlannedDataIdentifier(item) {
+  return `<article class="data-identity-card planned">
+    <header><div><strong>${view.escapeHtml(item.data_name)}</strong><small>${(item.test_case_refs || []).map(view.escapeHtml).join("、")}</small></div><span class="status-badge neutral">実行前</span></header>
+    <p class="data-business-key"><span>業務一意値</span><strong>${view.escapeHtml(item.business_unique_value)}</strong></p>
+    <div class="data-card-meta"><span>${view.escapeHtml(item.provider_type || "未確定")}</span><span>${item.retain_after_test ? "終了後も保持" : "終了後に Cleanup"}</span></div>
+  </article>`;
+}
+
+function renderFrozenDataIdentifier(item) {
+  const businessValues = [...(item.business_values || []), ...(item.screen_values || [])];
+  const values = businessValues.map(value =>
+    `<div><dt>${view.escapeHtml(value.name || "識別値")}</dt><dd>${view.escapeHtml(String(value.value ?? ""))}</dd></div>`
+  ).join("");
+  const usages = (item.usages || []).map(usage =>
+    `<li><strong>${view.escapeHtml(usage.flow_id)}</strong><span>${view.escapeHtml(usage.phase)} / ${view.escapeHtml(usage.step_id)} / ${view.escapeHtml(usage.status)}</span></li>`
+  ).join("");
+  const evidence = (item.evidence || []).map(value =>
+    `<li><strong>${view.escapeHtml(value.evidence_type)}</strong><span>${view.escapeHtml(value.phase)} / ${view.escapeHtml(value.step_id)}</span><small>${view.escapeHtml(value.evidence_ref)}</small></li>`
+  ).join("");
+  return `<article class="data-identity-card frozen">
+    <header><div><strong>${view.escapeHtml(item.data_name)}</strong><small>${view.escapeHtml(item.test_data_token || "Token 未記録")}</small></div><span class="status-badge success">凍結済み</span></header>
+    ${values ? `<dl class="business-summary">${values}</dl>` : ""}
+    <div class="data-card-meta"><span>Run ${view.escapeHtml(item.run_id)}</span><span>${view.escapeHtml(item.provider_type || "Provider 不明")}</span><span>Cleanup ${view.escapeHtml(item.cleanup?.status || "未実行")}</span></div>
+    <details><summary>使用箇所 ${Number(item.usages?.length || 0).toLocaleString("ja-JP")} 件</summary><ul class="binding-trace-list">${usages || "<li>使用記録なし</li>"}</ul></details>
+    <details><summary>Evidence ${Number(item.evidence?.length || 0).toLocaleString("ja-JP")} 件</summary><ul class="binding-trace-list">${evidence || "<li>Evidence なし</li>"}</ul></details>
+  </article>`;
 }
 
 async function openDocumentLearningDialog() {
@@ -467,9 +622,12 @@ function openNewProjectDialog() {
   elements.projectWorkspaceRoot.value = "";
   elements.projectDocumentRoots.value = "";
   elements.projectTestBaseUrl.value = "";
+  elements.projectTargetDataDialect.value = "postgresql";
   elements.projectTargetDataAlias.value = "";
   elements.projectTargetDataDsn.value = "";
   elements.projectTargetDataBindings.value = "";
+  elements.projectDataIdentityProfiles.value = "";
+  state.identityProfilesLoaded = true;
   elements.projectTargetDataStatus.textContent = "必要な場合だけ Alias、接続 Secret、確認済み Binding を設定してください。";
   elements.projectId.disabled = false;
   elements.projectWorkspaceRoot.disabled = false;
@@ -490,9 +648,12 @@ async function openEditProjectDialog() {
   elements.projectWorkspaceRoot.value = project.workspace_root || "";
   elements.projectDocumentRoots.value = (project.document_roots || []).join("\n");
   elements.projectTestBaseUrl.value = project.test_base_url || "";
+  elements.projectTargetDataDialect.value = project.target_data_profile?.dialect || "postgresql";
   elements.projectTargetDataAlias.value = project.target_data_profile?.connection_alias || "";
   elements.projectTargetDataDsn.value = "";
   elements.projectTargetDataBindings.value = "";
+  elements.projectDataIdentityProfiles.value = "";
+  state.identityProfilesLoaded = false;
   elements.projectTargetDataStatus.textContent = project.target_data_profile
     ? "確認済み Binding を読み込んでいます。接続 Secret は画面へ戻しません。"
     : "必要な場合だけ Alias、接続 Secret、確認済み Binding を設定してください。";
@@ -509,6 +670,7 @@ async function openEditProjectDialog() {
       const result = await api(`/api/v1/projects/${encodeURIComponent(project.project_id)}/target-data-profile`);
       const profile = result.profile;
       if (profile) {
+        elements.projectTargetDataDialect.value = profile.dialect || "postgresql";
         elements.projectTargetDataAlias.value = profile.connection_alias || "";
         elements.projectTargetDataBindings.value = JSON.stringify(profile.bindings || [], null, 2);
         elements.projectTargetDataStatus.textContent = profile.secret_configured
@@ -518,6 +680,13 @@ async function openEditProjectDialog() {
     } catch (error) {
       elements.projectTargetDataStatus.textContent = error.message;
     }
+  }
+  try {
+    const result = await api(`/api/v1/projects/${encodeURIComponent(project.project_id)}/data-identity-profiles`);
+    elements.projectDataIdentityProfiles.value = JSON.stringify(result.profiles || [], null, 2);
+    state.identityProfilesLoaded = true;
+  } catch (error) {
+    elements.projectTargetDataStatus.textContent = error.message;
   }
 }
 
@@ -546,9 +715,22 @@ async function createProject(event) {
     .map(value => value.trim())
     .filter(Boolean);
   const testBaseUrl = elements.projectTestBaseUrl.value.trim();
+  const targetDataDialect = elements.projectTargetDataDialect.value;
   const targetDataAlias = elements.projectTargetDataAlias.value.trim();
   const targetDataDsn = elements.projectTargetDataDsn.value.trim();
   const targetDataBindingsText = elements.projectTargetDataBindings.value.trim();
+  const identityProfilesText = elements.projectDataIdentityProfiles.value.trim();
+  let identityProfiles = [];
+  if (identityProfilesText) {
+    try {
+      identityProfiles = JSON.parse(identityProfilesText);
+    } catch (_error) {
+      return setProjectFormStatus("DataIdentityProvider は JSON 配列で入力してください。", "error");
+    }
+    if (!Array.isArray(identityProfiles)) {
+      return setProjectFormStatus("DataIdentityProvider は JSON 配列で入力してください。", "error");
+    }
+  }
   let targetDataBindings = null;
   if (targetDataAlias || targetDataDsn || targetDataBindingsText) {
     if (!targetDataAlias || !targetDataBindingsText) {
@@ -591,6 +773,7 @@ async function createProject(event) {
         method: "PUT",
         idempotencyScope: `project-target-data:${projectId}`,
         body: JSON.stringify({
+          dialect: targetDataDialect,
           connection_alias: targetDataAlias,
           ...(targetDataDsn ? {connection_dsn: targetDataDsn} : {}),
           transaction_policy: "per_binding_transaction",
@@ -598,6 +781,14 @@ async function createProject(event) {
         })
       });
       clearCommandKey(`project-target-data:${projectId}`);
+    }
+    if (identityProfilesText || (editing && state.identityProfilesLoaded)) {
+      await api(`/api/v1/projects/${encodeURIComponent(projectId)}/data-identity-profiles`, {
+        method: "PUT",
+        idempotencyScope: `project-data-identity:${projectId}`,
+        body: JSON.stringify({profiles: identityProfiles})
+      });
+      clearCommandKey(`project-data-identity:${projectId}`);
     }
     elements.projectDialog.close();
     await loadProjects(result.project.project_id);
@@ -870,6 +1061,7 @@ elements.projectSelect.addEventListener("change", async () => {
 });
 elements.openVsCodeButton.addEventListener("click", openSelectedProjectInVsCode);
 elements.projectForm.addEventListener("submit", createProject);
+elements.existingTestDataForm.addEventListener("submit", registerExistingTestData);
 elements.requestForm.addEventListener("submit", createRequest);
 elements.requirementText.addEventListener("input", updateRequirementCount);
 elements.testCaseRevisionForm.addEventListener("submit", proposeTestCaseRevision);
@@ -877,6 +1069,8 @@ document.getElementById("newRequestButton").addEventListener("click", openReques
 document.getElementById("newProjectButton").addEventListener("click", openNewProjectDialog);
 elements.emptyNewProjectButton.addEventListener("click", openNewProjectDialog);
 elements.editProjectButton.addEventListener("click", openEditProjectDialog);
+elements.existingTestDataButton.addEventListener("click", () => openExistingTestDataPage().catch(error => showNotice(error.message, "error")));
+elements.fixedDataIdentifiersButton.addEventListener("click", () => openFixedDataIdentifiersPage().catch(error => showNotice(error.message, "error")));
 elements.projectPreflightButton.addEventListener("click", showProjectPreflight);
 elements.documentLearningButton.addEventListener("click", () => openDocumentLearningDialog().catch(error => showNotice(error.message, "error")));
 elements.projectRescanButton.addEventListener("click", () => requestProjectOnboarding("rescan"));
@@ -894,6 +1088,9 @@ document.getElementById("closeDialogButton").addEventListener("click", () => ele
 document.getElementById("cancelDialogButton").addEventListener("click", () => elements.requestDialog.close());
 document.getElementById("closeProjectDialogButton").addEventListener("click", () => elements.projectDialog.close());
 document.getElementById("cancelProjectDialogButton").addEventListener("click", () => elements.projectDialog.close());
+document.getElementById("closeExistingTestDataButton").addEventListener("click", () => elements.existingTestDataDialog.close());
+document.getElementById("refreshExistingTestDataButton").addEventListener("click", () => loadExistingTestData().catch(error => showNotice(error.message, "error")));
+document.getElementById("closeFixedDataIdentifiersButton").addEventListener("click", () => elements.fixedDataIdentifiersDialog.close());
 document.getElementById("closeDocumentLearningButton").addEventListener("click", () => elements.documentLearningDialog.close());
 document.getElementById("closeTestCaseRevisionButton").addEventListener("click", () => elements.testCaseRevisionDialog.close());
 document.getElementById("cancelTestCaseRevisionButton").addEventListener("click", () => elements.testCaseRevisionDialog.close());

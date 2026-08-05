@@ -1,7 +1,11 @@
 from copy import deepcopy
 from typing import Any, cast
 
-from operamind.application.test_data_flow import validate_test_data_plan_artifact
+from operamind.application.test_data_flow import (
+    _runtime_variable_uses,
+    _validate_v3_run_context_contract,
+    validate_test_data_plan_artifact,
+)
 
 
 def test_cross_screen_flow_passes_outputs_to_later_screen() -> None:
@@ -36,6 +40,16 @@ def test_cross_screen_flow_blocks_unknown_variable_inside_playwright_action() ->
     ]
 
 
+def test_plan_rejects_secret_shaped_fields_before_execution() -> None:
+    flow = _cross_screen_flow()
+    steps = cast(list[dict[str, Any]], flow["steps"])
+    steps[0]["inputs"] = {"password": "must-never-enter-the-plan"}
+
+    reasons = validate_test_data_plan_artifact(_plan(flow))
+
+    assert any("Secret-like field" in reason and "password" in reason for reason in reasons)
+
+
 def test_cross_screen_flow_requires_reviewed_ui_screen_and_action_refs() -> None:
     flow = _cross_screen_flow()
     del cast(list[dict[str, Any]], flow["steps"])[0]["screen_ref"]
@@ -66,6 +80,47 @@ def test_v2_plan_rejects_unproved_existing_target_system_data() -> None:
     ]
 
 
+def test_v2_identity_requires_configured_provider_and_rejects_camel_case_secret() -> None:
+    plan = _v2_plan(_cross_screen_flow())
+    identity = cast(
+        dict[str, Any],
+        cast(list[dict[str, Any]], plan["data_sets"])[0]["identity_binding"],
+    )
+    del identity["provider"]
+    cast(dict[str, Any], identity["primary_key"])["name"] = "accessToken"
+
+    reasons = validate_test_data_plan_artifact(plan)
+
+    assert "expense-draft: DataIdentityProvider is not configured" in reasons
+    assert "expense-draft: Secret-like fields cannot be identity values" in reasons
+
+    identity["provider"] = {"type": "database", "provider_ref": "unknown.v1"}
+    reasons = validate_test_data_plan_artifact(plan)
+    assert (
+        "expense-draft: DataIdentityProvider is not configured for database:unknown.v1"
+        in reasons
+    )
+
+
+def test_v2_hybrid_identity_requires_an_executable_step_for_each_real_source() -> None:
+    plan = _v2_plan(_cross_screen_flow())
+    identity = cast(
+        dict[str, Any],
+        cast(list[dict[str, Any]], plan["data_sets"])[0]["identity_binding"],
+    )
+    identity["provider"] = {"type": "hybrid", "provider_ref": "hybrid.v1"}
+    cast(list[dict[str, Any]], identity["business_unique_keys"])[0].update(
+        {"source": "api", "path": "body.record.expense_number"}
+    )
+
+    reasons = validate_test_data_plan_artifact(plan)
+
+    assert (
+        "expense-draft: hybrid identity has no executable source steps for channels ['http']"
+        in reasons
+    )
+
+
 def test_v2_plan_does_not_infer_data_generation_from_action_words() -> None:
     flow = _cross_screen_flow()
     step = cast(list[dict[str, Any]], flow["steps"])[0]
@@ -75,6 +130,70 @@ def test_v2_plan_does_not_infer_data_generation_from_action_words() -> None:
     assert validate_test_data_plan_artifact(plan) == [
         "expense-draft: generated identity requires an earlier explicit data generation step"
     ]
+
+
+def test_v3_run_context_rejects_dependency_variable_and_cleanup_scope_violations() -> None:
+    data_sets = [
+        {
+            "test_data_id": "adopted-expense",
+            "runtime_variable_writes": [
+                {"variable": "operamind_run_id", "target_field": "status"}
+            ],
+                "identity_binding": {
+                    "binding_mode": "adopted",
+                    "provider": {"type": "database"},
+                    "primary_key": {"source": "database"},
+                    "business_unique_keys": [{"source": "database"}],
+                    "screen_key": {"source": "database"},
+                    "match_count": {"source": "database"},
+                },
+        }
+    ]
+    flows = [
+        {
+            "flow_id": "flow-a",
+            "depends_on_flows": ["flow-a", "flow-b", "missing-flow"],
+            "test_data_refs": ["adopted-expense"],
+            "steps": [
+                {
+                    "step_id": "unsafe-run-variable",
+                    "channel": "ui",
+                    "target": "{{test_data_token}}",
+                    "playwright": {},
+                    "inputs": {"status": "{{test_data_token}}"},
+                }
+            ],
+            "cleanup_steps": [
+                {
+                    "step_id": "cleanup-bound-record",
+                    "channel": "ui",
+                    "data_binding_ref": "adopted-expense",
+                    "postconditions": [],
+                }
+            ],
+        },
+        {
+            "flow_id": "flow-b",
+            "depends_on_flows": ["flow-a"],
+            "test_data_refs": [],
+            "steps": [],
+            "cleanup_steps": [],
+        },
+    ]
+
+    reasons = _validate_v3_run_context_contract(data_sets, flows)
+
+    assert any("do not exist" in reason for reason in reasons)
+    assert any("cannot depend on itself" in reason for reason in reasons)
+    assert any("dependency cycle" in reason for reason in reasons)
+    assert any("adopted data cannot overwrite" in reason for reason in reasons)
+    assert any("system Run variables" in reason for reason in reasons)
+    assert any("not explicitly allowed" in reason for reason in reasons)
+    assert any("must verify match count 0" in reason for reason in reasons)
+    assert any("absence verification is missing" in reason for reason in reasons)
+    assert _runtime_variable_uses(
+        {"payload": [{"token": "{{test_data_token}}"}, 41]}
+    ) == {("test_data_token", "payload[0].token")}
 
 
 def test_v2_plan_rejects_delete_disguised_as_data_generation() -> None:
@@ -122,6 +241,40 @@ def test_v2_plan_accepts_typed_ui_data_generation_without_keyword_guessing() -> 
     plan = _v2_plan(flow)
 
     assert validate_test_data_plan_artifact(plan) == []
+
+
+def test_v2_plan_requires_reviewed_pre_action_state_for_mutating_ui_action() -> None:
+    plan = _v2_plan(_cross_screen_flow())
+    action = cast(
+        dict[str, Any],
+        cast(list[dict[str, Any]], plan["generation_flows"])[0]["steps"][0][
+            "playwright"
+        ],
+    )
+    del action["pre_action_observations"]
+
+    assert (
+        "expense-approval-chain/create-expense: state-changing Playwright action requires "
+        "reviewed pre_action_observations" in validate_test_data_plan_artifact(plan)
+    )
+
+
+def test_v2_plan_rejects_secret_pre_action_observation() -> None:
+    plan = _v2_plan(_cross_screen_flow())
+    action = cast(
+        dict[str, Any],
+        cast(list[dict[str, Any]], plan["generation_flows"])[0]["steps"][0][
+            "playwright"
+        ],
+    )
+    cast(list[dict[str, Any]], action["pre_action_observations"])[0]["key"] = (
+        "accessToken"
+    )
+
+    assert (
+        "expense-approval-chain/create-expense: pre-action observation cannot expose a "
+        "Secret field" in validate_test_data_plan_artifact(plan)
+    )
 
 
 def test_v2_plan_requires_explicit_record_scope_and_consistent_binding() -> None:
@@ -418,6 +571,7 @@ def _v2_plan(flow: dict[str, Any]) -> dict[str, Any]:
     plan = _plan(value)
     plan["schema_version"] = "v2"
     cast(list[dict[str, Any]], plan["data_sets"])[0]["identity_binding"] = {
+        "provider": {"type": "database", "provider_ref": "database.v1"},
         "binding_mode": "generated",
         "source_flow_id": "expense-approval-chain",
         "source_step_id": "read-expense-identity",
@@ -427,12 +581,20 @@ def _v2_plan(flow: dict[str, Any]) -> dict[str, Any]:
                 "name": "expense_number",
                 "source": "database",
                 "path": "rows[0].expense_number",
+                "dom_observation": {
+                    "kind": "attribute",
+                    "attribute_name": "data-observed-expense-number",
+                },
             }
         ],
         "screen_key": {
             "name": "expense_number",
             "source": "database",
             "path": "rows[0].expense_number",
+            "dom_observation": {
+                "kind": "attribute",
+                "attribute_name": "data-observed-expense-number",
+            },
             "locator_template": {
                 "by": "css",
                 "value": "[data-expense-number='{{value}}']",
@@ -476,6 +638,13 @@ def _cross_screen_flow() -> dict[str, Any]:
                 "playwright": {
                     "action": "click",
                     "mask_locators": [],
+                    "pre_action_observations": [
+                        {
+                            "key": "expense_entry_title",
+                            "kind": "title",
+                            "expected": "経費登録",
+                        }
+                    ],
                     "observations": [{"key": "saved_expense.id", "kind": "attribute"}],
                 },
                 "inputs": {"status": "差戻し"},

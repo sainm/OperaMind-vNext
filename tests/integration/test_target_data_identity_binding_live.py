@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import html
 import http.server
+import json
 import os
 import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 from uuid import uuid4
 
 import psycopg
@@ -15,6 +16,7 @@ import pytest
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 
+from operamind.application.change_closure import ChangeClosureInput, _data_traceability
 from operamind.application.test_data_execution import (
     TestDataExecutionEngine as DataExecutionEngine,
 )
@@ -28,6 +30,7 @@ from operamind.infrastructure.test_data import (
     ProjectSqlTestDataExecutor,
     TargetDataProfileRepository,
     TargetDataSecretStore,
+    default_data_identity_providers,
 )
 
 ROOT = Path(__file__).parents[2]
@@ -56,6 +59,7 @@ def test_real_postgresql_identity_readback_blocks_non_unique_match(
                 )
         engine = DataExecutionEngine(
             contracts=ContractCatalog.load(ROOT / "contracts"),
+            identity_providers=default_data_identity_providers(),
             executors={
                 "sql": ProjectSqlTestDataExecutor(
                     control_database_url=DATABASE_URL,
@@ -79,6 +83,7 @@ def test_real_postgresql_identity_readback_blocks_non_unique_match(
             ),
         )
 
+        assert result["schema_version"] == "v2"
         assert result["status"] == "blocked", result["failure_reasons"]
         assert result["data_bindings"] == []
         assert result["data_coverage"]["coverage_percent"] == 0
@@ -109,6 +114,7 @@ def test_real_database_condition_failure_blocks_before_testplan_ui(
     try:
         result = DataExecutionEngine(
             contracts=ContractCatalog.load(ROOT / "contracts"),
+            identity_providers=default_data_identity_providers(),
             executors={
                 "sql": ProjectSqlTestDataExecutor(
                     control_database_url=DATABASE_URL,
@@ -157,18 +163,20 @@ def test_real_database_condition_failure_blocks_before_testplan_ui(
     reason="OPERAMIND_PLAYWRIGHT_EXECUTOR_LIVE is not set",
 )
 @pytest.mark.parametrize(
-    ("screen_row_mode", "expected_status", "expected_match_count"),
+    ("screen_row_mode", "expected_status", "expected_reason"),
     [
-        ("unique", "passed", 1),
-        ("missing", "blocked", 0),
-        ("duplicate", "blocked", 2),
+        ("unique", "passed", None),
+        ("missing", "blocked", "count=0"),
+        ("duplicate", "blocked", "count=2"),
+            ("identity_mismatch", "blocked", "observed_identity_digest が一致しません"),
+        ("identity_missing", "blocked", "DOM 業務キー観測値がありません"),
     ],
 )
 def test_real_postgresql_binding_drives_exact_playwright_record_scope(
     tmp_path: Path,
     screen_row_mode: str,
     expected_status: str,
-    expected_match_count: int,
+    expected_reason: str | None,
 ) -> None:
     assert DATABASE_URL is not None
     project_id, schema, target_role = _prepare_target_project(
@@ -197,6 +205,7 @@ def test_real_postgresql_binding_drives_exact_playwright_record_scope(
     try:
         engine = DataExecutionEngine(
             contracts=ContractCatalog.load(ROOT / "contracts"),
+            identity_providers=default_data_identity_providers(),
             executors={
                 "sql": ProjectSqlTestDataExecutor(
                     control_database_url=DATABASE_URL,
@@ -221,6 +230,7 @@ def test_real_postgresql_binding_drives_exact_playwright_record_scope(
             ),
         )
 
+        assert result["schema_version"] == "v2"
         assert result["status"] == expected_status
         assert result["data_coverage"]["status"] == "passed"
         assert result["data_coverage"]["coverage_percent"] == 100
@@ -245,6 +255,7 @@ def test_real_postgresql_binding_drives_exact_playwright_record_scope(
             "value": "[data-expense-number='EXP-BOUND-001']",
             "exact": True,
         }
+        assert binding["identity_digest"] != binding["content_digest"]
         assert any(
             item["evidence_type"] == "data_binding"
             and item["content_digest"] == binding["content_digest"]
@@ -252,16 +263,174 @@ def test_real_postgresql_binding_drives_exact_playwright_record_scope(
         )
         bound_step = result["flow_results"][0]["step_results"][2]
         assert bound_step["status"] == expected_status
-        if expected_status == "blocked":
+        if expected_reason is not None:
             assert any(
-                f"count={expected_match_count}" in reason
-                for reason in result["failure_reasons"]
+                expected_reason in reason for reason in result["failure_reasons"]
             )
+        else:
+            step_logs = [
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in (tmp_path / "evidence").rglob("td-step_log-*.json")
+            ]
+            observed = next(
+                value["observed"]
+                for value in step_logs
+                if "observed_identity_digest" in value.get("observed", {})
+            )
+            assert observed["observed_identity_digest"] == binding["identity_digest"]
+            assert observed["observed_identity_digest"] != binding["content_digest"]
+            assert observed["observed_screen_key"] == {
+                "name": "expense_number",
+                "value": "EXP-BOUND-001",
+            }
         with psycopg.connect(DATABASE_URL) as connection, connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT expense_number, status FROM {schema}.expenses ORDER BY expense_number"
             )
             assert cursor.fetchall() == [("EXP-DISTRACTOR-999", "APPROVED")]
+    finally:
+        browser.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        _drop_target_project(DATABASE_URL, project_id, schema, target_role)
+
+
+@pytest.mark.skipif(DATABASE_URL is None, reason="OPERAMIND_TEST_DATABASE_URL is not set")
+@pytest.mark.skipif(
+    os.getenv("OPERAMIND_PLAYWRIGHT_EXECUTOR_LIVE") != "1",
+    reason="OPERAMIND_PLAYWRIGHT_EXECUTOR_LIVE is not set",
+)
+def test_v3_adopted_binding_survives_multiple_flows_and_drives_bound_cleanup(
+    tmp_path: Path,
+) -> None:
+    """Real DB + Chrome proof for the Run-level adopted Binding closure."""
+
+    assert DATABASE_URL is not None
+    project_id, schema, target_role = _prepare_target_project(
+        database_url=DATABASE_URL,
+        secret_root=tmp_path / "secrets",
+        binding_factory=lambda target_schema: [
+            _read_by_number_binding("read_expense_by_number", target_schema),
+            _cleanup_binding("cleanup_expense", target_schema),
+        ],
+    )
+    with psycopg.connect(DATABASE_URL) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            f"INSERT INTO {schema}.expenses (expense_number, status) VALUES (%s, %s)",
+            ("EXP-ADOPTED-001", "RETURNED"),
+        )
+        cursor.execute(
+            f"INSERT INTO {schema}.expenses (expense_number, status) VALUES (%s, %s)",
+            ("EXP-DISTRACTOR-999", "APPROVED"),
+        )
+    server = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        _database_page_handler(DATABASE_URL, schema, row_mode="unique"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    browser = PlaywrightUiTestDataExecutor(
+        evidence_store=LocalEvidenceStore(tmp_path / "evidence"),
+        browser_channel=os.getenv("OPERAMIND_PLAYWRIGHT_CHANNEL", "chrome"),
+    )
+    try:
+        plan = _adopted_v3_plan(project_id)
+        result = DataExecutionEngine(
+            contracts=ContractCatalog.load(ROOT / "contracts"),
+            identity_providers=default_data_identity_providers(),
+            executors={
+                "sql": ProjectSqlTestDataExecutor(
+                    control_database_url=DATABASE_URL,
+                    evidence_store=LocalEvidenceStore(tmp_path / "evidence"),
+                    secret_store=TargetDataSecretStore(tmp_path / "secrets"),
+                ),
+                "ui": browser,
+            },
+        ).execute(
+            plan=plan,
+            request=DataExecutionRequest(
+                execution_result_id=f"result-v3-{project_id}",
+                run_id=f"run-v3-{project_id}",
+                project_id=project_id,
+                base_url=f"http://127.0.0.1:{server.server_port}",
+            ),
+        )
+
+        assert result["schema_version"] == "v3"
+        assert result["status"] == "passed", result["failure_reasons"]
+        assert result["cleanup_status"] == "passed"
+        assert [flow["flow_id"] for flow in result["flow_results"]] == [
+            "identity-flow",
+            "list-flow",
+            "detail-flow",
+        ]
+        assert result["run_context"]["flow_dependencies"] == {
+            "detail-flow": ["list-flow"],
+            "identity-flow": [],
+            "list-flow": ["identity-flow"],
+        }
+        binding = result["data_bindings"][0]
+        assert binding["binding_mode"] == "adopted"
+        assert binding["business_unique_keys"] == [
+            {"name": "expense_number", "value": "EXP-ADOPTED-001"}
+        ]
+        assert result["run_context"]["frozen_data_bindings"] == [binding]
+        bound_steps = [
+            step
+            for flow in result["flow_results"]
+            for step in [*flow["step_results"], *flow["cleanup_results"]]
+            if step["test_data_binding_refs"]
+        ]
+        assert {step["step_id"] for step in bound_steps} == {
+            "read-and-bind-expense",
+            "verify-list-record",
+            "verify-detail-record",
+            "delete-bound-record",
+            "verify-database-absence",
+        }
+        assert all(
+            step["test_data_binding_refs"] == [binding["binding_id"]]
+            for step in bound_steps
+        )
+        screenshots = [
+            item for item in result["evidence"] if item["evidence_type"] == "screenshot"
+        ]
+        assert screenshots
+        assert all(
+            item["test_data_binding_ref"] == binding["binding_id"]
+            for item in screenshots
+        )
+        traces = _data_traceability(
+            ChangeClosureInput(
+                change_request={},
+                orchestration={},
+                test_plan={},
+                test_data_plan=plan,
+                coverage_report={},
+                edit_result=None,
+                test_data_result=result,
+                ui_result=None,
+            )
+        )
+        assert {
+            (trace["criterion_ref"], trace["test_case_ref"])
+            for trace in traces
+        } == {
+            ("expense-returned-criterion", "expense-list-case"),
+            ("expense-detail-criterion", "expense-detail-case"),
+        }
+        assert all(trace["test_data_binding_ref"] == binding["binding_id"] for trace in traces)
+        assert all(trace["screenshot_evidence_refs"] for trace in traces)
+        assert all(trace["cleanup_status"] == "passed" for trace in traces)
+        assert result["run_context"]["runtime_variables"]["test_data_token"].startswith(
+            "OM-E2E-"
+        )
+        with psycopg.connect(DATABASE_URL) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT expense_number FROM {schema}.expenses ORDER BY expense_number"
+            )
+            assert cursor.fetchall() == [("EXP-DISTRACTOR-999",)]
     finally:
         browser.close()
         server.shutdown()
@@ -429,6 +598,31 @@ def _read_binding(binding_id: str, schema: str) -> dict[str, object]:
     }
 
 
+def _read_by_number_binding(binding_id: str, schema: str) -> dict[str, object]:
+    statement = (
+        f"SELECT id, expense_number, status, title, amount, employee_id, owner_id "
+        f"FROM {schema}.expenses "
+        "WHERE expense_number = %(expense_number)s AND status = %(status)s"
+    )
+    return {
+        "query_binding_id": binding_id,
+        "operation": "read",
+        "statement_text": statement,
+        "target_schema": schema,
+        "target_table": "expenses",
+        "parameter_columns": {
+            "expense_number": "expense_number",
+            "status": "status",
+        },
+        "input_constraints": _constraints("expense_number", "status"),
+        "read_after_write_statement": statement,
+        "read_assertion": {"mode": "row_count", "count": 1},
+        "identity_contract": _identity_contract(),
+        "cleanup_binding_id": None,
+        "idempotency_policy": "read_only",
+    }
+
+
 def _cleanup_binding(binding_id: str, schema: str) -> dict[str, object]:
     return {
         "query_binding_id": binding_id,
@@ -549,6 +743,18 @@ def _identity_plan(
                             "value": ".select-record",
                             "exact": True,
                         },
+                        "pre_action_observations": [
+                            {
+                                "key": "select_record_enabled",
+                                "kind": "enabled",
+                                "locator": {
+                                    "by": "css",
+                                    "value": ".select-record",
+                                    "exact": True,
+                                },
+                                "expected": True,
+                            }
+                        ],
                         "observations": [
                             {
                                 "key": "status",
@@ -630,6 +836,7 @@ def _identity_plan(
                 "setup_actions": [],
                 "cleanup_policy": "delete_after_run" if generated else "retain",
                 "identity_binding": {
+                    "provider": {"type": "database", "provider_ref": "database.v1"},
                     "binding_mode": binding_mode,
                     "source_flow_id": "identity-flow",
                     "source_step_id": "read-and-bind-expense",
@@ -643,12 +850,20 @@ def _identity_plan(
                             "name": "expense_number",
                             "source": "database",
                             "path": "rows[0].expense_number",
+                            "dom_observation": {
+                                "kind": "attribute",
+                                "attribute_name": "data-observed-expense-number",
+                            },
                         }
                     ],
                     "screen_key": {
                         "name": "expense_number",
                         "source": "database",
                         "path": "rows[0].expense_number",
+                        "dom_observation": {
+                            "kind": "attribute",
+                            "attribute_name": "data-observed-expense-number",
+                        },
                         "locator_template": {
                             "by": "css",
                             "value": "[data-expense-number='{{value}}']",
@@ -733,6 +948,326 @@ def _identity_plan(
     }
 
 
+def _adopted_v3_plan(project_id: str) -> dict[str, Any]:
+    identity = {
+        "provider": {"type": "database", "provider_ref": "database.v1"},
+        "binding_mode": "adopted",
+        "source_flow_id": "identity-flow",
+        "source_step_id": "read-and-bind-expense",
+        "primary_key": {"name": "id", "source": "database", "path": "rows[0].id"},
+        "business_unique_keys": [
+            {
+                "name": "expense_number",
+                "source": "database",
+                "path": "rows[0].expense_number",
+                "dom_observation": {
+                    "kind": "attribute",
+                    "attribute_name": "data-observed-expense-number",
+                },
+            }
+        ],
+        "screen_key": {
+            "name": "expense_number",
+            "source": "database",
+            "path": "rows[0].expense_number",
+            "dom_observation": {
+                "kind": "attribute",
+                "attribute_name": "data-observed-expense-number",
+            },
+            "locator_template": {
+                "by": "css",
+                "value": "[data-expense-number='{{value}}']",
+                "exact": True,
+            },
+        },
+        "match_count": {"source": "database", "path": "row_count"},
+    }
+    source_step = {
+        "step_id": "read-and-bind-expense",
+        "sequence": 1,
+        "channel": "sql",
+        "business_action": "既存経費を DB から一意に接管する",
+        "data_effect": "none",
+        "test_step_refs": [],
+        "target": "read_expense_by_number",
+        "inputs": {"expense_number": "EXP-ADOPTED-001", "status": "RETURNED"},
+        "depends_on": [],
+        "output_bindings": [],
+        "postconditions": [
+            {
+                "assertion_id": "adopted-expense-is-unique",
+                "observe_via": "database",
+                "subject": "row_count",
+                "operator": "equals",
+                "expected": 1,
+            }
+        ],
+    }
+
+    def open_step(step_id: str, sequence: int, path: str) -> dict[str, object]:
+        return {
+            "step_id": step_id,
+            "sequence": sequence,
+            "channel": "ui",
+            "business_action": "経費画面を開く",
+            "test_step_refs": [],
+            "screen_ref": step_id,
+            "ui_action_ref": "open",
+            "operation_scope": "screen",
+            "playwright": {
+                "action": "goto",
+                "path": path,
+                "mask_locators": [],
+                "observations": [{"key": "title", "kind": "title"}],
+            },
+            "inputs": {},
+            "depends_on": [],
+            "output_bindings": [],
+            "postconditions": [
+                {
+                    "assertion_id": f"{step_id}-opened",
+                    "observe_via": "ui",
+                    "subject": "title",
+                    "operator": "equals",
+                    "expected": "Expense list",
+                }
+            ],
+        }
+
+    def verify_step(step_id: str, sequence: int, depends_on: str) -> dict[str, object]:
+        return {
+            "step_id": step_id,
+            "sequence": sequence,
+            "channel": "ui",
+            "business_action": "凍結した経費レコードだけを確認する",
+            "test_step_refs": [step_id],
+            "screen_ref": step_id,
+            "ui_action_ref": "verify-bound-record",
+            "operation_scope": "bound_record",
+            "data_binding_ref": "expense-bound",
+            "playwright": {
+                "action": "click",
+                "locator": {"by": "css", "value": ".select-record", "exact": True},
+                "pre_action_observations": [
+                    {
+                        "key": "select_record_enabled",
+                        "kind": "enabled",
+                        "locator": {
+                            "by": "css",
+                            "value": ".select-record",
+                            "exact": True,
+                        },
+                        "expected": True,
+                    }
+                ],
+                "mask_locators": [],
+                "observations": [
+                    {
+                        "key": "status",
+                        "kind": "text",
+                        "locator": {"by": "css", "value": ".status", "exact": True},
+                    },
+                    {
+                        "key": "selected_record",
+                        "kind": "text",
+                        "locator": {
+                            "by": "css",
+                            "value": ".selected-record",
+                            "exact": True,
+                        },
+                    },
+                ],
+            },
+            "inputs": {},
+            "depends_on": [depends_on],
+            "output_bindings": [],
+            "postconditions": [
+                {
+                    "assertion_id": f"{step_id}-status",
+                    "observe_via": "ui",
+                    "subject": "status",
+                    "operator": "equals",
+                    "expected": "RETURNED",
+                },
+                {
+                    "assertion_id": f"{step_id}-selected",
+                    "observe_via": "ui",
+                    "subject": "selected_record",
+                    "operator": "equals",
+                    "expected": "selected",
+                },
+            ],
+        }
+
+    cleanup_ui = {
+        "step_id": "delete-bound-record",
+        "sequence": 1,
+        "channel": "ui",
+        "business_action": "凍結した経費レコードだけを削除する",
+        "data_effect": "deletes",
+        "test_step_refs": [],
+        "screen_ref": "expense-detail",
+        "ui_action_ref": "delete-bound-record",
+        "operation_scope": "bound_record",
+        "data_binding_ref": "expense-bound",
+        "playwright": {
+            "action": "click",
+            "locator": {"by": "css", "value": ".delete-record", "exact": True},
+            "pre_action_observations": [
+                {
+                    "key": "delete_record_enabled",
+                    "kind": "enabled",
+                    "locator": {
+                        "by": "css",
+                        "value": ".delete-record",
+                        "exact": True,
+                    },
+                    "expected": True,
+                }
+            ],
+            "mask_locators": [],
+            "observations": [
+                {
+                    "key": "remaining_count",
+                    "kind": "count",
+                    "locator": {
+                        "by": "css",
+                        "value": "[data-expense-number='EXP-ADOPTED-001']",
+                        "exact": True,
+                    },
+                }
+            ],
+        },
+        "inputs": {},
+        "depends_on": ["verify-detail-record"],
+        "output_bindings": [],
+        "postconditions": [
+            {
+                "assertion_id": "ui-record-is-absent",
+                "observe_via": "ui",
+                "subject": "cleanup_record_scope_match_count",
+                "operator": "count_equals",
+                "expected": 0,
+            }
+        ],
+    }
+    cleanup_database = {
+        "step_id": "verify-database-absence",
+        "sequence": 2,
+        "channel": "sql",
+        "business_action": "削除後に DB で対象が存在しないことを確認する",
+        "data_effect": "deletes",
+        "test_step_refs": [],
+        "target": "cleanup_expense",
+        "data_binding_ref": "expense-bound",
+        "inputs": {"expense_number": "EXP-ADOPTED-001", "status": "RETURNED"},
+        "depends_on": ["delete-bound-record"],
+        "output_bindings": [],
+        "postconditions": [
+            {
+                "assertion_id": "database-record-is-absent",
+                "observe_via": "database",
+                "subject": "row_count",
+                "operator": "count_equals",
+                "expected": 0,
+            }
+        ],
+    }
+    final_assertion = {
+        "assertion_id": "expense-adopted-flow-passed",
+        "observe_via": "test",
+        "subject": "expense-ui",
+        "operator": "satisfies",
+        "expected": "passed",
+    }
+    return {
+        "artifact_type": "TestDataPlan",
+        "schema_version": "v3",
+        "test_data_plan_id": f"plan-v3-{project_id}",
+        "test_plan_id": f"test-plan-v3-{project_id}",
+        "project_id": project_id,
+        "status": "ready",
+        "data_sets": [
+            {
+                "test_data_id": "expense-bound",
+                "test_case_refs": ["expense-list-case", "expense-detail-case"],
+                "setup_actions": [],
+                "cleanup_policy": "delete_after_run",
+                "identity_binding": identity,
+                "coverage_conditions": [
+                    {
+                        "condition_id": "adopted-expense-status",
+                        "criterion_ref": "expense-returned-criterion",
+                        "test_case_ref": "expense-list-case",
+                        "test_data_id": "expense-bound",
+                        "condition_kind": "status",
+                        "source_flow_id": "identity-flow",
+                        "source_step_id": "read-and-bind-expense",
+                        "path": "rows[0].status",
+                        "operator": "equals",
+                        "expected": "RETURNED",
+                    },
+                    {
+                        "condition_id": "adopted-expense-detail-status",
+                        "criterion_ref": "expense-detail-criterion",
+                        "test_case_ref": "expense-detail-case",
+                        "test_data_id": "expense-bound",
+                        "condition_kind": "status",
+                        "source_flow_id": "identity-flow",
+                        "source_step_id": "read-and-bind-expense",
+                        "path": "rows[0].status",
+                        "operator": "equals",
+                        "expected": "RETURNED",
+                    },
+                ],
+                "runtime_variable_writes": [],
+            }
+        ],
+        "generation_flows": [
+            {
+                "flow_id": "identity-flow",
+                "title": "既存経費を一意に接管する",
+                "depends_on_flows": [],
+                "test_data_refs": ["expense-bound"],
+                "test_case_refs": ["expense-list-case", "expense-detail-case"],
+                "steps": [source_step],
+                "final_assertions": [final_assertion],
+                "cleanup_policy": "retain",
+                "cleanup_steps": [],
+            },
+            {
+                "flow_id": "list-flow",
+                "title": "一覧画面で同じ経費を確認する",
+                "depends_on_flows": ["identity-flow"],
+                "test_data_refs": ["expense-bound"],
+                "test_case_refs": ["expense-list-case"],
+                "steps": [
+                    open_step("open-list-screen", 1, "/"),
+                    verify_step("verify-list-record", 2, "open-list-screen"),
+                ],
+                "final_assertions": [final_assertion],
+                "cleanup_policy": "retain",
+                "cleanup_steps": [],
+            },
+            {
+                "flow_id": "detail-flow",
+                "title": "詳細画面で同じ経費を確認して削除する",
+                "depends_on_flows": ["list-flow"],
+                "test_data_refs": ["expense-bound"],
+                "test_case_refs": ["expense-detail-case"],
+                "steps": [
+                    open_step("open-detail-screen", 1, "/detail"),
+                    verify_step("verify-detail-record", 2, "open-detail-screen"),
+                ],
+                "final_assertions": [final_assertion],
+                "cleanup_policy": "delete_after_run",
+                "cleanup_steps": [cleanup_ui, cleanup_database],
+            },
+        ],
+        "blocking_reasons": [],
+    }
+
+
 def _database_page_handler(
     database_url: str,
     schema: str,
@@ -752,13 +1287,29 @@ def _database_page_handler(
                 rows = [*rows, *rows]
             rendered_rows = "".join(
                 (
-                    f"<tr data-expense-number='{html.escape(str(number), quote=True)}'>"
+                    f"<tr data-expense-number='{html.escape(str(number), quote=True)}'"
+                    + (
+                        ""
+                        if row_mode == "identity_missing"
+                        else " data-observed-expense-number='"
+                        + html.escape(
+                            "EXP-DOM-OTHER"
+                            if row_mode == "identity_mismatch"
+                            else str(number),
+                            quote=True,
+                        )
+                        + "'"
+                    )
+                    + ">"
                     f"<td>{html.escape(str(number))}</td>"
                     f"<td class='status'>{html.escape(str(status))}</td>"
                     "<td><button class='select-record' type='button' "
                     "onclick=\"this.parentElement.querySelector('.selected-record')"
                     ".textContent='selected'\">select</button>"
-                    "<span class='selected-record'></span></td></tr>"
+                    "<span class='selected-record'></span>"
+                    f"<form method='post' action='/delete?expense_number={quote(str(number))}'>"
+                    "<button class='delete-record' type='submit'>delete</button>"
+                    "</form></td></tr>"
                 )
                 for number, status in rows
             )
@@ -771,6 +1322,21 @@ def _database_page_handler(
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def do_POST(self) -> None:
+            parsed = urlsplit(self.path)
+            values = parse_qs(parsed.query).get("expense_number", [])
+            if parsed.path != "/delete" or len(values) != 1:
+                self.send_error(400)
+                return
+            with psycopg.connect(database_url) as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    f"DELETE FROM {schema}.expenses WHERE expense_number = %s",
+                    (values[0],),
+                )
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.end_headers()
 
         def log_message(self, *_args: object) -> None:
             return

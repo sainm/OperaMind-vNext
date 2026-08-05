@@ -9,19 +9,26 @@ from operamind.application.copilot_coding_task import (
     CopilotCodingTaskPublishRequest,
     CopilotCodingTaskService,
     _bound_task_scope,
+    _confirmed_existing_test_data_context,
     _is_rejected_code_scope_revision,
     _looks_like_natural_language,
     _public_canonical_fact,
+    _public_data_identity_providers,
     _public_document_discovery,
     _public_execution_scope,
     _public_task_artifact,
     _public_workspace,
     _stage_contract,
+    _validate_confirmed_existing_test_data_usage,
     _validate_planning_alignment,
     _validate_planning_artifact_scope,
     build_bridge_task_view,
 )
-from operamind.application.test_data_ui_verification import _ui_scenario_evidence
+from operamind.application.test_data_ui_verification import (
+    _ui_scenario_binding_refs,
+    _ui_scenario_evidence,
+)
+from operamind.run_context_values import canonical_digest
 
 
 def _planning() -> tuple[dict[str, object], dict[str, object]]:
@@ -81,6 +88,73 @@ def _planning() -> tuple[dict[str, object], dict[str, object]]:
         ],
     }
     return test_plan, test_data_plan
+
+
+def test_confirmed_existing_data_is_exposed_and_must_be_consumed_by_its_case() -> None:
+    identity_binding = {
+        "provider": {"type": "database", "provider_ref": "database.v1"},
+        "binding_mode": "adopted",
+    }
+    reviewed_data_set = {
+        "test_data_id": "adopted-expense-1",
+        "test_case_refs": ["case-1"],
+        "setup_actions": [],
+        "cleanup_policy": "retain",
+        "identity_binding": identity_binding,
+        "runtime_variable_writes": [],
+    }
+    reviewed_flow = {
+        "flow_id": "adopt-expense-1",
+        "steps": [{"step_id": "lookup-existing", "channel": "sql"}],
+        "cleanup_steps": [],
+        "cleanup_policy": "retain",
+        "test_data_refs": ["adopted-expense-1"],
+        "test_case_refs": ["case-1"],
+    }
+    registration = SimpleNamespace(
+        status="confirmed",
+        data_name="差戻し済み経費",
+        business_unique_value="EXP-041",
+        test_case_ref="case-1",
+        retain_after_test=True,
+        provider_type="database",
+        business_summary={"expense_number": "EXP-041"},
+        plan_data_definition={
+            "data_set": reviewed_data_set,
+            "generation_flow": reviewed_flow,
+        },
+    )
+    repository = SimpleNamespace(list_for_project=lambda _project_id: (registration,))
+    test_plan = {"test_cases": [{"test_case_id": "case-1"}]}
+
+    context = _confirmed_existing_test_data_context(repository, "project-1")  # type: ignore[arg-type]
+    assert context[0]["reviewed_plan_fragment"] == registration.plan_data_definition
+    with pytest.raises(ValueError, match="missing from TestDataPlan"):
+        _validate_confirmed_existing_test_data_usage(
+            repository=repository,  # type: ignore[arg-type]
+            project_id="project-1",
+            test_plan=test_plan,
+            test_data_plan={"data_sets": [], "generation_flows": []},
+        )
+
+    with pytest.raises(ValueError, match="missing Test Case"):
+        _validate_confirmed_existing_test_data_usage(
+            repository=repository,  # type: ignore[arg-type]
+            project_id="project-1",
+            test_plan={"test_cases": [{"test_case_id": "different-case"}]},
+            test_data_plan={"data_sets": [], "generation_flows": []},
+        )
+
+    actual_data_set = {**reviewed_data_set, "coverage_conditions": [{"condition_id": "c1"}]}
+    _validate_confirmed_existing_test_data_usage(
+        repository=repository,  # type: ignore[arg-type]
+        project_id="project-1",
+        test_plan=test_plan,
+        test_data_plan={
+            "data_sets": [actual_data_set],
+            "generation_flows": [reviewed_flow],
+        },
+    )
 
 
 def _publish_request(root: Path, **changes: object) -> CopilotCodingTaskPublishRequest:
@@ -340,6 +414,10 @@ def test_test_planning_context_reads_the_successfully_closed_code_scope(
     )
     service = object.__new__(CopilotCodingTaskService)
     service._connection = object()
+    service._existing_test_data = SimpleNamespace(
+        list_for_project=lambda _project_id: (),
+        profiles=lambda _project_id: (),
+    )
     service._contracts = SimpleNamespace(root=Path("contracts").resolve())
     service._requests = SimpleNamespace(
         get_change_request=lambda _request_id: {
@@ -431,8 +509,35 @@ def test_test_planning_context_reads_the_successfully_closed_code_scope(
     assert coverage_contract["business_requirements"][0]["business_rule_id"] == "rule-1"
     assert coverage_contract["allowed_evidence"]["passed_command_refs"] == ["unit-test"]
     assert any("Coverage 100%" in rule for rule in planning["rules"])
+    assert any("dom_observation" in rule for rule in planning["rules"])
+    assert planning["data_identity_providers"] == []
+    assert any("fake" in rule for rule in planning["rules"])
+    assert "secret" not in json.dumps(planning["data_identity_providers"]).lower()
     assert "change_plan" not in context
     assert "planning_contract" not in context
+
+
+def test_public_data_identity_provider_registry_contains_no_runtime_or_secret_data() -> None:
+    profile = SimpleNamespace(
+        provider_ref="database.expense.v1",
+        provider_type="database",
+        revision=2,
+        content_digest="a" * 64,
+        identity_definition={"business_unique_keys": [{"name": "expense_number"}]},
+        lookup_steps=({"step_id": "lookup", "target": "expense.lookup.v1"},),
+        cleanup_steps=({"step_id": "cleanup", "target": "expense.cleanup.v1"},),
+        business_summary_fields=("expense_number", "status"),
+    )
+    providers = _public_data_identity_providers(
+        SimpleNamespace(profiles=lambda _project_id: (profile,)),  # type: ignore[arg-type]
+        "project-1",
+    )
+
+    assert providers[0]["provider_ref"] == "database.expense.v1"
+    assert providers[0]["type"] == "database"
+    assert providers[0]["revision"] == 2
+    assert providers[0]["business_summary_fields"] == ["expense_number", "status"]
+    assert "secret" not in json.dumps(providers).lower()
 
 
 def test_rejected_code_scope_records_a_revision_specific_event(
@@ -654,6 +759,7 @@ def test_test_planning_returns_uncovered_requirements_without_completing_task(
     test_data_plan = json.loads(
         (root / "contracts/examples/test-data-plan.v2.example.json").read_text()
     )
+    test_data_plan["schema_version"] = "v3"
     task = SimpleNamespace(
         analysis_case_id="case-1",
         edit_packet_id="packet-1",
@@ -666,6 +772,10 @@ def test_test_planning_returns_uncovered_requirements_without_completing_task(
     recorded: list[object] = []
     service = object.__new__(CopilotCodingTaskService)
     service._connection = None
+    service._existing_test_data = SimpleNamespace(
+        list_for_project=lambda _project_id: (),
+        profiles=lambda _project_id: (),
+    )
     service._tasks = SimpleNamespace(
         get=lambda _task_id: task,
         view=lambda _task_id: {
@@ -733,6 +843,11 @@ def test_test_planning_returns_uncovered_requirements_without_completing_task(
         coding_task_module,
         "_project_target_data_blockers",
         lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        coding_task_module,
+        "validate_test_data_plan_artifact",
+        lambda _plan, **_kwargs: [],
     )
 
     with pytest.raises(ValueError) as raised:
@@ -902,7 +1017,7 @@ def test_natural_language_guard_rejects_non_text_and_control_characters() -> Non
 def test_project_target_data_gate_requires_local_secret_only_for_sql(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    profile = SimpleNamespace(connection_alias="expense_test_db")
+    profile = SimpleNamespace(connection_alias="expense_test_db", dialect="postgresql")
     repository = SimpleNamespace(
         validate_plan=lambda **_values: ["binding-policy"],
         get=lambda _project_id: profile,
@@ -1359,6 +1474,73 @@ def test_ui_verification_uses_only_passed_ui_screenshot_evidence() -> None:
     )
 
     assert result == {"expense-returned-ui": ["evidence/ui/returned.png"]}
+
+
+def test_v3_ui_verification_links_scenario_step_and_screenshot_to_frozen_binding() -> None:
+    test_plan, test_data_plan = _planning()
+    payload = {
+        "binding_id": "binding-1",
+        "project_id": "project-1",
+        "run_id": "run-1",
+        "test_data_id": "expense-returned",
+        "business_unique_keys": [{"name": "expense_no", "value": "EXP-1"}],
+        "screen_identity_values": [{"name": "expense_no", "value": "EXP-1"}],
+        "identity_digest": canonical_digest(
+            {
+                "business_unique_keys": [{"name": "expense_no", "value": "EXP-1"}],
+                "screen_identity_values": [{"name": "expense_no", "value": "EXP-1"}],
+            }
+        ),
+    }
+    binding = {
+        **payload,
+        "content_digest": canonical_digest(payload),
+        "evidence_ref": "artifact://execution/bindings/binding-1",
+    }
+    execution = {
+        "project_id": "project-1",
+        "run_id": "run-1",
+        "data_bindings": [binding],
+        "flow_results": [
+            {
+                "flow_id": "expense-returned-flow",
+                "status": "passed",
+                "step_results": [
+                    {
+                        "step_id": "open-expense-search",
+                        "channel": "ui",
+                        "status": "passed",
+                        "test_data_binding_refs": ["binding-1"],
+                    }
+                ],
+            }
+        ],
+        "evidence": [
+            {
+                "flow_id": "expense-returned-flow",
+                "step_id": "open-expense-search",
+                "phase": "setup",
+                "evidence_type": "screenshot",
+                "evidence_ref": "evidence/ui/returned.png",
+                "sanitized": True,
+                "test_data_binding_ref": "binding-1",
+            }
+        ],
+    }
+
+    assert _ui_scenario_binding_refs(
+        ui_cases=test_plan["test_cases"],  # type: ignore[arg-type]
+        test_data_plan=test_data_plan,
+        execution_result=execution,
+    ) == {"expense-returned-ui": ["binding-1"]}
+
+    execution["evidence"][0]["test_data_binding_ref"] = "foreign-binding"  # type: ignore[index]
+    with pytest.raises(ValueError, match="does not resolve"):
+        _ui_scenario_binding_refs(
+            ui_cases=test_plan["test_cases"],  # type: ignore[arg-type]
+            test_data_plan=test_data_plan,
+            execution_result=execution,
+        )
 
 
 def test_publish_request_rejects_invalid_task_shapes(tmp_path: Path) -> None:
@@ -2195,6 +2377,10 @@ def test_test_planning_persists_only_a_fully_covered_executable_plan(
             return SimpleNamespace(result_sha="b" * 40)
 
     service = object.__new__(CopilotCodingTaskService)
+    service._existing_test_data = SimpleNamespace(
+        list_for_project=lambda _project_id: (),
+        profiles=lambda _project_id: (),
+    )
     service._tasks = Tasks()
     service._artifacts = Artifacts()
     service._requests = SimpleNamespace(
@@ -2213,7 +2399,11 @@ def test_test_planning_persists_only_a_fully_covered_executable_plan(
     monkeypatch.setattr(
         coding_task_module, "_validate_required_ui_scenario_scope", lambda **_v: None
     )
-    monkeypatch.setattr(coding_task_module, "validate_test_data_plan_artifact", lambda _plan: [])
+    monkeypatch.setattr(
+        coding_task_module,
+        "validate_test_data_plan_artifact",
+        lambda _plan, **_kwargs: [],
+    )
     monkeypatch.setattr(coding_task_module, "test_data_plan_channels", lambda _plan: {"ui"})
     monkeypatch.setattr(
         coding_task_module,
@@ -2236,7 +2426,7 @@ def test_test_planning_persists_only_a_fully_covered_executable_plan(
     }
     test_data_plan = {
         "artifact_type": "TestDataPlan",
-        "schema_version": "v2",
+        "schema_version": "v3",
         "project_id": "project-1",
         "test_plan_id": "plan-1",
         "test_data_plan_id": "data-plan-1",
@@ -2279,10 +2469,19 @@ def test_ui_plan_revision_context_is_read_only_and_contains_confirmed_input(
             "source_orchestration_id": "orchestration-1",
             "instruction": "検索手順を追加する",
             "confirmed_operations_json": '[{"operation":"append"}]',
+            "locator_failure_evidence_json": (
+                '{"failure_stage":"formal_ui_run_pre_action_validation",'
+                '"failures":[{"step_id":"search-expense",'
+                '"failure_reason":"record scope matched 0 records"}]}'
+            ),
         },
     }
     service = object.__new__(CopilotCodingTaskService)
     service._connection = object()
+    service._existing_test_data = SimpleNamespace(
+        list_for_project=lambda _project_id: (),
+        profiles=lambda _project_id: (),
+    )
     service._contracts = object()
     service._tasks = SimpleNamespace(
         get=lambda _task_id: task,
@@ -2314,9 +2513,29 @@ def test_ui_plan_revision_context_is_read_only_and_contains_confirmed_input(
     assert result["inputs"]["confirmed_change_summary"] == [  # type: ignore[index]
         {"operation": "append"}
     ]
+    assert result["inputs"]["locator_failure_evidence"] == {  # type: ignore[index]
+        "failure_stage": "formal_ui_run_pre_action_validation",
+        "failures": [
+            {
+                "step_id": "search-expense",
+                "failure_reason": "record scope matched 0 records",
+            }
+        ],
+    }
     assert result["constraints"] == {
         "execution_scope": {"bound": False, "read_only": True}
     }
+
+
+def test_copilot_context_rejects_blank_actor_before_repository_access(tmp_path: Path) -> None:
+    service = object.__new__(CopilotCodingTaskService)
+
+    with pytest.raises(ValueError, match="context actor must not be blank"):
+        service.get_mcp_context(
+            coding_task_id="revision-task-1",
+            workspace_root=tmp_path,
+            actor=" ",
+        )
 
 
 def test_ui_plan_revision_records_only_a_validated_regenerated_bundle(
@@ -2370,6 +2589,10 @@ def test_ui_plan_revision_records_only_a_validated_regenerated_bundle(
 
     service = object.__new__(CopilotCodingTaskService)
     service._connection = object()
+    service._existing_test_data = SimpleNamespace(
+        list_for_project=lambda _project_id: (),
+        profiles=lambda _project_id: (),
+    )
     service._contracts = object()
     service._root = tmp_path
     service._tasks = Tasks()
@@ -2390,7 +2613,11 @@ def test_ui_plan_revision_records_only_a_validated_regenerated_bundle(
         RevisionService,
     )
     monkeypatch.setattr(coding_task_module, "_validate_planning_alignment", lambda **_v: None)
-    monkeypatch.setattr(coding_task_module, "validate_test_data_plan_artifact", lambda _p: [])
+    monkeypatch.setattr(
+        coding_task_module,
+        "validate_test_data_plan_artifact",
+        lambda _p, **_kwargs: [],
+    )
     monkeypatch.setattr(coding_task_module, "test_data_plan_channels", lambda _p: {"ui"})
     test_plan = {
         "artifact_type": "TestPlan",
@@ -2403,7 +2630,7 @@ def test_ui_plan_revision_records_only_a_validated_regenerated_bundle(
     }
     test_data_plan = {
         "artifact_type": "TestDataPlan",
-        "schema_version": "v2",
+        "schema_version": "v3",
         "project_id": "project-1",
         "test_plan_id": "plan-2",
         "test_data_plan_id": "data-plan-2",
@@ -2420,6 +2647,21 @@ def test_ui_plan_revision_records_only_a_validated_regenerated_bundle(
     assert result["coding_task_state"] == "in_progress"
     assert calls["recorded"]["complete"] is True  # type: ignore[index]
     assert calls["applied"]["operations"] == [{"operation": "append"}]  # type: ignore[index]
+
+
+def test_ui_plan_revision_output_rejects_a_non_revision_task() -> None:
+    service = object.__new__(CopilotCodingTaskService)
+    service._tasks = SimpleNamespace(
+        get=lambda _task_id: SimpleNamespace(),
+        view=lambda _task_id: {"task": {"task_kind": "change_delivery"}},
+    )
+
+    with pytest.raises(ValueError, match="Only a UI TestPlan revision Task"):
+        service._record_ui_test_revision_outputs(
+            coding_task_id="change-task-1",
+            test_plan={},
+            test_data_plan={},
+        )
 
 
 def test_service_initialization_and_verification_contract_use_repository_catalogs(

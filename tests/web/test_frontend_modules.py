@@ -30,6 +30,17 @@ def test_project_form_allows_test_url_to_be_configured_later() -> None:
     assert "required" not in test_url_input
 
 
+def test_project_target_database_dialect_is_explicit_and_fail_closed() -> None:
+    source = APP_SCRIPT.read_text(encoding="utf-8")
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    assert 'id="projectTargetDataDialect"' in html
+    assert '<option value="postgresql">PostgreSQL</option>' in html
+    assert "未登録方言へは fallback しません" in html
+    assert "dialect: targetDataDialect" in source
+    assert 'targetData.dialect || "postgresql"' in source
+
+
 def test_web_opens_selected_workspace_in_vscode_without_bridge_credentials() -> None:
     html = INDEX_HTML.read_text(encoding="utf-8")
     source = APP_SCRIPT.read_text(encoding="utf-8")
@@ -199,6 +210,49 @@ def test_failed_ui_stage_renders_explicit_same_plan_rerun_action() -> None:
 
     assert "同じ計画で再実行" in html
     assert 'data-rerun-test-data="run-failed-001"' in html
+
+
+def test_ui_stage_renders_data_identity_provider_and_uniform_binding_fields() -> None:
+    stages = [
+        {
+            **_stage("ui_validation", "テストデータ・UI 検証", "completed"),
+            "details": {
+                "data_bindings": [
+                    {
+                        "test_data_id": "expense-data",
+                        "binding_mode": "generated",
+                        "identity_provider_type": "hybrid",
+                        "identity_provider_ref": "hybrid.v1",
+                        "primary_key": {"name": "id", "value": 41},
+                        "business_unique_keys": [
+                            {"name": "expense_number", "value": "EXP-041"}
+                        ],
+                        "screen_identity_values": [
+                            {"name": "expense_number", "value": "EXP-041"}
+                        ],
+                        "record_scope_locator": {
+                            "by": "css",
+                            "value": "[data-number='EXP-041']",
+                            "exact": True,
+                        },
+                        "match_count": 1,
+                        "content_digest": "a" * 64,
+                        "evidence_ref": "artifact://result/binding-1",
+                    }
+                ]
+            },
+        }
+    ]
+
+    html = _run("stageDetails", stages, "ui_validation")
+
+    assert "hybrid" in html
+    assert "画面識別値" in html
+    assert "主キー" not in html
+    assert "Locator" not in html
+    assert "hybrid.v1" not in html
+    assert "レコード範囲 Locator" not in html
+    assert "EXP-041" in html
 
 
 def test_stage_details_expand_only_current_stage_and_hide_future_evidence() -> None:

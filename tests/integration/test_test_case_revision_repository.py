@@ -65,6 +65,7 @@ from operamind.infrastructure.test_data import (
     ProjectSqlTestDataExecutor,
     TargetDataProfileRepository,
     TargetDataSecretStore,
+    default_data_identity_providers,
 )
 
 ROOT = Path(__file__).parents[2]
@@ -201,6 +202,7 @@ def test_real_identity_binding_is_persisted_with_same_run_evidence(
             executed = DataExecutionService(
                 connection=connection,
                 contracts=contracts,
+                identity_providers=default_data_identity_providers(),
                 executors={
                     "sql": ProjectSqlTestDataExecutor(
                         control_database_url=control_dsn,
@@ -619,6 +621,7 @@ def test_copilot_ui_plan_regeneration_persists_v2_plans_before_new_execution() -
                     "setup_actions": [],
                     "cleanup_policy": "isolated_environment",
                     "identity_binding": {
+                        "provider": {"type": "database", "provider_ref": "database.v1"},
                         "binding_mode": "generated",
                         "source_flow_id": "expense-ui-flow-v2",
                         "source_step_id": "read-expense-identity-v2",
@@ -632,12 +635,20 @@ def test_copilot_ui_plan_regeneration_persists_v2_plans_before_new_execution() -
                                 "name": "expense_number",
                                 "source": "database",
                                 "path": "rows[0].expense_number",
+                                "dom_observation": {
+                                    "kind": "attribute",
+                                    "attribute_name": "data-observed-expense-number",
+                                },
                             }
                         ],
                         "screen_key": {
                             "name": "expense_number",
                             "source": "database",
                             "path": "rows[0].expense_number",
+                            "dom_observation": {
+                                "kind": "attribute",
+                                "attribute_name": "data-observed-expense-number",
+                            },
                             "locator_template": {
                                 "by": "css",
                                 "value": "[data-expense-number='{{value}}']",
@@ -1431,6 +1442,7 @@ def _persisted_identity_plan(target_schema: str) -> dict[str, Any]:
                 "setup_actions": [],
                 "cleanup_policy": "retain",
                 "identity_binding": {
+                    "provider": {"type": "database", "provider_ref": "database.v1"},
                     "binding_mode": "adopted",
                     "source_flow_id": "expense-flow",
                     "source_step_id": "read-expense-identity",
@@ -1444,12 +1456,20 @@ def _persisted_identity_plan(target_schema: str) -> dict[str, Any]:
                             "name": "expense_number",
                             "source": "database",
                             "path": "rows[0].expense_number",
+                            "dom_observation": {
+                                "kind": "attribute",
+                                "attribute_name": "data-observed-expense-number",
+                            },
                         }
                     ],
                     "screen_key": {
                         "name": "expense_number",
                         "source": "database",
                         "path": "rows[0].expense_number",
+                        "dom_observation": {
+                            "kind": "attribute",
+                            "attribute_name": "data-observed-expense-number",
+                        },
                         "locator_template": {
                             "by": "css",
                             "value": "[data-expense-number='{{value}}']",

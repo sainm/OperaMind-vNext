@@ -30,14 +30,22 @@ from operamind.application.copilot_coding_task import (
     CopilotCodingTaskService,
     build_bridge_task_view,
 )
+from operamind.application.data_identity import is_sensitive_data_identity_name
 from operamind.application.document_profile_learning import DocumentProfileLearningService
 from operamind.application.edit_packet import EditPacketRequest, EditPacketService
+from operamind.application.existing_test_data import (
+    ExistingTestDataRegistration,
+    ExistingTestDataRegistrationInput,
+    ExistingTestDataRegistrationService,
+    ProjectDataIdentityProfile,
+)
 from operamind.application.failure_management import build_failure_management
 from operamind.application.local_source_control import (
     LocalSourceBaseline,
     LocalSourceControlService,
 )
 from operamind.application.main_change_flow import build_main_change_flow
+from operamind.application.main_flow_execution import default_test_data_executor_factory
 from operamind.application.orchestration_task import (
     OrchestrationSchedulingPolicy,
     build_orchestration_task,
@@ -72,11 +80,19 @@ from operamind.infrastructure.postgres import (
     TestDataExecutionRunWrite,
     WebControlPlaneRepository,
 )
+from operamind.infrastructure.postgres.existing_test_data_repository import (
+    ExistingTestDataRepository,
+)
 from operamind.infrastructure.postgres.web_command_repository import WebCommandRepository
+from operamind.infrastructure.test_data import ReviewedExistingDataObservationResolver
+from operamind.infrastructure.test_data.identity import configured_data_identity_providers
 from operamind.infrastructure.test_data.target_data import (
     TargetDataProfile,
     TargetDataProfileRepository,
     TargetDataSecretStore,
+)
+from operamind.infrastructure.test_data.target_database import (
+    default_target_database_adapters,
 )
 from operamind.profiles import ProfileCatalog
 
@@ -139,10 +155,12 @@ class WebControlPlaneService:
         *,
         connection: Connection[Any],
         repository_root: Path,
+        control_database_url: str | None = None,
         orchestration_scheduling_policy: OrchestrationSchedulingPolicy | None = None,
     ) -> None:
         self._connection = connection
         self._root = repository_root.resolve()
+        self._control_database_url = control_database_url
         self._contracts = ContractCatalog.load(self._root / "contracts")
         self._profiles = ProfileCatalog.load(self._root / "profiles")
         self._repository = WebControlPlaneRepository(connection, self._contracts)
@@ -174,6 +192,7 @@ class WebControlPlaneService:
         self._case_execution_authorizations = TestCaseExecutionAuthorizationRepository(
             connection, self._contracts
         )
+        self._existing_test_data = ExistingTestDataRepository(connection)
 
     def execute_web_command(
         self,
@@ -502,27 +521,243 @@ class WebControlPlaneService:
         view["secret_configured"] = TargetDataSecretStore().configured(
             project_id=project_id,
             connection_alias=profile.connection_alias,
+            dialect=profile.dialect,
         )
         return {"project_id": project_id, "profile": view}
+
+    def project_data_identity_profiles(self, project_id: str) -> dict[str, object]:
+        profiles = self._existing_test_data.profiles(project_id)
+        return {
+            "project_id": project_id,
+            "profiles": [
+                {
+                    "provider_ref": value.provider_ref,
+                    "provider_type": value.provider_type,
+                    "lookup_steps": [dict(step) for step in value.lookup_steps],
+                    "cleanup_steps": [dict(step) for step in value.cleanup_steps],
+                    "identity_definition": dict(value.identity_definition),
+                    "business_summary_fields": list(value.business_summary_fields),
+                }
+                for value in profiles
+            ],
+            "count": len(profiles),
+        }
+
+    def configure_project_data_identity_profiles(
+        self,
+        *,
+        project_id: str,
+        profiles: tuple[dict[str, object], ...],
+        actor: str,
+    ) -> dict[str, object]:
+        if self._repository.project_workspace_registration(project_id) is None:
+            raise ValueError("Project が存在しません")
+        parsed: list[ProjectDataIdentityProfile] = []
+        for profile in profiles:
+            lookup_steps = profile.get("lookup_steps")
+            cleanup_steps = profile.get("cleanup_steps", [])
+            identity_definition = profile.get("identity_definition")
+            summary_fields = profile.get("business_summary_fields")
+            if (
+                not isinstance(lookup_steps, list)
+                or not all(isinstance(step, dict) for step in lookup_steps)
+                or not isinstance(cleanup_steps, list)
+                or not all(isinstance(step, dict) for step in cleanup_steps)
+                or not isinstance(identity_definition, dict)
+                or not isinstance(summary_fields, list)
+                or not all(isinstance(field, str) for field in summary_fields)
+            ):
+                raise ValueError("DataIdentityProvider 管理者 JSON の形式が不正です")
+            parsed.append(
+                ProjectDataIdentityProfile(
+                    project_id=project_id,
+                    provider_ref=str(profile.get("provider_ref", "")),
+                    provider_type=str(profile.get("provider_type", "")),
+                    lookup_steps=tuple(lookup_steps),
+                    cleanup_steps=tuple(cleanup_steps),
+                    identity_definition=identity_definition,
+                    business_summary_fields=tuple(summary_fields),
+                )
+            )
+        self._existing_test_data.replace_profiles(
+            project_id=project_id,
+            profiles=tuple(parsed),
+            actor=actor,
+        )
+        return self.project_data_identity_profiles(project_id)
+
+    def register_existing_test_data(
+        self,
+        *,
+        project_id: str,
+        data_name: str,
+        business_unique_value: str,
+        test_case_ref: str,
+        retain_after_test: bool,
+        actor: str,
+    ) -> dict[str, object]:
+        """Resolve and persist one real existing-data candidate or blocker."""
+
+        if self._repository.project_workspace_registration(project_id) is None:
+            raise ValueError("Project が存在しません")
+        requested_at = datetime.now(UTC)
+        registration_id = _web_id(
+            "existing-data",
+            project_id,
+            data_name,
+            business_unique_value,
+            test_case_ref,
+            requested_at.isoformat(),
+        )
+        value = ExistingTestDataRegistrationInput(
+            registration_id=registration_id,
+            project_id=project_id,
+            data_name=data_name,
+            business_unique_value=business_unique_value,
+            test_case_ref=test_case_ref,
+            retain_after_test=retain_after_test,
+            requested_by=actor,
+            requested_at=requested_at,
+        )
+        executors = default_test_data_executor_factory(
+            self._root,
+            control_database_url=self._control_database_url,
+        )
+        resolver = ReviewedExistingDataObservationResolver(
+            executors=executors,
+            base_url_by_project=lambda target_project_id: self._repository.project_test_base_url(
+                target_project_id
+            ),
+        )
+        try:
+            profiles = self._existing_test_data.profiles(project_id)
+            registration = ExistingTestDataRegistrationService(
+                identity_providers=configured_data_identity_providers(
+                    {profile.provider_ref: profile.provider_type for profile in profiles}
+                ),
+                observation_resolver=resolver,
+            ).register(
+                value,
+                profiles=profiles,
+            )
+        finally:
+            for executor in executors.values():
+                close = getattr(executor, "close", None)
+                if callable(close):
+                    close()
+        self._existing_test_data.save(registration)
+        return {
+            "project_id": project_id,
+            "registration": _existing_test_data_registration_view(registration),
+        }
+
+    def confirm_existing_test_data(
+        self,
+        *,
+        project_id: str,
+        registration_id: str,
+        actor: str,
+    ) -> dict[str, object]:
+        """Human-confirm one unique candidate into an adopted plan definition."""
+
+        registration = self._existing_test_data.get(registration_id)
+        if registration is None or registration.project_id != project_id:
+            raise ValueError("既存テストデータ候補が存在しません")
+        profiles = {
+            profile.provider_ref: profile
+            for profile in self._existing_test_data.profiles(project_id)
+        }
+        profile = profiles.get(registration.provider_ref or "")
+        if profile is None:
+            raise ValueError("確認済み DataIdentityProvider が存在しません")
+        confirmed = ExistingTestDataRegistrationService(
+            identity_providers=configured_data_identity_providers(
+                {profile.provider_ref: profile.provider_type}
+            ),
+            observation_resolver=ReviewedExistingDataObservationResolver(
+                executors={},
+                base_url_by_project=lambda _project_id: None,
+            ),
+        ).confirm(
+            registration,
+            profile=profile,
+            actor=actor,
+            confirmed_at=datetime.now(UTC),
+        )
+        self._existing_test_data.confirm(confirmed)
+        return {
+            "project_id": project_id,
+            "registration": _existing_test_data_registration_view(confirmed),
+        }
+
+    def existing_test_data(self, project_id: str) -> dict[str, object]:
+        registrations = [
+            _existing_test_data_registration_view(value)
+            for value in self._existing_test_data.list_for_project(project_id)
+        ]
+        return {
+            "project_id": project_id,
+            "registrations": registrations,
+            "count": len(registrations),
+        }
+
+    def fixed_data_identifiers(self, project_id: str) -> dict[str, object]:
+        confirmed = [
+            _planned_data_identifier_view(value)
+            for value in self._existing_test_data.list_for_project(project_id)
+            if value.status == "confirmed"
+        ]
+        frozen = [
+            _frozen_data_identifier_view(value)
+            for value in self._existing_test_data.fixed_binding_views(project_id)
+        ]
+        return {
+            "project_id": project_id,
+            "planned": confirmed,
+            "frozen": frozen,
+            "planned_count": len(confirmed),
+            "frozen_count": len(frozen),
+        }
 
     def configure_project_target_data_profile(
         self,
         *,
         project_id: str,
         connection_alias: str,
+        dialect: str,
         connection_dsn: str | None,
         transaction_policy: str,
         bindings: tuple[dict[str, object], ...],
         actor: str,
     ) -> dict[str, object]:
-        secrets = TargetDataSecretStore()
+        adapters = default_target_database_adapters()
+        repository = TargetDataProfileRepository(self._connection, adapters=adapters)
+        adapters.require(dialect)
+        secrets = TargetDataSecretStore(adapters=adapters)
+        previous_profile = repository.get(project_id)
+        previous_dialect = (
+            previous_profile.dialect
+            if previous_profile is not None
+            and previous_profile.connection_alias == connection_alias
+            else None
+        )
         secret_already_configured = secrets.configured(
             project_id=project_id,
             connection_alias=connection_alias,
+            dialect=dialect,
         )
         previous_secret = (
-            secrets.get(project_id=project_id, connection_alias=connection_alias)
-            if secret_already_configured
+            secrets.get(
+                project_id=project_id,
+                connection_alias=connection_alias,
+                dialect=previous_dialect,
+            )
+            if previous_dialect is not None
+            and secrets.configured(
+                project_id=project_id,
+                connection_alias=connection_alias,
+                dialect=previous_dialect,
+            )
             else None
         )
         if connection_dsn is None and not secret_already_configured:
@@ -532,11 +767,13 @@ class WebControlPlaneService:
                 project_id=project_id,
                 connection_alias=connection_alias,
                 connection_dsn=connection_dsn,
+                dialect=dialect,
             )
         try:
-            profile = TargetDataProfileRepository(self._connection).replace(
+            profile = repository.replace(
                 project_id=project_id,
                 connection_alias=connection_alias,
+                dialect=dialect,
                 transaction_policy=transaction_policy,
                 bindings=bindings,
                 reviewed_by=actor,
@@ -550,6 +787,7 @@ class WebControlPlaneService:
                         project_id=project_id,
                         connection_alias=connection_alias,
                         connection_dsn=previous_secret,
+                        dialect=previous_dialect or dialect,
                     )
             raise
         view = profile.public_view(include_statements=True)
@@ -732,10 +970,14 @@ class WebControlPlaneService:
             instruction=instruction,
             actor=actor,
         )
-        return {
+        response: dict[str, object] = {
             "state": result["state"],
             "proposal": _public_test_case_proposal(cast_dict(result["proposal"])),
         }
+        locator_feedback = self._public_locator_feedback(request_id)
+        if locator_feedback is not None:
+            response["locator_failure_feedback"] = locator_feedback
+        return response
 
     def confirm_test_case_revision(
         self,
@@ -762,6 +1004,32 @@ class WebControlPlaneService:
             request_id,
             proposal_id,
         )
+        locator_feedback = self._locator_feedback_context(request_id)
+        revision_context: dict[str, object] = {
+            "proposal_id": proposal_id,
+            "source_orchestration_id": str(proposal["source_orchestration_id"]),
+            "source_test_plan_id": str(proposal["source_test_plan_id"]),
+            "instruction": str(proposal["instruction"]),
+            "confirmed_operations_json": json.dumps(
+                prepared["operations"],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            "selections_json": json.dumps(
+                prepared["selections"],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        }
+        if locator_feedback is not None:
+            revision_context["locator_failure_evidence_json"] = json.dumps(
+                locator_feedback,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
         task = CopilotCodingTaskService(
             connection=self._connection,
             repository_root=self._root,
@@ -776,31 +1044,18 @@ class WebControlPlaneService:
                 idempotency_key=f"ui-test-plan-revision:{proposal_id}",
                 task_kind="ui_test_plan_revision",
                 initial_stage="ui_test_revision",
-                plan_revision_context={
-                    "proposal_id": proposal_id,
-                    "source_orchestration_id": str(proposal["source_orchestration_id"]),
-                    "source_test_plan_id": str(proposal["source_test_plan_id"]),
-                    "instruction": str(proposal["instruction"]),
-                    "confirmed_operations_json": json.dumps(
-                        prepared["operations"],
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                    "selections_json": json.dumps(
-                        prepared["selections"],
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                },
+                plan_revision_context=revision_context,
             )
         )
-        return {
+        response: dict[str, object] = {
             "state": "awaiting_copilot",
             "copilot_task": build_bridge_task_view(task),
             "flow": self.main_change_flow(request_id),
         }
+        public_feedback = self._public_locator_feedback(request_id)
+        if public_feedback is not None:
+            response["locator_failure_feedback"] = public_feedback
+        return response
 
     def claim_copilot_task(
         self,
@@ -2026,6 +2281,7 @@ class WebControlPlaneService:
                 "changed_line_coverage": None,
                 "change_closure": None,
                 "screenshots": [],
+                "locator_failure_feedback": None,
                 "stale_history": self._test_case_revisions.state(request_id)["history"],
                 "failure_management": build_failure_management(
                     test_data_plan=None,
@@ -2071,6 +2327,7 @@ class WebControlPlaneService:
             request_id=request_id,
             execution=execution,
         )
+        locator_failure_feedback = self._public_locator_feedback(request_id)
         authorization = self._case_execution_authorizations.state(
             target_orchestration_id=orchestration_id,
             at=datetime.now(UTC),
@@ -2127,6 +2384,7 @@ class WebControlPlaneService:
             "changed_line_coverage": changed_line_coverage,
             "change_closure": closure,
             "screenshots": screenshots,
+            "locator_failure_feedback": locator_failure_feedback,
             "stale_history": revision_state["history"],
             "execution_authorization": authorization,
             "version_result_comparison": version_comparison,
@@ -2139,6 +2397,54 @@ class WebControlPlaneService:
                 controls=controls,
             ),
             "controls": controls,
+        }
+
+    def _locator_feedback_context(self, request_id: str) -> dict[str, object] | None:
+        """Return sanitized locator Evidence for a confirmed Copilot revision Task."""
+
+        request = self._repository.get_change_request(request_id)
+        bundle = self._orchestrations.latest_bundle(request_id)
+        if bundle is None:
+            return None
+        orchestration = cast_dict(bundle["orchestration"])
+        repository = getattr(self, "_copilot_tasks", None)
+        loader = getattr(repository, "latest_ui_locator_feedback", None)
+        if not callable(loader):
+            return None
+        record = loader(
+            orchestration_id=str(orchestration["orchestration_id"]),
+            project_id=str(request["project_id"]),
+        )
+        if record is None:
+            return None
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        return _sanitize_locator_feedback_payload(payload)
+
+    def _public_locator_feedback(self, request_id: str) -> dict[str, object] | None:
+        """Project browser blocks into business-readable Web fields only."""
+
+        payload = self._locator_feedback_context(request_id)
+        if payload is None:
+            return None
+        failures: list[dict[str, object]] = []
+        for value in cast(list[dict[str, object]], payload.get("failures", [])):
+            evidence_refs = value.get("evidence_refs", [])
+            failures.append(
+                {
+                "flow_id": value.get("flow_id"),
+                "step_id": value.get("step_id"),
+                "phase": value.get("phase"),
+                "failure_reason": value.get("failure_reason"),
+                "evidence_count": len(evidence_refs) if isinstance(evidence_refs, list) else 0,
+                }
+            )
+        return {
+            "status": "blocked",
+            "failure_stage": payload.get("failure_stage"),
+            "failures": failures,
+            "next_action": "新しい UI TestPlan Revision を生成し、再確認してください。",
         }
 
     def _ui_result_for_closure(self, closure: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -2406,6 +2712,70 @@ def _public_test_case_proposal(proposal: dict[str, Any]) -> dict[str, object]:
     }
 
 
+def _sanitize_locator_feedback_payload(payload: dict[str, object]) -> dict[str, object]:
+    """Keep only bounded, non-secret browser failure facts for a new Revision Task."""
+
+    failures: list[dict[str, object]] = []
+    raw_failures = payload.get("failures", [])
+    if isinstance(raw_failures, list):
+        for raw in raw_failures[:50]:
+            if not isinstance(raw, dict):
+                continue
+            failure: dict[str, object] = {}
+            for key in (
+                "flow_id",
+                "step_id",
+                "phase",
+                "failure_stage",
+                "failure_reason",
+            ):
+                value = raw.get(key)
+                if isinstance(value, str) and value.strip():
+                    failure[key] = value[:2000]
+            for key in ("evidence_refs", "test_data_binding_refs"):
+                values = raw.get(key)
+                if isinstance(values, list):
+                    failure[key] = [
+                        value[:500]
+                        for value in values[:50]
+                        if isinstance(value, str) and value.strip()
+                    ]
+            locator_type = raw.get("locator_type")
+            if isinstance(locator_type, str) and locator_type.strip():
+                failure["locator_type"] = locator_type[:100]
+            for key in ("record_scope_match_count", "action_locator_match_count"):
+                value = raw.get(key)
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    failure[key] = value
+            screen_values = raw.get("observed_screen_identity_values")
+            if isinstance(screen_values, list):
+                public_values: list[dict[str, object]] = []
+                for item in screen_values[:20]:
+                    if not isinstance(item, dict):
+                        continue
+                    name = item.get("name")
+                    value = item.get("value")
+                    if (
+                        not isinstance(name, str)
+                        or not name.strip()
+                        or is_sensitive_data_identity_name(name)
+                        or not isinstance(value, str | int | float | bool)
+                    ):
+                        continue
+                    public_values.append({"name": name[:200], "value": value})
+                if public_values:
+                    failure["observed_screen_identity_values"] = public_values
+            if failure:
+                failures.append(failure)
+    return {
+        "failure_stage": str(
+            payload.get("failure_stage") or "formal_ui_run_pre_action_validation"
+        )[:200],
+        "failures": failures,
+        "next_action": "create_new_ui_test_plan_revision_and_require_confirmation",
+    }
+
+
 def _resolved_local_directory(value: Path, *, field_name: str) -> Path:
     if not value.is_absolute():
         raise ValueError(f"{field_name}には絶対パスを入力してください")
@@ -2595,8 +2965,91 @@ def _target_data_summary(
         "secret_configured": secret_store.configured(
             project_id=profile.project_id,
             connection_alias=profile.connection_alias,
+            dialect=profile.dialect,
         ),
         "query_binding_ids": [value.query_binding_id for value in profile.bindings],
+    }
+
+
+def _existing_test_data_registration_view(
+    value: ExistingTestDataRegistration,
+) -> dict[str, object]:
+    """Ordinary-user projection: no locator, SQL, Secret or internal Binding ID."""
+
+    return {
+        "registration_id": value.registration_id,
+        "data_name": value.data_name,
+        "business_unique_value": value.business_unique_value,
+        "test_case_ref": value.test_case_ref,
+        "retain_after_test": value.retain_after_test,
+        "status": value.status,
+        "provider_type": value.provider_type,
+        "match_count": value.match_count,
+        "business_summary": dict(value.business_summary or {}),
+        "evidence_count": len(value.evidence_refs),
+        "blocking_reasons": list(value.blocking_reasons),
+        "requested_at": value.requested_at.isoformat(),
+        "confirmed_at": (
+            value.confirmed_at.isoformat() if value.confirmed_at is not None else None
+        ),
+    }
+
+
+def _planned_data_identifier_view(
+    value: ExistingTestDataRegistration,
+) -> dict[str, object]:
+    return {
+        "data_name": value.data_name,
+        "business_unique_value": value.business_unique_value,
+        "test_case_refs": [value.test_case_ref],
+        "retain_after_test": value.retain_after_test,
+        "provider_type": value.provider_type,
+        "business_summary": dict(value.business_summary or {}),
+        "confirmed_at": (
+            value.confirmed_at.isoformat() if value.confirmed_at is not None else None
+        ),
+    }
+
+
+def _frozen_data_identifier_view(value: dict[str, object]) -> dict[str, object]:
+    usages = [dict(item) for item in cast_list(value.get("usages", []))]
+    cleanup = [item for item in usages if item.get("phase") == "cleanup"]
+    return {
+        "data_name": value.get("data_name") or value["test_data_id"],
+        "test_data_token": value.get("test_data_token"),
+        "run_id": value["run_id"],
+        "run_status": value["run_status"],
+        "binding_mode": value["binding_mode"],
+        "provider_type": value.get("provider_type"),
+        "business_values": [
+            dict(item)
+            for item in cast_list(value.get("business_unique_keys", []))
+        ],
+        "screen_values": [
+            dict(item)
+            for item in cast_list(value.get("screen_identity_values", []))
+        ],
+        "test_case_refs": (
+            [value["test_case_ref"]] if value.get("test_case_ref") is not None else []
+        ),
+        "frozen_at": cast(datetime, value["frozen_at"]).isoformat(),
+        "usages": usages,
+        "evidence": [
+            dict(item) for item in cast_list(value.get("evidence", []))
+        ],
+        "cleanup": {
+            "attempted": bool(cleanup),
+            "status": (
+                "passed"
+                if cleanup and all(item.get("status") == "passed" for item in cleanup)
+                else "failed"
+                if cleanup
+                else "retained"
+                if value.get("retain_after_test") is True
+                else "not_executed"
+            ),
+            "steps": cleanup,
+        },
     }
 
 
