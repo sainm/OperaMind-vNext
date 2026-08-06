@@ -113,6 +113,8 @@ PostgreSQL 統合テストでは、管理用接続だけを `OPERAMIND_TEST_DATA
 - [設定ガイド](docs/CONFIGURATION.md)
 - [再構成方針](docs/RECONSTRUCTION.md)
 - [全体アーキテクチャ](docs/ARCHITECTURE.md)
+- [単機版 VS Code 統合将来構想（未実装）](docs/LOCAL-VSCODE-INTEGRATION-PLAN.md)
+- [Server 版将来構想（未実装）](docs/SERVER-EDITION-PLAN.md)
 - [MVP スコープ](docs/MVP-SCOPE.md)
 - [Canonical Data Model](docs/CANONICAL-DATA-MODEL.md)
 - [実 RAG](docs/P2-REAL-RAG.md)
